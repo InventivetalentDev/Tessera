@@ -14,6 +14,7 @@ import io.tessera.effect.builtin.DirectionalShrinkEffect;
 import io.tessera.skin.HeadsRegistry;
 import io.tessera.skin.TileRotations;
 import io.tessera.skin.bake.BlockBaker;
+import io.tessera.split.SourceFlips;
 import io.tessera.split.SourceRotations;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
@@ -42,8 +43,10 @@ import java.util.Locale;
  *   /tessera debug headrot reset [face]
  *   /tessera debug tilerot   &lt;headface&gt; &lt;0|90|180|270&gt; per-chunk tile in-plane rotation
  *   /tessera debug tilerot   reset [headface]
- *   /tessera debug sourcerot &lt;facedir&gt; &lt;0|90|180|270&gt; whole block-face source rotation
- *   /tessera debug sourcerot reset [facedir]
+ *   /tessera debug sourcerot  &lt;facedir&gt; &lt;0|90|180|270&gt; whole block-face source rotation
+ *   /tessera debug sourcerot  reset [facedir]
+ *   /tessera debug sourceflip &lt;facedir&gt; &lt;none|h|v|hv&gt;  whole block-face source mirror
+ *   /tessera debug sourceflip reset [facedir]
  *   /tessera debug rebake [material]    invalidate registry so next test re-bakes
  * </pre>
  *
@@ -186,18 +189,60 @@ public final class TesseraCommand implements CommandExecutor {
             return true;
         }
         return switch (args[1].toLowerCase(Locale.ROOT)) {
-            case "face"      -> handleDebugFace(sender, args);
-            case "center"    -> handleDebugCenter(sender, args);
-            case "grid"      -> handleDebugGrid(sender, args);
-            case "tilerot"   -> handleDebugTilerot(sender, args);
-            case "headrot"   -> handleDebugHeadrot(sender, args);
-            case "sourcerot" -> handleDebugSourcerot(sender, args);
-            case "rebake"    -> handleDebugRebake(sender, args);
+            case "face"       -> handleDebugFace(sender, args);
+            case "center"     -> handleDebugCenter(sender, args);
+            case "grid"       -> handleDebugGrid(sender, args);
+            case "tilerot"    -> handleDebugTilerot(sender, args);
+            case "headrot"    -> handleDebugHeadrot(sender, args);
+            case "sourcerot"  -> handleDebugSourcerot(sender, args);
+            case "sourceflip" -> handleDebugSourceflip(sender, args);
+            case "rebake"     -> handleDebugRebake(sender, args);
             default -> {
                 sender.sendMessage("§cUnknown debug target: " + args[1]);
                 yield true;
             }
         };
+    }
+
+    private boolean handleDebugSourceflip(CommandSender sender, String[] args) {
+        // /tessera debug sourceflip <facedir> <none|h|v|hv>
+        // /tessera debug sourceflip reset [facedir]
+        // Mirrors the source block-face texture per axis. Combine with
+        // sourcerot to express any of the 8 dihedral orientations of a
+        // square. Use this when sourcerot alone can't fix wrap mismatches
+        // (i.e. when rotation only moves the bad areas around).
+        if (args.length >= 3 && args[2].equalsIgnoreCase("reset")) {
+            if (args.length == 3) {
+                SourceFlips.resetAll();
+                sender.sendMessage("§aReset all source flips.");
+            } else {
+                FaceDir d = parseFaceDir(args[3]);
+                if (d == null) { sender.sendMessage("§cUnknown facedir: " + args[3]); return true; }
+                SourceFlips.reset(d);
+                sender.sendMessage("§aReset source flip for " + d + " to " + SourceFlips.defaultOf(d) + ".");
+            }
+            int cleared = registry.invalidateAll();
+            sender.sendMessage("§7Cleared " + cleared + " registry entr"
+                    + (cleared == 1 ? "y" : "ies") + "; next /tessera test will re-bake.");
+            return true;
+        }
+        if (args.length < 4) {
+            sender.sendMessage("§c/tessera debug sourceflip <up|down|north|south|east|west> <none|h|v|hv> | reset [facedir]");
+            return true;
+        }
+        FaceDir d = parseFaceDir(args[2]);
+        if (d == null) { sender.sendMessage("§cUnknown facedir: " + args[2]); return true; }
+        try {
+            SourceFlips.Flip flip = SourceFlips.Flip.parse(args[3]);
+            SourceFlips.set(d, flip);
+            int cleared = registry.invalidateAll();
+            sender.sendMessage("§aSet source flip for " + d + " = " + SourceFlips.of(d) + ".");
+            sender.sendMessage("§7Cleared " + cleared + " registry entr"
+                    + (cleared == 1 ? "y" : "ies") + "; next /tessera test will re-bake.");
+        } catch (IllegalArgumentException iae) {
+            sender.sendMessage("§c" + iae.getMessage());
+        }
+        return true;
     }
 
     private boolean handleDebugSourcerot(CommandSender sender, String[] args) {

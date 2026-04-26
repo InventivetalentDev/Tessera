@@ -47,12 +47,15 @@ public final class TextureSplitter {
         if (gridN < 1) throw new IllegalArgumentException("gridN must be ≥ 1");
         // Vanilla textures are 16x16. Pre-slice each face into a gridN x gridN tile array.
         // Each face's source is optionally pre-rotated by SourceRotations.of(faceDir),
-        // which is the user-tunable "rotate the whole block face" knob — distinct
-        // from per-tile in-plane rotation (TileRotations).
+        // then optionally mirrored by SourceFlips.of(faceDir). Both are user-tunable
+        // "rotate/mirror the whole block face" knobs, distinct from per-tile in-plane
+        // rotation (TileRotations). Order: rotate THEN flip (matches what the debug
+        // commands' messages claim).
         EnumMap<FaceDir, BufferedImage[][]> tilesByFace = new EnumMap<>(FaceDir.class);
         for (FaceDir d : FaceDir.values()) {
             BufferedImage rotated = rotate90Multiples(model.face(d), SourceRotations.of(d));
-            tilesByFace.put(d, sliceFace(rotated, gridN));
+            BufferedImage flipped = applyFlip(rotated, SourceFlips.of(d));
+            tilesByFace.put(d, sliceFace(flipped, gridN));
         }
 
         List<ChunkSpec> out = new ArrayList<>();
@@ -91,6 +94,22 @@ public final class TextureSplitter {
             }
         }
         return tiles;
+    }
+
+    /** Apply horizontal/vertical/both mirror per {@link SourceFlips}. */
+    private static BufferedImage applyFlip(BufferedImage src, SourceFlips.Flip flip) {
+        if (flip == SourceFlips.Flip.NONE) return src;
+        int w = src.getWidth();
+        int h = src.getHeight();
+        BufferedImage out = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB);
+        for (int y = 0; y < h; y++) {
+            int sy = (flip == SourceFlips.Flip.V || flip == SourceFlips.Flip.HV) ? (h - 1 - y) : y;
+            for (int x = 0; x < w; x++) {
+                int sx = (flip == SourceFlips.Flip.H || flip == SourceFlips.Flip.HV) ? (w - 1 - x) : x;
+                out.setRGB(x, y, src.getRGB(sx, sy));
+            }
+        }
+        return out;
     }
 
     /**
