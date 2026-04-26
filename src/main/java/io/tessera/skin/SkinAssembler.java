@@ -62,12 +62,15 @@ public final class SkinAssembler {
 
     private void paintFace(Graphics2D g, HeadFace face, BufferedImage tile) {
         if (tile == null) return;
-        // Per-face in-plane rotation (multiple of 90°) — applied to the tile
+        // Per-face in-plane rotation + optional mirror — applied to the tile
         // before scaling/painting so the resulting image lands in the slot
-        // with its image axes aligned to the slot's UV axes. See TileRotations
-        // for the empirical-tuning rationale.
+        // with its image axes aligned to the slot's UV axes. The slot's
+        // axes don't always match the source face's axes by a pure rotation
+        // (the head's TOP slot vs. a block's UP face is a known case);
+        // TileFlips covers the other half of the dihedral group.
         BufferedImage rotated = rotate90Multiples(tile, TileRotations.of(face));
-        BufferedImage scaled = nearestNeighborScale(rotated, face.width(), face.height());
+        BufferedImage flipped = applyFlip(rotated, TileFlips.of(face));
+        BufferedImage scaled = nearestNeighborScale(flipped, face.width(), face.height());
 
         if (face == HeadFace.BOTTOM) {
             // Mirror horizontally on paint: dx1/dx2 swap = source U-axis flips.
@@ -78,6 +81,22 @@ public final class SkinAssembler {
         } else {
             g.drawImage(scaled, face.u0, face.v0, null);
         }
+    }
+
+    /** Apply horizontal/vertical/both mirror per {@link TileFlips}. */
+    private static BufferedImage applyFlip(BufferedImage src, TileFlips.Flip flip) {
+        if (flip == TileFlips.Flip.NONE) return src;
+        int w = src.getWidth();
+        int h = src.getHeight();
+        BufferedImage out = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB);
+        for (int y = 0; y < h; y++) {
+            int sy = (flip == TileFlips.Flip.V || flip == TileFlips.Flip.HV) ? (h - 1 - y) : y;
+            for (int x = 0; x < w; x++) {
+                int sx = (flip == TileFlips.Flip.H || flip == TileFlips.Flip.HV) ? (w - 1 - x) : x;
+                out.setRGB(x, y, src.getRGB(sx, sy));
+            }
+        }
+        return out;
     }
 
     private static BufferedImage rotate90Multiples(BufferedImage src, int degrees) {

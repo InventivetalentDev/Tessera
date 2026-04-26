@@ -56,6 +56,12 @@ public final class TileRotations {
         return STALE.get();
     }
 
+    /** Visible to sibling knobs (e.g. {@link TileFlips}) so they can share the
+     *  cache-busting signal with TileRotations changes. */
+    static void markStale() {
+        STALE.set(true);
+    }
+
     static {
         // Initial guess: zero across the board. Tune per face as you find
         // tiles rendering rotated. Update these defaults once values have

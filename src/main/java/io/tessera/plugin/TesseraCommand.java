@@ -12,6 +12,7 @@ import io.tessera.core.HeadFace;
 import io.tessera.effect.EffectContext;
 import io.tessera.effect.builtin.DirectionalShrinkEffect;
 import io.tessera.skin.HeadsRegistry;
+import io.tessera.skin.TileFlips;
 import io.tessera.skin.TileRotations;
 import io.tessera.skin.bake.BlockBaker;
 import io.tessera.split.SourceFlips;
@@ -43,6 +44,8 @@ import java.util.Locale;
  *   /tessera debug headrot reset [face]
  *   /tessera debug tilerot   &lt;headface&gt; &lt;0|90|180|270&gt; per-chunk tile in-plane rotation
  *   /tessera debug tilerot   reset [headface]
+ *   /tessera debug tileflip  &lt;headface&gt; &lt;none|h|v|hv&gt;  per-chunk tile mirror
+ *   /tessera debug tileflip  reset [headface]
  *   /tessera debug sourcerot  &lt;facedir&gt; &lt;0|90|180|270&gt; whole block-face source rotation
  *   /tessera debug sourcerot  reset [facedir]
  *   /tessera debug sourceflip &lt;facedir&gt; &lt;none|h|v|hv&gt;  whole block-face source mirror
@@ -197,6 +200,7 @@ public final class TesseraCommand implements CommandExecutor {
             case "center"       -> handleDebugCenter(sender, args);
             case "grid"         -> handleDebugGrid(sender, args);
             case "tilerot"      -> handleDebugTilerot(sender, args);
+            case "tileflip"     -> handleDebugTileflip(sender, args);
             case "headrot"      -> handleDebugHeadrot(sender, args);
             case "sourcerot"    -> handleDebugSourcerot(sender, args);
             case "sourceflip"   -> handleDebugSourceflip(sender, args);
@@ -230,6 +234,12 @@ public final class TesseraCommand implements CommandExecutor {
             int v = TileRotations.of(f);
             int d = TileRotations.defaultOf(f);
             sender.sendMessage("§7  " + f + ": §f" + v + "° §8(default " + d + "°)");
+        }
+        sender.sendMessage("§7TileFlips (per HeadFace, bake-time):");
+        for (HeadFace f : HeadFace.values()) {
+            TileFlips.Flip v = TileFlips.of(f);
+            TileFlips.Flip d = TileFlips.defaultOf(f);
+            sender.sendMessage("§7  " + f + ": §f" + v + " §8(default " + d + ")");
         }
         sender.sendMessage("§7SourceRotations (deg per FaceDir, bake-time):");
         for (FaceDir d : FaceDir.values()) {
@@ -447,6 +457,43 @@ public final class TesseraCommand implements CommandExecutor {
                     + (cleared == 1 ? "y" : "ies") + "; next /tessera test will re-bake (a few seconds).");
         } catch (NumberFormatException nfe) {
             sender.sendMessage("§cExpected an integer multiple of 90.");
+        } catch (IllegalArgumentException iae) {
+            sender.sendMessage("§c" + iae.getMessage());
+        }
+        return true;
+    }
+
+    private boolean handleDebugTileflip(CommandSender sender, String[] args) {
+        // /tessera debug tileflip <headface> <none|h|v|hv>
+        // /tessera debug tileflip reset [headface]
+        if (args.length >= 3 && args[2].equalsIgnoreCase("reset")) {
+            if (args.length == 3) {
+                TileFlips.resetAll();
+                sender.sendMessage("§aReset all tile flips.");
+            } else {
+                HeadFace f = parseFace(args[3]);
+                if (f == null) { sender.sendMessage("§cUnknown face: " + args[3]); return true; }
+                TileFlips.reset(f);
+                sender.sendMessage("§aReset tile flip for " + f + " to " + TileFlips.defaultOf(f) + ".");
+            }
+            int cleared = registry.invalidateAll();
+            sender.sendMessage("§7Cleared " + cleared + " registry entr"
+                    + (cleared == 1 ? "y" : "ies") + "; next /tessera test will re-bake.");
+            return true;
+        }
+        if (args.length < 4) {
+            sender.sendMessage("§c/tessera debug tileflip <headface> <none|h|v|hv> | reset [headface]");
+            return true;
+        }
+        HeadFace face = parseFace(args[2]);
+        if (face == null) { sender.sendMessage("§cUnknown face: " + args[2]); return true; }
+        try {
+            TileFlips.Flip flip = TileFlips.Flip.parse(args[3]);
+            TileFlips.set(face, flip);
+            int cleared = registry.invalidateAll();
+            sender.sendMessage("§aSet tile flip for " + face + " = " + TileFlips.of(face) + ".");
+            sender.sendMessage("§7Cleared " + cleared + " registry entr"
+                    + (cleared == 1 ? "y" : "ies") + "; next /tessera test will re-bake.");
         } catch (IllegalArgumentException iae) {
             sender.sendMessage("§c" + iae.getMessage());
         }

@@ -8,6 +8,7 @@ import io.tessera.core.FakeBlock;
 import io.tessera.core.HeadFace;
 import io.tessera.skin.HeadSkinPacker;
 import io.tessera.skin.HeadsRegistry;
+import io.tessera.skin.TileFlips;
 import io.tessera.skin.TileRotations;
 import io.tessera.skin.bake.BlockBaker;
 import io.tessera.split.SourceFlips;
@@ -116,7 +117,8 @@ public final class PermutationSweeper {
                 boolean rebakeNeeded = lastBake == null
                         || lastBake.sourceRot != c.sourceRot
                         || lastBake.sourceFlip != c.sourceFlip
-                        || lastBake.tileRot != c.tileRot;
+                        || lastBake.tileRot != c.tileRot
+                        || lastBake.tileFlip != c.tileFlip;
 
                 if (rebakeNeeded) {
                     registry.invalidate(key);
@@ -234,22 +236,29 @@ public final class PermutationSweeper {
         List<Combo> out = new ArrayList<>();
         switch (kind) {
             case HEAD -> {
-                for (int hr : DEG_OPTIONS) out.add(new Combo(0, SourceFlips.Flip.NONE, 0, hr));
+                for (int hr : DEG_OPTIONS) out.add(new Combo(0, SourceFlips.Flip.NONE, 0, TileFlips.Flip.NONE, hr));
             }
             case TILE -> {
-                for (int tr : DEG_OPTIONS) out.add(new Combo(0, SourceFlips.Flip.NONE, tr, 0));
+                // Full tile-level dihedral: 4 rotations × 4 flips = 16.
+                for (int tr : DEG_OPTIONS)
+                    for (TileFlips.Flip tf : TileFlips.Flip.values())
+                        out.add(new Combo(0, SourceFlips.Flip.NONE, tr, tf, 0));
             }
             case SOURCE -> {
                 for (int sr : DEG_OPTIONS)
                     for (SourceFlips.Flip sf : FLIP_OPTIONS)
-                        out.add(new Combo(sr, sf, 0, 0));
+                        out.add(new Combo(sr, sf, 0, TileFlips.Flip.NONE, 0));
             }
             case ALL -> {
+                // 4*4*4*4 source-and-tile bake combos × 4 head runtime = 1024.
+                // Skipping tileflip here would still be 256 — the wide
+                // version is what you need when nothing else has worked.
                 for (int sr : DEG_OPTIONS)
                     for (SourceFlips.Flip sf : FLIP_OPTIONS)
                         for (int tr : DEG_OPTIONS)
-                            for (int hr : DEG_OPTIONS)
-                                out.add(new Combo(sr, sf, tr, hr));
+                            for (TileFlips.Flip tf : TileFlips.Flip.values())
+                                for (int hr : DEG_OPTIONS)
+                                    out.add(new Combo(sr, sf, tr, tf, hr));
             }
         }
         return out;
@@ -257,15 +266,16 @@ public final class PermutationSweeper {
 
     private static long countBakes(List<Combo> combos) {
         // A "bake group" is a consecutive run of combos sharing the same
-        // (sourceRot, sourceFlip, tileRot). With our enumeration order
-        // headRot is innermost, so adjacent combos in the same group differ
-        // only in headRot and re-use the bake.
+        // bake-time settings (everything but headRot). Our enumeration
+        // order keeps headRot innermost so adjacent combos in the same
+        // group differ only in headRot and re-use the bake.
         long n = 0;
         Combo prev = null;
         for (Combo c : combos) {
             if (prev == null || prev.sourceRot != c.sourceRot
                     || prev.sourceFlip != c.sourceFlip
-                    || prev.tileRot != c.tileRot) {
+                    || prev.tileRot != c.tileRot
+                    || prev.tileFlip != c.tileFlip) {
                 n++;
             }
             prev = c;
@@ -277,11 +287,15 @@ public final class PermutationSweeper {
         SourceRotations.set(face, c.sourceRot);
         SourceFlips.set(face, c.sourceFlip);
         TileRotations.set(headFace, c.tileRot);
+        TileFlips.set(headFace, c.tileFlip);
     }
 
-    private record Combo(int sourceRot, SourceFlips.Flip sourceFlip, int tileRot, int headRot) {
+    private record Combo(int sourceRot, SourceFlips.Flip sourceFlip,
+                         int tileRot, TileFlips.Flip tileFlip, int headRot) {
         String label() {
-            return "sr=" + sourceRot + " sf=" + sourceFlip + " tr=" + tileRot + " hr=" + headRot;
+            return "sr=" + sourceRot + " sf=" + sourceFlip
+                    + " tr=" + tileRot + " tf=" + tileFlip
+                    + " hr=" + headRot;
         }
     }
 
@@ -296,15 +310,17 @@ public final class PermutationSweeper {
         final int sourceRot;
         final SourceFlips.Flip sourceFlip;
         final int tileRot;
+        final TileFlips.Flip tileFlip;
         final int headRot;
 
         Snapshot(FaceDir face, HeadFace headFace, int sourceRot, SourceFlips.Flip sourceFlip,
-                 int tileRot, int headRot) {
+                 int tileRot, TileFlips.Flip tileFlip, int headRot) {
             this.face = face;
             this.headFace = headFace;
             this.sourceRot = sourceRot;
             this.sourceFlip = sourceFlip;
             this.tileRot = tileRot;
+            this.tileFlip = tileFlip;
             this.headRot = headRot;
         }
 
@@ -313,6 +329,7 @@ public final class PermutationSweeper {
                     SourceRotations.of(face),
                     SourceFlips.of(face),
                     TileRotations.of(headFace),
+                    TileFlips.of(headFace),
                     HeadRotations.of(headFace));
         }
 
@@ -320,6 +337,7 @@ public final class PermutationSweeper {
             SourceRotations.set(face, sourceRot);
             SourceFlips.set(face, sourceFlip);
             TileRotations.set(headFace, tileRot);
+            TileFlips.set(headFace, tileFlip);
             HeadRotations.set(headFace, headRot);
         }
     }
