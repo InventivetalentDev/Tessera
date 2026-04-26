@@ -41,7 +41,12 @@ public final class HeadSkin {
     public HeadSkin(UUID id, String contentHash, Map<HeadFace, BufferedImage> tiles) {
         this.id = id;
         this.contentHash = contentHash;
-        this.tiles = new EnumMap<>(tiles);
+        // EnumMap(Map) throws on empty input because it can't infer the key
+        // class from a generic Map. Build via class then putAll so runtime
+        // HeadSkins (which carry no tiles - bitmaps were baked away into the
+        // MineSkin texture) construct cleanly.
+        this.tiles = new EnumMap<>(HeadFace.class);
+        this.tiles.putAll(tiles);
     }
 
     public UUID id() { return id; }
