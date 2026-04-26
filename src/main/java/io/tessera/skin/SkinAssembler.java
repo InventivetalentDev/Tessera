@@ -62,13 +62,21 @@ public final class SkinAssembler {
 
     private void paintFace(Graphics2D g, HeadFace face, BufferedImage tile) {
         if (tile == null) return;
+        // Debug-tint mode replaces the tile with a directional marker so
+        // wrap mismatches are visible at a glance. Applied BEFORE rotation
+        // and flip so the rotation/flip knobs still produce visibly
+        // different output (otherwise you'd be staring at the same colored
+        // borders with no way to tell what they did).
+        BufferedImage source = FaceDebugTint.isEnabled()
+                ? FaceDebugTint.marker(face, tile.getWidth())
+                : tile;
         // Per-face in-plane rotation + optional mirror — applied to the tile
         // before scaling/painting so the resulting image lands in the slot
         // with its image axes aligned to the slot's UV axes. The slot's
         // axes don't always match the source face's axes by a pure rotation
         // (the head's TOP slot vs. a block's UP face is a known case);
         // TileFlips covers the other half of the dihedral group.
-        BufferedImage rotated = rotate90Multiples(tile, TileRotations.of(face));
+        BufferedImage rotated = rotate90Multiples(source, TileRotations.of(face));
         BufferedImage flipped = applyFlip(rotated, TileFlips.of(face));
         BufferedImage scaled = nearestNeighborScale(flipped, face.width(), face.height());
 

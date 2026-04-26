@@ -11,6 +11,7 @@ import io.tessera.core.FakeBlock;
 import io.tessera.core.HeadFace;
 import io.tessera.effect.EffectContext;
 import io.tessera.effect.builtin.DirectionalShrinkEffect;
+import io.tessera.skin.FaceDebugTint;
 import io.tessera.skin.HeadsRegistry;
 import io.tessera.skin.TileFlips;
 import io.tessera.skin.TileRotations;
@@ -52,6 +53,7 @@ import java.util.Locale;
  *   /tessera debug sourceflip reset [facedir]
  *   /tessera debug rebake [material]    invalidate registry so next test re-bakes
  *   /tessera debug status               print all current rotation/flip overrides
+ *   /tessera debug debugtex on|off|toggle  replace tiles with directional markers
  *   /tessera debug permutations &lt;head|tile|source|all&gt; &lt;facedir&gt; [material]
  *                                       sweep through configurations; spawns a static
  *                                       FakeBlock per combo with vanilla compare below
@@ -206,6 +208,7 @@ public final class TesseraCommand implements CommandExecutor {
             case "sourceflip"   -> handleDebugSourceflip(sender, args);
             case "rebake"       -> handleDebugRebake(sender, args);
             case "status"       -> handleDebugStatus(sender, args);
+            case "debugtex"     -> handleDebugTex(sender, args);
             case "permutations" -> handleDebugPermutations(sender, args);
             default -> {
                 sender.sendMessage("§cUnknown debug target: " + args[1]);
@@ -216,6 +219,7 @@ public final class TesseraCommand implements CommandExecutor {
 
     private boolean handleDebugStatus(CommandSender sender, String[] args) {
         sender.sendMessage("§6Tessera debug status");
+        sender.sendMessage("§7Debug texture mode: §f" + (FaceDebugTint.isEnabled() ? "ON" : "off"));
         sender.sendMessage("§7BlockGeometry.CUBE_CENTER_PRE = §f" + formatVec(BlockGeometry.cubeCenterPre()));
         sender.sendMessage("§7FaceRotations (Euler X/Y/Z deg per HeadFace):");
         for (HeadFace f : HeadFace.values()) {
@@ -497,6 +501,33 @@ public final class TesseraCommand implements CommandExecutor {
         } catch (IllegalArgumentException iae) {
             sender.sendMessage("§c" + iae.getMessage());
         }
+        return true;
+    }
+
+    private boolean handleDebugTex(CommandSender sender, String[] args) {
+        // /tessera debug debugtex on|off|toggle
+        // When on, SkinAssembler replaces every chunk tile with a
+        // directional marker (face letter + colored borders: red top,
+        // green right, blue bottom, yellow left). Use this to read off
+        // each rendered face's orientation directly instead of guessing
+        // from texture content. Bake-time, so changing it invalidates
+        // the registry.
+        boolean on;
+        if (args.length < 3 || args[2].equalsIgnoreCase("toggle")) {
+            on = !FaceDebugTint.isEnabled();
+        } else {
+            String v = args[2].toLowerCase(Locale.ROOT);
+            if (v.equals("on") || v.equals("true") || v.equals("1")) on = true;
+            else if (v.equals("off") || v.equals("false") || v.equals("0")) on = false;
+            else { sender.sendMessage("§c/tessera debug debugtex on|off|toggle"); return true; }
+        }
+        FaceDebugTint.setEnabled(on);
+        int cleared = registry.invalidateAll();
+        sender.sendMessage("§aDebug texture mode: " + (on ? "ON" : "off")
+                + ". Cleared " + cleared + " registry entr"
+                + (cleared == 1 ? "y" : "ies") + ".");
+        sender.sendMessage("§7Edges: §cred§7=top §agreen§7=right §9blue§7=bottom §eyellow§7=left."
+                + " Re-spawn / break a block to see.");
         return true;
     }
 
