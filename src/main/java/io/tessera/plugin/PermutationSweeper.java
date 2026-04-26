@@ -135,8 +135,30 @@ public final class PermutationSweeper {
 
                 final int slot = idx;
                 final Combo combo = c;
-                Bukkit.getScheduler().runTask(plugin, () -> spawnOne(world, anchor, lineDir,
-                        slot, key, mat, headFace, combo));
+                // Block the async thread until the main-thread spawn finishes.
+                // Otherwise the next iteration's registry.invalidate(key) races
+                // ahead and clears the registry while this iteration's queued
+                // spawn is still pending — factory.create then sees an empty
+                // chunks map and spawns 0 entities. This was visible as "only
+                // the first 4 hr variants spawn anything": iter 0 baked +
+                // populated registry, but iters 4..N invalidated before
+                // iters 1..N-1's spawns ran.
+                java.util.concurrent.CountDownLatch latch = new java.util.concurrent.CountDownLatch(1);
+                Bukkit.getScheduler().runTask(plugin, () -> {
+                    try {
+                        spawnOne(world, anchor, lineDir, slot, key, mat, headFace, combo);
+                    } finally {
+                        latch.countDown();
+                    }
+                });
+                try {
+                    if (!latch.await(30, TimeUnit.SECONDS)) {
+                        plugin.getLogger().warning("[sweep] spawn timed out at " + c.label());
+                    }
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    return;
+                }
             }
         } finally {
             Bukkit.getScheduler().runTask(plugin, () -> {
