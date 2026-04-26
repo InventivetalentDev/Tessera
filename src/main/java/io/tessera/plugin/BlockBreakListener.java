@@ -34,9 +34,18 @@ public final class BlockBreakListener implements Listener {
         Material mat = event.getBlock().getType();
         BlockKey key = BlockKey.of(mat.getKey().getNamespace() + ":" + mat.getKey().getKey());
 
-        if (!cfg.enables(key.asString())) return;
-        if (!registry.has(key)) return;
-        if (active.get() >= cfg.maxConcurrentFakeBlocks()) return;
+        if (!cfg.enables(key.asString())) {
+            if (cfg.debug()) plugin.getLogger().info("[debug] skip " + key + " (not enabled)");
+            return;
+        }
+        if (!registry.has(key)) {
+            if (cfg.debug()) plugin.getLogger().info("[debug] skip " + key + " (not in heads.json)");
+            return;
+        }
+        if (active.get() >= cfg.maxConcurrentFakeBlocks()) {
+            if (cfg.debug()) plugin.getLogger().info("[debug] skip " + key + " (concurrency cap)");
+            return;
+        }
 
         active.incrementAndGet();
         FakeBlock fb;

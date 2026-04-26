@@ -7,7 +7,6 @@ import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.World;
-import org.bukkit.entity.BlockDisplay;
 import org.bukkit.entity.Display;
 import org.bukkit.entity.ItemDisplay;
 import org.bukkit.inventory.ItemStack;
@@ -20,20 +19,29 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Spawns a {@link BlockDisplay}-based test lattice at a target location for
- * empirical tuning of {@link BlockGeometry#cubeCenterPre} and
- * {@link FaceRotations}. Each cell of the {@code gridN³} lattice is rendered
- * as a tiny vanilla block with the same Transformation we'd use for a real
- * chunk display — same translation math, same scale, same right-rotation —
- * but without needing any MineSkin/heads.json data.
+ * Spawns a lattice of {@link ItemDisplay} entities — one per visible chunk
+ * cell — using the exact same transform math as {@link FakeBlockFactory}.
+ * Each cell is a {@link Material#PLAYER_HEAD} with the default Steve skin
+ * so the result is a visible preview of what a real baked FakeBlock would
+ * look like, but without needing any MineSkin/heads.json data.
  *
- * <p>If the lattice's cubes meet flush with no staircase gaps, the
- * geometry is correctly tuned. If they don't, run
- * {@code /tessera debug center <x> <y> <z>} and re-spawn until they line up;
- * fold the working values into {@link BlockGeometry#CUBE_CENTER_PRE_DEFAULT}.
+ * <p>Empirical-tuning workflow:
+ * <ol>
+ *   <li>Stand on a flat area, look at empty space.</li>
+ *   <li>{@code /tessera debug grid} — spawns the lattice 30s in front of you.</li>
+ *   <li>If the cubes don't meet flush (staircase gaps along certain axes):
+ *       run {@code /tessera debug center <x> <y> <z>} until they do, then
+ *       fold the working values into {@link BlockGeometry#CUBE_CENTER_PRE_DEFAULT}.</li>
+ *   <li>If a cube's face shows the wrong tile orientation: use
+ *       {@code /tessera debug face <face> <x> <y> <z>} until correct, then
+ *       fold into {@link FaceRotations} defaults.</li>
+ * </ol>
  *
- * <p>Cubes auto-despawn after {@link #LIFETIME_TICKS} so a typo doesn't
- * leave clutter behind.
+ * <p>An earlier version of this class spawned BlockDisplay entities, but
+ * BlockDisplay has totally different rendering geometry (no internal
+ * CUBE_CENTER_PRE offset, scale 1.0 == 1-block cube vs. player-head's
+ * 0.5-block cube), so the result didn't actually exercise the FakeBlock
+ * math. The current PlayerHead-based version exercises the real path.
  */
 public final class DebugGridSpawner {
 
@@ -42,13 +50,13 @@ public final class DebugGridSpawner {
     private DebugGridSpawner() {}
 
     /**
-     * Spawn a lattice at {@code anchor} with the same per-cell math as
-     * {@link FakeBlockFactory}. Every cell uses {@code material} as its
-     * block; pick something with bright distinguishable face textures
-     * (default {@link Material#DIAMOND_ORE} reads well against most
-     * environments).
+     * Spawn a default-skin PlayerHead lattice at {@code anchor} using the
+     * same per-chunk math as {@link FakeBlockFactory}. {@code material} is
+     * accepted for future BlockDisplay-mode use but currently ignored
+     * (always uses PLAYER_HEAD; geometric fidelity matters more than
+     * texture choice for tuning).
      */
-    public static List<BlockDisplay> spawn(Plugin plugin, Location anchor, int gridN, Material material) {
+    public static List<ItemDisplay> spawn(Plugin plugin, Location anchor, int gridN, Material material) {
         World world = anchor.getWorld();
         if (world == null) throw new IllegalArgumentException("Anchor has no world");
 
@@ -58,16 +66,16 @@ public final class DebugGridSpawner {
                 Math.floor(anchor.getY()),
                 Math.floor(anchor.getZ()));
 
-        List<BlockDisplay> spawned = new ArrayList<>();
+        ItemStack head = new ItemStack(Material.PLAYER_HEAD);
+
+        List<ItemDisplay> spawned = new ArrayList<>();
         for (int x = 0; x < gridN; x++) {
             for (int y = 0; y < gridN; y++) {
                 for (int z = 0; z < gridN; z++) {
-                    boolean visible = isVisible(x, y, z, gridN);
-                    if (!visible) continue;
+                    if (!isVisible(x, y, z, gridN)) continue;
 
                     ChunkCoord c = new ChunkCoord(x, y, z);
-                    FaceDir primary = primaryFaceFor(c, gridN);
-                    HeadFace headFace = mapFaceDir(primary);
+                    HeadFace headFace = mapFaceDir(primaryFaceFor(c, gridN));
                     Quaternionf faceRot = FaceRotations.of(headFace);
 
                     Vector3f translation = geom.translationFor(c, faceRot);
@@ -79,55 +87,8 @@ public final class DebugGridSpawner {
                             new Vector3f(scale, scale, scale),
                             faceRot);
 
-                    BlockDisplay display = world.spawn(origin, BlockDisplay.class, d -> {
-                        d.setBlock(material.createBlockData());
-                        d.setTransformation(tx);
-                        d.setBrightness(new Display.Brightness(15, 15));
-                        d.setViewRange(2.0f);
-                        d.setPersistent(false);
-                    });
-                    spawned.add(display);
-                }
-            }
-        }
-
-        Bukkit.getScheduler().runTaskLater(plugin, () -> {
-            for (BlockDisplay d : spawned) if (!d.isDead()) d.remove();
-        }, LIFETIME_TICKS);
-
-        return spawned;
-    }
-
-    /**
-     * For visualizing every cell (including interior), call with the same
-     * gridN — uses the same math as {@link FakeBlockFactory} but spawns
-     * interior cells too so you can see whether translations are correct
-     * across the whole volume.
-     */
-    public static List<ItemDisplay> spawnDense(Plugin plugin, Location anchor, int gridN, ItemStack item) {
-        World world = anchor.getWorld();
-        if (world == null) throw new IllegalArgumentException("Anchor has no world");
-        BlockGeometry geom = BlockGeometry.axisAligned(gridN);
-        Location origin = new Location(world,
-                Math.floor(anchor.getX()),
-                Math.floor(anchor.getY()),
-                Math.floor(anchor.getZ()));
-
-        List<ItemDisplay> spawned = new ArrayList<>();
-        for (int x = 0; x < gridN; x++) {
-            for (int y = 0; y < gridN; y++) {
-                for (int z = 0; z < gridN; z++) {
-                    ChunkCoord c = new ChunkCoord(x, y, z);
-                    FaceDir primary = isVisible(x, y, z, gridN) ? primaryFaceFor(c, gridN) : FaceDir.UP;
-                    HeadFace headFace = mapFaceDir(primary);
-                    Quaternionf faceRot = FaceRotations.of(headFace);
-                    Vector3f translation = geom.translationFor(c, faceRot);
-                    float scale = geom.chunkScale();
-                    Transformation tx = new Transformation(translation, new Quaternionf(),
-                            new Vector3f(scale, scale, scale), faceRot);
-
                     ItemDisplay display = world.spawn(origin, ItemDisplay.class, d -> {
-                        d.setItemStack(item);
+                        d.setItemStack(head);
                         d.setItemDisplayTransform(ItemDisplay.ItemDisplayTransform.NONE);
                         d.setTransformation(tx);
                         d.setBrightness(new Display.Brightness(15, 15));
@@ -138,9 +99,11 @@ public final class DebugGridSpawner {
                 }
             }
         }
+
         Bukkit.getScheduler().runTaskLater(plugin, () -> {
             for (ItemDisplay d : spawned) if (!d.isDead()) d.remove();
         }, LIFETIME_TICKS);
+
         return spawned;
     }
 

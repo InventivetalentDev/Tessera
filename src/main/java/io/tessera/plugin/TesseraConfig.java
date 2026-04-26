@@ -48,7 +48,10 @@ public record TesseraConfig(
     private static Set<String> normalize(List<String> raw) {
         return raw.stream()
                 .map(s -> s.toLowerCase(Locale.ROOT))
-                .map(s -> s.contains(":") ? s : "minecraft:" + s)
+                // Don't namespace the wildcard - "*" must stay literal so
+                // enables() can match it. Anything else without a colon
+                // gets the vanilla namespace.
+                .map(s -> s.equals("*") || s.contains(":") ? s : "minecraft:" + s)
                 .collect(Collectors.toUnmodifiableSet());
     }
 }

@@ -79,9 +79,11 @@ public final class TesseraCommand implements CommandExecutor {
             sender.sendMessage("§7or use §f/tessera debug grid§7 to verify geometry without baked skins.");
             return true;
         }
-        Location target = p.getTargetBlockExact(8) != null
-                ? p.getTargetBlockExact(8).getLocation()
-                : p.getLocation();
+        // Spawn in the air block adjacent to whatever the player is looking
+        // at (the face the ray hit), not inside the target block - otherwise
+        // the chunks render inside an opaque cube and you see nothing
+        // unless the target is glass or leaves.
+        Location target = pickTargetLocation(p);
         FakeBlock fb = factory.create(target, key);
         if (fb.chunks().isEmpty()) {
             sender.sendMessage("§cFakeBlock has 0 chunks - heads.json entry for " + key + " is empty.");
@@ -137,9 +139,7 @@ public final class TesseraCommand implements CommandExecutor {
             }
             mat = m;
         }
-        Location target = p.getTargetBlockExact(8) != null
-                ? p.getTargetBlockExact(8).getLocation()
-                : p.getLocation();
+        Location target = pickTargetLocation(p);
         var spawned = DebugGridSpawner.spawn(plugin, target, plugin.tesseraConfig().chunkGridSize(), mat);
         sender.sendMessage("§aSpawned " + spawned.size() + " " + mat
                 + " cells at " + formatLoc(target) + " (auto-removed in 30s).");
@@ -200,6 +200,21 @@ public final class TesseraCommand implements CommandExecutor {
             sender.sendMessage("§cExpected three numeric components.");
         }
         return true;
+    }
+
+    /**
+     * Pick a sensible spawn cell for debug commands: the air block on the
+     * player-facing side of whatever they're looking at, falling back to
+     * 3 blocks in front of the player if no block is in range.
+     */
+    private static Location pickTargetLocation(Player p) {
+        var ray = p.rayTraceBlocks(8);
+        if (ray != null && ray.getHitBlock() != null && ray.getHitBlockFace() != null) {
+            return ray.getHitBlock()
+                    .getRelative(ray.getHitBlockFace())
+                    .getLocation();
+        }
+        return p.getEyeLocation().add(p.getEyeLocation().getDirection().multiply(3));
     }
 
     private static HeadFace parseFace(String s) {
