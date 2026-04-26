@@ -10,6 +10,7 @@ import io.tessera.core.HeadFace;
 import io.tessera.effect.EffectContext;
 import io.tessera.effect.builtin.DirectionalShrinkEffect;
 import io.tessera.skin.HeadsRegistry;
+import io.tessera.skin.TileRotations;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.command.Command;
@@ -112,14 +113,51 @@ public final class TesseraCommand implements CommandExecutor {
             return true;
         }
         return switch (args[1].toLowerCase(Locale.ROOT)) {
-            case "face"   -> handleDebugFace(sender, args);
-            case "center" -> handleDebugCenter(sender, args);
-            case "grid"   -> handleDebugGrid(sender, args);
+            case "face"    -> handleDebugFace(sender, args);
+            case "center"  -> handleDebugCenter(sender, args);
+            case "grid"    -> handleDebugGrid(sender, args);
+            case "tilerot" -> handleDebugTilerot(sender, args);
             default -> {
                 sender.sendMessage("§cUnknown debug target: " + args[1]);
                 yield true;
             }
         };
+    }
+
+    private boolean handleDebugTilerot(CommandSender sender, String[] args) {
+        // /tessera debug tilerot <face> <degrees>   (degrees = 0|90|180|270)
+        // /tessera debug tilerot reset [face]
+        if (args.length >= 3 && args[2].equalsIgnoreCase("reset")) {
+            if (args.length == 3) {
+                TileRotations.resetAll();
+                sender.sendMessage("§aReset all tile rotations.");
+            } else {
+                HeadFace f = parseFace(args[3]);
+                if (f == null) { sender.sendMessage("§cUnknown face: " + args[3]); return true; }
+                TileRotations.reset(f);
+                sender.sendMessage("§aReset tile rotation for " + f + " to "
+                        + TileRotations.defaultOf(f) + "°.");
+            }
+            sender.sendMessage("§7Re-bake heads.json to see this take effect on real blocks.");
+            return true;
+        }
+        if (args.length < 4) {
+            sender.sendMessage("§c/tessera debug tilerot <face> <0|90|180|270> | reset [face]");
+            return true;
+        }
+        HeadFace face = parseFace(args[2]);
+        if (face == null) { sender.sendMessage("§cUnknown face: " + args[2]); return true; }
+        try {
+            int deg = Integer.parseInt(args[3]);
+            TileRotations.set(face, deg);
+            sender.sendMessage("§aSet tile rotation for " + face + " = " + TileRotations.of(face) + "°.");
+            sender.sendMessage("§7Re-bake heads.json (./gradlew tesseraBake) — rotation is applied at paint time.");
+        } catch (NumberFormatException nfe) {
+            sender.sendMessage("§cExpected an integer multiple of 90.");
+        } catch (IllegalArgumentException iae) {
+            sender.sendMessage("§c" + iae.getMessage());
+        }
+        return true;
     }
 
     private boolean handleDebugGrid(CommandSender sender, String[] args) {

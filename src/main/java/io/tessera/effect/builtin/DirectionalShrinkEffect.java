@@ -63,11 +63,17 @@ public final class DirectionalShrinkEffect implements ChunkEffect {
 
         for (int i = 0; i < chunks.size(); i++) {
             ChunkRef chunk = chunks.get(i);
-            // closer to camera (smaller proj) → smaller t → earlier delay
+            // proj > 0 = chunk on far side of block (in same direction as
+            // the player's look vector). proj < 0 = near side. We want
+            // near-side chunks to shrink FIRST (small delay), far-side
+            // LAST. After normalising, smallest-proj chunks (near side)
+            // get t = 0 and largest (far side) get t = 1, so delay = t.
             double t = (projections[i] - minProj) / range;
-            // Invert so chunks at the breaker's near side go first.
-            // (proj ~= dot(rel, eyeDir); positive dot = chunk on far side of block.)
-            int delayTicks = (int) Math.round((1.0 - t) * waveTicks);
+            // Invert so the wave appears to fold toward the player.
+            // Earlier we used (1 - t) which sent the wave the wrong way:
+            // far chunks shrunk first because their large t flipped to
+            // a small delay.
+            int delayTicks = (int) Math.round(t * waveTicks);
 
             Bukkit.getScheduler().runTaskLater(ctx.plugin(), () -> shrinkChunk(chunk, interpTicks),
                     Math.max(0, delayTicks));

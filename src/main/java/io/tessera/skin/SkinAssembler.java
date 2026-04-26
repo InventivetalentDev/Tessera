@@ -62,7 +62,12 @@ public final class SkinAssembler {
 
     private void paintFace(Graphics2D g, HeadFace face, BufferedImage tile) {
         if (tile == null) return;
-        BufferedImage padded = padToFaceSize(tile, face.width(), face.height());
+        // Per-face in-plane rotation (multiple of 90°) — applied to the tile
+        // before padding/painting so the resulting image lands in the slot
+        // with its image axes aligned to the slot's UV axes. See TileRotations
+        // for the empirical-tuning rationale.
+        BufferedImage rotated = rotate90Multiples(tile, TileRotations.of(face));
+        BufferedImage padded = padToFaceSize(rotated, face.width(), face.height());
 
         if (face == HeadFace.BOTTOM) {
             // Mirror horizontally on paint: dx1/dx2 swap = source U-axis flips.
@@ -73,6 +78,31 @@ public final class SkinAssembler {
         } else {
             g.drawImage(padded, face.u0, face.v0, null);
         }
+    }
+
+    private static BufferedImage rotate90Multiples(BufferedImage src, int degrees) {
+        int turns = (((degrees % 360) + 360) % 360) / 90;
+        if (turns == 0) return src;
+        int w = src.getWidth();
+        int h = src.getHeight();
+        // Output size flips for 90/270, stays for 180.
+        int outW = (turns % 2 == 1) ? h : w;
+        int outH = (turns % 2 == 1) ? w : h;
+        BufferedImage out = new BufferedImage(outW, outH, BufferedImage.TYPE_INT_ARGB);
+        for (int y = 0; y < h; y++) {
+            for (int x = 0; x < w; x++) {
+                int rgb = src.getRGB(x, y);
+                int nx, ny;
+                switch (turns) {
+                    case 1 -> { nx = h - 1 - y; ny = x; }              // 90° CW
+                    case 2 -> { nx = w - 1 - x; ny = h - 1 - y; }      // 180°
+                    case 3 -> { nx = y;         ny = w - 1 - x; }      // 270° CW (= 90° CCW)
+                    default -> { nx = x; ny = y; }
+                }
+                out.setRGB(nx, ny, rgb);
+            }
+        }
+        return out;
     }
 
     private static BufferedImage padToFaceSize(BufferedImage tile, int targetW, int targetH) {
