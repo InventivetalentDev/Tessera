@@ -63,20 +63,20 @@ public final class SkinAssembler {
     private void paintFace(Graphics2D g, HeadFace face, BufferedImage tile) {
         if (tile == null) return;
         // Per-face in-plane rotation (multiple of 90°) — applied to the tile
-        // before padding/painting so the resulting image lands in the slot
+        // before scaling/painting so the resulting image lands in the slot
         // with its image axes aligned to the slot's UV axes. See TileRotations
         // for the empirical-tuning rationale.
         BufferedImage rotated = rotate90Multiples(tile, TileRotations.of(face));
-        BufferedImage padded = padToFaceSize(rotated, face.width(), face.height());
+        BufferedImage scaled = nearestNeighborScale(rotated, face.width(), face.height());
 
         if (face == HeadFace.BOTTOM) {
             // Mirror horizontally on paint: dx1/dx2 swap = source U-axis flips.
-            g.drawImage(padded,
+            g.drawImage(scaled,
                     face.u1, face.v0, face.u0, face.v1,
-                    0, 0, padded.getWidth(), padded.getHeight(),
+                    0, 0, scaled.getWidth(), scaled.getHeight(),
                     null);
         } else {
-            g.drawImage(padded, face.u0, face.v0, null);
+            g.drawImage(scaled, face.u0, face.v0, null);
         }
     }
 
@@ -105,28 +105,33 @@ public final class SkinAssembler {
         return out;
     }
 
-    private static BufferedImage padToFaceSize(BufferedImage tile, int targetW, int targetH) {
-        int tw = tile.getWidth();
-        int th = tile.getHeight();
-        if (tw == targetW && th == targetH) return tile;
+    /**
+     * NEAREST-neighbor upscale of {@code src} to {@code targetW × targetH}.
+     * For typical Tessera dimensions (4×4 tile → 8×8 head face slot) each
+     * source pixel becomes a clean 2×2 block in the output, so the slot is
+     * fully covered with no stretched edges.
+     *
+     * <p>An earlier version of this method center-pasted the tile and
+     * replicated edge pixels outward — i.e. for a 4×4 tile in an 8×8 slot,
+     * the inner 2×2 of the slot showed "real" tile pixels (cols 1–2 of the
+     * tile) while the outer 6 pixels of each row were 3-wide replications
+     * of the tile's leftmost/rightmost columns. That produced a visible
+     * "2×2 in the centre, stretched edges" pattern on every rendered face —
+     * which masked rotation effects and made textures look broken.
+     */
+    private static BufferedImage nearestNeighborScale(BufferedImage src, int targetW, int targetH) {
+        int sw = src.getWidth();
+        int sh = src.getHeight();
+        if (sw == targetW && sh == targetH) return src;
 
         BufferedImage out = new BufferedImage(targetW, targetH, BufferedImage.TYPE_INT_ARGB);
-        int padX = (targetW - tw) / 2;
-        int padY = (targetH - th) / 2;
-        // Paint the tile centered. Outside the tile, replicate the nearest edge pixel
-        // so 8x8 sampling at the seam reads colors from the same chunk rather than
-        // transparent (which would render see-through on the head).
         for (int y = 0; y < targetH; y++) {
-            int sy = clamp(y - padY, 0, th - 1);
+            int sy = (y * sh) / targetH;
             for (int x = 0; x < targetW; x++) {
-                int sx = clamp(x - padX, 0, tw - 1);
-                out.setRGB(x, y, tile.getRGB(sx, sy));
+                int sx = (x * sw) / targetW;
+                out.setRGB(x, y, src.getRGB(sx, sy));
             }
         }
         return out;
-    }
-
-    private static int clamp(int v, int lo, int hi) {
-        return v < lo ? lo : (v > hi ? hi : v);
     }
 }

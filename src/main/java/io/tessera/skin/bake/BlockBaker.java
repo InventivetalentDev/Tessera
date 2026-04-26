@@ -147,6 +147,11 @@ public final class BlockBaker {
         }
 
         Map<ChunkCoord, HeadsRegistry.Entry> chunkMap = new LinkedHashMap<>();
+        int completedHeads = 0, erroredHeads = 0;
+        for (HeadSkin head : packed.uniqueHeads()) {
+            if (head.state() == SkinState.COMPLETED) completedHeads++;
+            else erroredHeads++;
+        }
         packed.chunkToHead().forEach((chunk, head) -> {
             if (head.state() == SkinState.COMPLETED) {
                 chunkMap.put(chunk.coord(), new HeadsRegistry.Entry(
@@ -154,6 +159,14 @@ public final class BlockBaker {
                         head.textureSignature(), head.mineskinUuid()));
             }
         });
+        // Always log completion stats so the user can spot rate-limit /
+        // upload errors that produce partially-baked blocks (visible as
+        // "missing chunks" in /tessera test).
+        logger.info("[runtime-bake] " + key + " complete: "
+                + completedHeads + "/" + packed.uniqueHeads().size() + " heads succeeded, "
+                + chunkMap.size() + "/" + chunks.size() + " chunks registered"
+                + (erroredHeads > 0 ? " (" + erroredHeads + " heads errored - retry to fill in)" : ""));
+
         if (chunkMap.isEmpty()) {
             logger.warning("[runtime-bake] " + key + " produced 0 completed chunks");
             return false;

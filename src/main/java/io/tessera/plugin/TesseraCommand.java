@@ -144,8 +144,13 @@ public final class TesseraCommand implements CommandExecutor {
         }
         if (staticMode) {
             sender.sendMessage("§aSpawned static FakeBlock for " + key + " at " + formatLoc(target)
-                    + " (auto-removed in 30s)");
-            Bukkit.getScheduler().runTaskLater(plugin, fb::despawn, 30L * 20L);
+                    + " (auto-removed in 5 min)");
+            // 5 minutes of linger so the user has time to walk around, switch
+            // angles, compare with neighbouring static spawns, etc. The
+            // BlockBaker is async — re-running /tessera test stone static
+            // after a /debug tilerot re-bakes and spawns the new one without
+            // disturbing earlier ones.
+            Bukkit.getScheduler().runTaskLater(plugin, fb::despawn, 5L * 60L * 20L);
             return;
         }
         EffectContext ctx = new EffectContext(
