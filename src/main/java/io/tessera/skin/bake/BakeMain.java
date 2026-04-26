@@ -180,14 +180,22 @@ public final class BakeMain {
             }
         }
 
-        // Build chunk → hash map for this block.
+        // Build chunk → hash map for this block. Only chunks whose head
+        // actually got a MineSkin texture are written — otherwise the
+        // runtime listener would think the block is supported and spawn
+        // FakeBlocks with zero entities (visually a no-op).
         TreeMap<String, String> chunkToHash = new TreeMap<>();
         packed.chunkToHead().forEach((chunk, head) -> {
             if (head.state() == SkinState.COMPLETED) {
                 chunkToHash.put(chunk.coord().asKey(), head.contentHash());
             }
         });
-        state.blocks.put(key.asString(), chunkToHash);
+        if (chunkToHash.isEmpty()) {
+            logger.info("[" + key + "] no completed skins; not writing a block entry");
+            state.blocks.remove(key.asString());
+        } else {
+            state.blocks.put(key.asString(), chunkToHash);
+        }
     }
 
     private static List<BlockKey> readBlockList(Path file) throws IOException {

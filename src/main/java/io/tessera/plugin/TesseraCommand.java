@@ -1,6 +1,7 @@
 package io.tessera.plugin;
 
 import io.tessera.assemble.BlockGeometry;
+import io.tessera.assemble.DebugGridSpawner;
 import io.tessera.assemble.FaceRotations;
 import io.tessera.assemble.FakeBlockFactory;
 import io.tessera.core.BlockKey;
@@ -74,13 +75,19 @@ public final class TesseraCommand implements CommandExecutor {
         }
         BlockKey key = BlockKey.of(mat.getKey().getNamespace() + ":" + mat.getKey().getKey());
         if (!registry.has(key)) {
-            sender.sendMessage("§cNot in heads.json: " + key + ". Run ./gradlew tesseraBake to add it.");
+            sender.sendMessage("§cNot in heads.json: " + key + ". Run ./gradlew tesseraBake to add it,");
+            sender.sendMessage("§7or use §f/tessera debug grid§7 to verify geometry without baked skins.");
             return true;
         }
         Location target = p.getTargetBlockExact(8) != null
                 ? p.getTargetBlockExact(8).getLocation()
                 : p.getLocation();
         FakeBlock fb = factory.create(target, key);
+        if (fb.chunks().isEmpty()) {
+            sender.sendMessage("§cFakeBlock has 0 chunks - heads.json entry for " + key + " is empty.");
+            sender.sendMessage("§7Re-run ./gradlew tesseraBake with MINESKIN_API_KEY set.");
+            return true;
+        }
         EffectContext ctx = new EffectContext(
                 p.getEyeLocation().getDirection(),
                 System.currentTimeMillis(),
@@ -105,11 +112,39 @@ public final class TesseraCommand implements CommandExecutor {
         return switch (args[1].toLowerCase(Locale.ROOT)) {
             case "face"   -> handleDebugFace(sender, args);
             case "center" -> handleDebugCenter(sender, args);
+            case "grid"   -> handleDebugGrid(sender, args);
             default -> {
                 sender.sendMessage("§cUnknown debug target: " + args[1]);
                 yield true;
             }
         };
+    }
+
+    private boolean handleDebugGrid(CommandSender sender, String[] args) {
+        // /tessera debug grid [material] - spawn a BlockDisplay lattice
+        // at the player's target block to verify geometry without
+        // needing any baked skins.
+        if (!(sender instanceof Player p)) {
+            sender.sendMessage("§cdebug grid must be run by a player.");
+            return true;
+        }
+        Material mat = Material.DIAMOND_ORE;
+        if (args.length >= 3) {
+            Material m = Material.matchMaterial(args[2]);
+            if (m == null || !m.isBlock()) {
+                sender.sendMessage("§cNot a block material: " + args[2]);
+                return true;
+            }
+            mat = m;
+        }
+        Location target = p.getTargetBlockExact(8) != null
+                ? p.getTargetBlockExact(8).getLocation()
+                : p.getLocation();
+        var spawned = DebugGridSpawner.spawn(plugin, target, plugin.tesseraConfig().chunkGridSize(), mat);
+        sender.sendMessage("§aSpawned " + spawned.size() + " " + mat
+                + " cells at " + formatLoc(target) + " (auto-removed in 30s).");
+        sender.sendMessage("§7Use §f/tessera debug center <x> <y> <z>§7 if cubes don't meet flush.");
+        return true;
     }
 
     private boolean handleDebugFace(CommandSender sender, String[] args) {

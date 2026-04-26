@@ -139,7 +139,8 @@ public final class HeadsRegistry {
     public String version() { return version; }
 
     public boolean has(BlockKey key) {
-        return blocks.containsKey(key);
+        Map<ChunkCoord, Entry> per = blocks.get(key);
+        return per != null && !per.isEmpty();
     }
 
     public Optional<Entry> get(BlockKey key, ChunkCoord coord) {
