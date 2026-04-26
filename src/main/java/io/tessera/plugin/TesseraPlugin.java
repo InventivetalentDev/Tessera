@@ -4,6 +4,7 @@ import io.tessera.assemble.FakeBlockFactory;
 import io.tessera.assemble.HeadItemFactory;
 import io.tessera.assets.fetch.McAssetClient;
 import io.tessera.skin.HeadsRegistry;
+import io.tessera.skin.SkinDiskCache;
 import io.tessera.skin.SkinUploader;
 import io.tessera.skin.bake.BlockBaker;
 import org.bukkit.Bukkit;
@@ -23,6 +24,7 @@ public final class TesseraPlugin extends JavaPlugin {
     private HeadItemFactory itemFactory;
     private FakeBlockFactory blockFactory;
     private SkinUploader uploader;
+    private SkinDiskCache diskCache;
     private BlockBaker baker;
     private java.util.concurrent.ExecutorService bakerExecutor;
 
@@ -45,9 +47,11 @@ public final class TesseraPlugin extends JavaPlugin {
         Path cacheRoot = getDataFolder().toPath().resolve("cache");
         Path pngDir = cacheRoot.resolve("heads");
         Path assetsDir = cacheRoot.resolve("assets");
+        Path skinCacheFile = cacheRoot.resolve("skins.json");
         McAssetClient assets = new McAssetClient(assetsDir, getLogger());
+        this.diskCache = new SkinDiskCache(getLogger(), skinCacheFile);
         this.bakerExecutor = Executors.newFixedThreadPool(2, named("Tessera-Baker"));
-        this.baker = new BlockBaker(getLogger(), assets, mcVersion, registry, uploader, pngDir, bakerExecutor);
+        this.baker = new BlockBaker(getLogger(), assets, mcVersion, registry, uploader, diskCache, pngDir, bakerExecutor);
 
         getServer().getPluginManager().registerEvents(
                 new BlockBreakListener(this, blockFactory, registry, baker), this);

@@ -10,6 +10,7 @@ import io.tessera.skin.HeadSkin;
 import io.tessera.skin.HeadSkinPacker;
 import io.tessera.skin.HeadsRegistry;
 import io.tessera.skin.SkinAssembler;
+import io.tessera.skin.SkinDiskCache;
 import io.tessera.skin.SkinState;
 import io.tessera.skin.SkinUploader;
 import io.tessera.skin.TileRotations;
@@ -58,6 +59,7 @@ public final class BlockBaker {
     private final SkinAssembler assembler;
     private final SkinUploader uploader;
     private final HeadsRegistry registry;
+    private final SkinDiskCache diskCache;
     private final Path pngDir;
     private final Executor executor;
 
@@ -68,6 +70,7 @@ public final class BlockBaker {
                       String mcVersion,
                       HeadsRegistry registry,
                       SkinUploader uploader,
+                      SkinDiskCache diskCache,
                       Path pngDir,
                       Executor executor) {
         this.logger = logger;
@@ -77,6 +80,7 @@ public final class BlockBaker {
         this.assembler = new SkinAssembler();
         this.uploader = uploader;
         this.registry = registry;
+        this.diskCache = diskCache;
         this.pngDir = pngDir;
         this.executor = executor;
     }
@@ -125,24 +129,55 @@ public final class BlockBaker {
                 + packed.uniqueHeads().size() + " unique heads"
                 + (bypassCache ? " (cache bypassed)" : ""));
 
-        // Re-use any previously-uploaded skins by content hash unless the
-        // tilerot bypass flag was set (in which case the painted PNG bytes
-        // would actually differ even though the pre-paint hash matches —
-        // we have to re-upload to get the new rotation onto MineSkin).
+        // Two-tier cache lookup:
+        // 1. In-memory registry (cheap; survives within a session) — keyed
+        //    by pre-paint contentHash. Skipped when bypassCache is set
+        //    (i.e. just after a TileRotations change) because the post-paint
+        //    bytes will differ even though the pre-paint hash hasn't.
+        // 2. Persistent SkinDiskCache — keyed by the SHA-256 of the actual
+        //    painted PNG bytes, so any combination of source/tile rotations
+        //    that produces the same final image hits cache regardless of how
+        //    we got there. Survives plugin restarts.
+        // Heads that miss both tiers get assembled + queued for upload.
         List<HeadSkin> needUpload = new java.util.ArrayList<>();
+        java.util.Map<HeadSkin, String> pngHashByHead = new java.util.HashMap<>();
         for (HeadSkin head : packed.uniqueHeads()) {
-            HeadsRegistry.Entry cached = bypassCache ? null : registry.findByHash(head.contentHash());
-            if (cached != null) {
-                head.texture(cached.textureValue(), cached.textureSignature(), cached.mineskinUuid());
+            HeadsRegistry.Entry registryHit = bypassCache ? null : registry.findByHash(head.contentHash());
+            if (registryHit != null) {
+                head.texture(registryHit.textureValue(), registryHit.textureSignature(), registryHit.mineskinUuid());
                 head.state(SkinState.COMPLETED);
                 continue;
             }
-            assembler.assemble(head, pngDir);
+            // Have to assemble before we can hash post-paint bytes — but the
+            // assemble step is cheap (pure local PNG paint, no I/O of size).
+            java.nio.file.Path pngPath = assembler.assemble(head, pngDir);
+            byte[] pngBytes = java.nio.file.Files.readAllBytes(pngPath);
+            String pngHash = SkinDiskCache.hashPng(pngBytes);
+            pngHashByHead.put(head, pngHash);
+            SkinDiskCache.Entry diskHit = diskCache == null ? null : diskCache.find(pngHash);
+            if (diskHit != null) {
+                head.texture(diskHit.value(), diskHit.signature(), diskHit.uuid());
+                head.state(SkinState.COMPLETED);
+                continue;
+            }
             needUpload.add(head);
         }
 
         if (!needUpload.isEmpty()) {
-            SkinUploader.Run run = uploader.upload(needUpload, pngDir.getParent(), h -> {});
+            logger.info("[runtime-bake] " + key + " uploading " + needUpload.size()
+                    + " new skins ("
+                    + (packed.uniqueHeads().size() - needUpload.size())
+                    + " hit cache)");
+            SkinUploader.Run run = uploader.upload(needUpload, pngDir.getParent(), h -> {
+                // As each upload completes, persist the (png-hash → texture)
+                // entry so a kill mid-bake still preserves work done so far.
+                if (diskCache != null && h.state() == SkinState.COMPLETED) {
+                    String pngHash = pngHashByHead.get(h);
+                    if (pngHash != null) {
+                        diskCache.put(pngHash, h.textureValue(), h.textureSignature(), h.mineskinUuid());
+                    }
+                }
+            });
             run.future().get(5, TimeUnit.MINUTES);
         }
 
