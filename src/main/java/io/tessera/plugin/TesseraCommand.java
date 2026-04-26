@@ -48,6 +48,10 @@ import java.util.Locale;
  *   /tessera debug sourceflip &lt;facedir&gt; &lt;none|h|v|hv&gt;  whole block-face source mirror
  *   /tessera debug sourceflip reset [facedir]
  *   /tessera debug rebake [material]    invalidate registry so next test re-bakes
+ *   /tessera debug status               print all current rotation/flip overrides
+ *   /tessera debug permutations &lt;head|tile|source|all&gt; &lt;facedir&gt; [material]
+ *                                       sweep through configurations; spawns a static
+ *                                       FakeBlock per combo with vanilla compare below
  * </pre>
  *
  * <p>The three rotation knobs operate at different scales:
@@ -189,19 +193,91 @@ public final class TesseraCommand implements CommandExecutor {
             return true;
         }
         return switch (args[1].toLowerCase(Locale.ROOT)) {
-            case "face"       -> handleDebugFace(sender, args);
-            case "center"     -> handleDebugCenter(sender, args);
-            case "grid"       -> handleDebugGrid(sender, args);
-            case "tilerot"    -> handleDebugTilerot(sender, args);
-            case "headrot"    -> handleDebugHeadrot(sender, args);
-            case "sourcerot"  -> handleDebugSourcerot(sender, args);
-            case "sourceflip" -> handleDebugSourceflip(sender, args);
-            case "rebake"     -> handleDebugRebake(sender, args);
+            case "face"         -> handleDebugFace(sender, args);
+            case "center"       -> handleDebugCenter(sender, args);
+            case "grid"         -> handleDebugGrid(sender, args);
+            case "tilerot"      -> handleDebugTilerot(sender, args);
+            case "headrot"      -> handleDebugHeadrot(sender, args);
+            case "sourcerot"    -> handleDebugSourcerot(sender, args);
+            case "sourceflip"   -> handleDebugSourceflip(sender, args);
+            case "rebake"       -> handleDebugRebake(sender, args);
+            case "status"       -> handleDebugStatus(sender, args);
+            case "permutations" -> handleDebugPermutations(sender, args);
             default -> {
                 sender.sendMessage("§cUnknown debug target: " + args[1]);
                 yield true;
             }
         };
+    }
+
+    private boolean handleDebugStatus(CommandSender sender, String[] args) {
+        sender.sendMessage("§6Tessera debug status");
+        sender.sendMessage("§7BlockGeometry.CUBE_CENTER_PRE = §f" + formatVec(BlockGeometry.cubeCenterPre()));
+        sender.sendMessage("§7FaceRotations (Euler X/Y/Z deg per HeadFace):");
+        for (HeadFace f : HeadFace.values()) {
+            FaceRotations.Euler e = FaceRotations.eulerOf(f);
+            sender.sendMessage("§7  " + f + ": §f" + e.xDeg() + " / " + e.yDeg() + " / " + e.zDeg() + " §8(default "
+                    + euler(FaceRotations.defaultEulerOf(f)) + ")");
+        }
+        sender.sendMessage("§7HeadRotations (deg per HeadFace, runtime spin):");
+        for (HeadFace f : HeadFace.values()) {
+            int v = HeadRotations.of(f);
+            int d = HeadRotations.defaultOf(f);
+            sender.sendMessage("§7  " + f + ": §f" + v + "° §8(default " + d + "°)");
+        }
+        sender.sendMessage("§7TileRotations (deg per HeadFace, bake-time):");
+        for (HeadFace f : HeadFace.values()) {
+            int v = TileRotations.of(f);
+            int d = TileRotations.defaultOf(f);
+            sender.sendMessage("§7  " + f + ": §f" + v + "° §8(default " + d + "°)");
+        }
+        sender.sendMessage("§7SourceRotations (deg per FaceDir, bake-time):");
+        for (FaceDir d : FaceDir.values()) {
+            int v = SourceRotations.of(d);
+            int def = SourceRotations.defaultOf(d);
+            sender.sendMessage("§7  " + d + ": §f" + v + "° §8(default " + def + "°)");
+        }
+        sender.sendMessage("§7SourceFlips (per FaceDir, bake-time):");
+        for (FaceDir d : FaceDir.values()) {
+            SourceFlips.Flip v = SourceFlips.of(d);
+            SourceFlips.Flip def = SourceFlips.defaultOf(d);
+            sender.sendMessage("§7  " + d + ": §f" + v + " §8(default " + def + ")");
+        }
+        return true;
+    }
+
+    private boolean handleDebugPermutations(CommandSender sender, String[] args) {
+        if (!(sender instanceof Player p)) {
+            sender.sendMessage("§cpermutations must be run by a player.");
+            return true;
+        }
+        if (args.length < 4) {
+            sender.sendMessage("§c/tessera debug permutations <head|tile|source|all> <facedir> [material]");
+            sender.sendMessage("§7  head=4 instant; tile=4 rebakes; source=16 rebakes; all=64 rebakes");
+            return true;
+        }
+        PermutationSweeper.Kind kind;
+        try {
+            kind = PermutationSweeper.Kind.valueOf(args[2].toUpperCase(Locale.ROOT));
+        } catch (IllegalArgumentException ex) {
+            sender.sendMessage("§cUnknown kind: " + args[2] + " (head|tile|source|all)");
+            return true;
+        }
+        FaceDir face = parseFaceDir(args[3]);
+        if (face == null) { sender.sendMessage("§cUnknown facedir: " + args[3]); return true; }
+        Material mat = args.length > 4 ? Material.matchMaterial(args[4]) : Material.STONE;
+        if (mat == null || !mat.isBlock()) {
+            sender.sendMessage("§cNot a block material: " + args[4]); return true;
+        }
+        BlockKey key = BlockKey.of(mat.getKey().getNamespace() + ":" + mat.getKey().getKey());
+        Location anchor = pickTargetLocation(p);
+        new PermutationSweeper(plugin, factory, registry, baker)
+                .sweep(p, sender, key, mat, face, anchor, kind);
+        return true;
+    }
+
+    private static String euler(FaceRotations.Euler e) {
+        return e.xDeg() + "/" + e.yDeg() + "/" + e.zDeg();
     }
 
     private boolean handleDebugSourceflip(CommandSender sender, String[] args) {
