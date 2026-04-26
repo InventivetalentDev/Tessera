@@ -175,7 +175,15 @@ public final class PermutationSweeper {
         // captured runtime spin matches the labeled config.
         HeadRotations.set(headFace, c.headRot);
 
-        Location pos = anchor.clone().add(lineDir.x * slot * 2.0,
+        // Strip the player's yaw/pitch from the anchor before computing
+        // line positions: BlockDisplay and TextDisplay both rotate with
+        // entity yaw/pitch, which would tilt the comparison cubes and
+        // labels at the same angle the player was looking when they ran
+        // the command. FakeBlock dodges this because FakeBlockFactory
+        // reconstructs a fresh Location internally; the other entities
+        // need it explicit.
+        Location flat = new Location(world, anchor.getX(), anchor.getY(), anchor.getZ());
+        Location pos = flat.clone().add(lineDir.x * slot * 2.0,
                 lineDir.y * slot * 2.0, lineDir.z * slot * 2.0);
         FakeBlock fb;
         try {
