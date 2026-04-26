@@ -1,2 +1,3 @@
 - [ ] should generate heads for blocks not in heads.json at runtime
 - [ ] add command tab-complete
+- [ ] try using BlockBreakProgressUpdateEvent to update the break animation with that, instead of animating after the block is already broken
