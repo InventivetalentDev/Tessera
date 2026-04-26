@@ -4,6 +4,7 @@ import io.tessera.assemble.BlockGeometry;
 import io.tessera.assemble.DebugGridSpawner;
 import io.tessera.assemble.FaceRotations;
 import io.tessera.assemble.FakeBlockFactory;
+import io.tessera.assemble.HeadRotations;
 import io.tessera.core.BlockKey;
 import io.tessera.core.FakeBlock;
 import io.tessera.core.HeadFace;
@@ -11,6 +12,8 @@ import io.tessera.effect.EffectContext;
 import io.tessera.effect.builtin.DirectionalShrinkEffect;
 import io.tessera.skin.HeadsRegistry;
 import io.tessera.skin.TileRotations;
+import io.tessera.skin.bake.BlockBaker;
+import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.command.Command;
@@ -25,13 +28,25 @@ import java.util.Locale;
  * v1 command surface for testing the splitting/effect pipeline. Subcommands:
  *
  * <pre>
- *   /tessera test [material]            spawn a FakeBlock at the player's look location
+ *   /tessera test [material]            bake (if needed) + spawn FakeBlock at look location
  *   /tessera reload                     reload config.yml
- *   /tessera debug face <face> <x> <y> <z>   override a FaceRotations entry
- *   /tessera debug face reset [face]    restore default(s)
- *   /tessera debug center <x> <y> <z>   override BlockGeometry.CUBE_CENTER_PRE
- *   /tessera debug center reset         restore default
+ *
+ *   /tessera debug grid [material]      preview cube lattice with default Steve skin
+ *   /tessera debug face   &lt;face&gt; &lt;x&gt; &lt;y&gt; &lt;z&gt;    override a FaceRotations Euler triple
+ *   /tessera debug face   reset [face]
+ *   /tessera debug center &lt;x&gt; &lt;y&gt; &lt;z&gt;            override BlockGeometry.CUBE_CENTER_PRE
+ *   /tessera debug center reset
+ *   /tessera debug headrot &lt;face&gt; &lt;0|90|180|270&gt; runtime spin around outward axis
+ *   /tessera debug headrot reset [face]
+ *   /tessera debug tilerot &lt;face&gt; &lt;0|90|180|270&gt; bake-time tile rotation
+ *   /tessera debug tilerot reset [face]
  * </pre>
+ *
+ * <p>headrot vs tilerot: both visually rotate the texture on the visible
+ * face. headrot does it at runtime by spinning the cube — instant, no
+ * re-bake. tilerot rotates the source tile before paint — requires
+ * re-bake but has zero runtime cost. Use headrot for empirical tuning;
+ * fold the working values into TileRotations.DEFAULTS once stable.
  *
  * v2 will add /tessera physics presets.
  */
@@ -40,11 +55,14 @@ public final class TesseraCommand implements CommandExecutor {
     private final TesseraPlugin plugin;
     private final FakeBlockFactory factory;
     private final HeadsRegistry registry;
+    private final BlockBaker baker;
 
-    public TesseraCommand(TesseraPlugin plugin, FakeBlockFactory factory, HeadsRegistry registry) {
+    public TesseraCommand(TesseraPlugin plugin, FakeBlockFactory factory,
+                          HeadsRegistry registry, BlockBaker baker) {
         this.plugin = plugin;
         this.factory = factory;
         this.registry = registry;
+        this.baker = baker;
     }
 
     @Override
@@ -75,21 +93,43 @@ public final class TesseraCommand implements CommandExecutor {
             return true;
         }
         BlockKey key = BlockKey.of(mat.getKey().getNamespace() + ":" + mat.getKey().getKey());
-        if (!registry.has(key)) {
-            sender.sendMessage("§cNot in heads.json: " + key + ". Run ./gradlew tesseraBake to add it,");
-            sender.sendMessage("§7or use §f/tessera debug grid§7 to verify geometry without baked skins.");
-            return true;
-        }
         // Spawn in the air block adjacent to whatever the player is looking
         // at (the face the ray hit), not inside the target block - otherwise
         // the chunks render inside an opaque cube and you see nothing
         // unless the target is glass or leaves.
         Location target = pickTargetLocation(p);
+
+        if (!registry.has(key)) {
+            if (plugin.tesseraConfig().mineskinApiKey().isBlank()) {
+                sender.sendMessage("§c" + key + " not baked and no MineSkin API key configured.");
+                sender.sendMessage("§7Set §fmineskinApiKey§7 in config.yml, /tessera reload, then retry.");
+                return true;
+            }
+            sender.sendMessage("§e" + key + " not yet baked - uploading skins to MineSkin (a few seconds)...");
+            baker.bake(key).whenComplete((ok, ex) -> Bukkit.getScheduler().runTask(plugin, () -> {
+                if (ex != null) {
+                    sender.sendMessage("§cBake threw: " + ex.getMessage());
+                    return;
+                }
+                if (ok == null || !ok) {
+                    sender.sendMessage("§cBake failed: unsupported block, or upload error (see console).");
+                    return;
+                }
+                sender.sendMessage("§aBake complete; spawning.");
+                spawnTestEffect(sender, p, key, target);
+            }));
+            return true;
+        }
+
+        spawnTestEffect(sender, p, key, target);
+        return true;
+    }
+
+    private void spawnTestEffect(CommandSender sender, Player p, BlockKey key, Location target) {
         FakeBlock fb = factory.create(target, key);
         if (fb.chunks().isEmpty()) {
             sender.sendMessage("§cFakeBlock has 0 chunks - heads.json entry for " + key + " is empty.");
-            sender.sendMessage("§7Re-run ./gradlew tesseraBake with MINESKIN_API_KEY set.");
-            return true;
+            return;
         }
         EffectContext ctx = new EffectContext(
                 p.getEyeLocation().getDirection(),
@@ -98,7 +138,6 @@ public final class TesseraCommand implements CommandExecutor {
                 plugin);
         new DirectionalShrinkEffect().apply(fb, ctx);
         sender.sendMessage("§aSpawned FakeBlock for " + key + " at " + formatLoc(target));
-        return true;
     }
 
     private boolean handleReload(CommandSender sender) {
@@ -117,11 +156,52 @@ public final class TesseraCommand implements CommandExecutor {
             case "center"  -> handleDebugCenter(sender, args);
             case "grid"    -> handleDebugGrid(sender, args);
             case "tilerot" -> handleDebugTilerot(sender, args);
+            case "headrot" -> handleDebugHeadrot(sender, args);
             default -> {
                 sender.sendMessage("§cUnknown debug target: " + args[1]);
                 yield true;
             }
         };
+    }
+
+    private boolean handleDebugHeadrot(CommandSender sender, String[] args) {
+        // /tessera debug headrot <face> <0|90|180|270>
+        // /tessera debug headrot reset [face]
+        // Runtime cube spin around the visible face's outward axis - no
+        // re-bake needed. Use this to figure out whether textures are off
+        // because of cube rotation (in which case headrot fixes it) vs.
+        // texture orientation (in which case tilerot is the right fix).
+        if (args.length >= 3 && args[2].equalsIgnoreCase("reset")) {
+            if (args.length == 3) {
+                HeadRotations.resetAll();
+                sender.sendMessage("§aReset all head rotations.");
+            } else {
+                HeadFace f = parseFace(args[3]);
+                if (f == null) { sender.sendMessage("§cUnknown face: " + args[3]); return true; }
+                HeadRotations.reset(f);
+                sender.sendMessage("§aReset head rotation for " + f + " to "
+                        + HeadRotations.defaultOf(f) + "°.");
+            }
+            sender.sendMessage("§7Re-spawn the FakeBlock to see the change (no re-bake needed).");
+            return true;
+        }
+        if (args.length < 4) {
+            sender.sendMessage("§c/tessera debug headrot <face> <0|90|180|270> | reset [face]");
+            return true;
+        }
+        HeadFace face = parseFace(args[2]);
+        if (face == null) { sender.sendMessage("§cUnknown face: " + args[2]); return true; }
+        try {
+            int deg = Integer.parseInt(args[3]);
+            HeadRotations.set(face, deg);
+            sender.sendMessage("§aSet head rotation for " + face + " = " + HeadRotations.of(face) + "°.");
+            sender.sendMessage("§7Re-spawn the FakeBlock (e.g. /tessera test " + face.name().toLowerCase() + ") to see it.");
+        } catch (NumberFormatException nfe) {
+            sender.sendMessage("§cExpected an integer multiple of 90.");
+        } catch (IllegalArgumentException iae) {
+            sender.sendMessage("§c" + iae.getMessage());
+        }
+        return true;
     }
 
     private boolean handleDebugTilerot(CommandSender sender, String[] args) {

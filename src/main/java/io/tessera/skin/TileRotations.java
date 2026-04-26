@@ -36,6 +36,26 @@ public final class TileRotations {
     private static final Map<HeadFace, Integer> DEFAULTS = new EnumMap<>(HeadFace.class);
     private static final EnumMap<HeadFace, Integer> CURRENT = new EnumMap<>(HeadFace.class);
 
+    /**
+     * One-shot flag: set to true whenever {@link #set} or {@link #reset}
+     * changes a value, so the next runtime bake bypasses
+     * {@link io.tessera.skin.HeadsRegistry#findByHash} and re-uploads
+     * with the new in-plane rotation. Without this, the existing cache
+     * entry would mask the change (the dedup hash is computed on the
+     * pre-rotation tile bytes, which haven't actually changed — only the
+     * SkinAssembler's paint output has).
+     */
+    private static final java.util.concurrent.atomic.AtomicBoolean STALE =
+            new java.util.concurrent.atomic.AtomicBoolean(false);
+
+    public static boolean consumeStale() {
+        return STALE.getAndSet(false);
+    }
+
+    public static boolean isStale() {
+        return STALE.get();
+    }
+
     static {
         // Initial guess: zero across the board. Tune per face as you find
         // tiles rendering rotated. Update these defaults once values have
@@ -63,15 +83,19 @@ public final class TileRotations {
         if (normalized % 90 != 0) {
             throw new IllegalArgumentException("TileRotation must be a multiple of 90, got " + degrees);
         }
-        CURRENT.put(face, normalized);
+        Integer prev = CURRENT.put(face, normalized);
+        if (prev == null || prev != normalized) STALE.set(true);
     }
 
     public static void reset(HeadFace face) {
-        CURRENT.put(face, DEFAULTS.get(face));
+        Integer prev = CURRENT.put(face, DEFAULTS.get(face));
+        Integer curr = CURRENT.get(face);
+        if (!java.util.Objects.equals(prev, curr)) STALE.set(true);
     }
 
     public static void resetAll() {
         CURRENT.clear();
         CURRENT.putAll(DEFAULTS);
+        STALE.set(true);
     }
 }

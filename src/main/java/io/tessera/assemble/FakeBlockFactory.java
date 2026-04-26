@@ -81,7 +81,7 @@ public final class FakeBlockFactory {
 
             FaceDir primary = pickPrimaryFace(coord, gridN);
             HeadFace headFace = HeadSkinPacker.faceDirToHeadFace(primary);
-            Quaternionf faceRot = FaceRotations.of(headFace);
+            Quaternionf faceRot = HeadRotations.compose(headFace, primary, FaceRotations.of(headFace));
 
             Vector3f translation = geom.translationFor(coord, faceRot);
             float scale = geom.chunkScale();

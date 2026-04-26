@@ -75,8 +75,9 @@ public final class DebugGridSpawner {
                     if (!isVisible(x, y, z, gridN)) continue;
 
                     ChunkCoord c = new ChunkCoord(x, y, z);
-                    HeadFace headFace = mapFaceDir(primaryFaceFor(c, gridN));
-                    Quaternionf faceRot = FaceRotations.of(headFace);
+                    FaceDir primary = primaryFaceFor(c, gridN);
+                    HeadFace headFace = mapFaceDir(primary);
+                    Quaternionf faceRot = HeadRotations.compose(headFace, primary, FaceRotations.of(headFace));
 
                     Vector3f translation = geom.translationFor(c, faceRot);
                     float scale = geom.chunkScale();

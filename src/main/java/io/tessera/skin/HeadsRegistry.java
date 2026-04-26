@@ -56,13 +56,21 @@ public final class HeadsRegistry {
     private final int gridN;
     private final String version;
     private final Map<BlockKey, Map<ChunkCoord, Entry>> blocks;
+    private final Map<String, Entry> hashIndex;
 
     private HeadsRegistry(Logger logger, int gridN, String version,
                           Map<BlockKey, Map<ChunkCoord, Entry>> blocks) {
         this.logger = logger;
         this.gridN = gridN;
         this.version = version;
-        this.blocks = blocks;
+        // Make blocks mutable so RuntimeBakeService can register on demand;
+        // wrapped in synchronizedMap on read paths since BlockBreakListener
+        // (main thread) and BlockBaker (async pool) both access it.
+        this.blocks = new java.util.concurrent.ConcurrentHashMap<>(blocks);
+        this.hashIndex = new java.util.concurrent.ConcurrentHashMap<>();
+        for (Map<ChunkCoord, Entry> per : blocks.values()) {
+            for (Entry e : per.values()) hashIndex.putIfAbsent(e.skinHash(), e);
+        }
     }
 
     public static HeadsRegistry empty(Logger logger, int gridN, String version) {
@@ -151,6 +159,21 @@ public final class HeadsRegistry {
     public Map<ChunkCoord, Entry> chunksFor(BlockKey key) {
         Map<ChunkCoord, Entry> per = blocks.get(key);
         return per == null ? Collections.emptyMap() : per;
+    }
+
+    /** Look up a previously-registered skin by its content hash, or null. */
+    public Entry findByHash(String hash) {
+        return hashIndex.get(hash);
+    }
+
+    /**
+     * Register chunks for {@code key} discovered at runtime by
+     * {@link io.tessera.skin.bake.BlockBaker}. Replaces any existing
+     * entry for the same key.
+     */
+    public void register(BlockKey key, Map<ChunkCoord, Entry> chunks) {
+        blocks.put(key, Map.copyOf(chunks));
+        for (Entry e : chunks.values()) hashIndex.putIfAbsent(e.skinHash(), e);
     }
 
     /**
