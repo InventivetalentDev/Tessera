@@ -6,6 +6,7 @@ import io.tessera.assemble.FaceRotations;
 import io.tessera.assemble.FakeBlockFactory;
 import io.tessera.assemble.HeadRotations;
 import io.tessera.core.BlockKey;
+import io.tessera.core.FaceDir;
 import io.tessera.core.FakeBlock;
 import io.tessera.core.HeadFace;
 import io.tessera.effect.EffectContext;
@@ -13,6 +14,7 @@ import io.tessera.effect.builtin.DirectionalShrinkEffect;
 import io.tessera.skin.HeadsRegistry;
 import io.tessera.skin.TileRotations;
 import io.tessera.skin.bake.BlockBaker;
+import io.tessera.split.SourceRotations;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.Material;
@@ -38,17 +40,27 @@ import java.util.Locale;
  *   /tessera debug center reset
  *   /tessera debug headrot &lt;face&gt; &lt;0|90|180|270&gt; runtime spin around outward axis
  *   /tessera debug headrot reset [face]
- *   /tessera debug tilerot &lt;face&gt; &lt;0|90|180|270&gt; bake-time tile rotation (auto-invalidates registry)
- *   /tessera debug tilerot reset [face]
+ *   /tessera debug tilerot   &lt;headface&gt; &lt;0|90|180|270&gt; per-chunk tile in-plane rotation
+ *   /tessera debug tilerot   reset [headface]
+ *   /tessera debug sourcerot &lt;facedir&gt; &lt;0|90|180|270&gt; whole block-face source rotation
+ *   /tessera debug sourcerot reset [facedir]
  *   /tessera debug rebake [material]    invalidate registry so next test re-bakes
  * </pre>
  *
- * <p>headrot vs tilerot: both visually rotate the texture on the visible
- * face. headrot does it at runtime by spinning the cube — instant, no
- * re-bake. tilerot rotates the source tile before paint — auto-invalidates
- * the registry so the next test re-uploads PNGs to MineSkin. Use headrot
- * for fast empirical tuning; fold the working values into
- * TileRotations.DEFAULTS once stable to drop the runtime quaternion mul.
+ * <p>The three rotation knobs operate at different scales:
+ * <ul>
+ *   <li><b>headrot</b> — runtime cube spin around outward axis. Per-HeadFace,
+ *       instant, no re-bake.</li>
+ *   <li><b>tilerot</b> — rotate each chunk's tile in-plane within its head
+ *       slot. Per-HeadFace, bake-time.</li>
+ *   <li><b>sourcerot</b> — rotate the whole block-face source texture before
+ *       splitting. Per-FaceDir (UP/DOWN/etc.), bake-time. Use this when an
+ *       entire face looks rotated as a unit (vs. tilerot for individual
+ *       tiles).</li>
+ * </ul>
+ * Both bake-time knobs auto-invalidate the registry so the next test
+ * re-uploads. Once you find values that work, fold them into the
+ * respective DEFAULTS map.
  *
  * v2 will add /tessera physics presets.
  */
@@ -174,17 +186,67 @@ public final class TesseraCommand implements CommandExecutor {
             return true;
         }
         return switch (args[1].toLowerCase(Locale.ROOT)) {
-            case "face"    -> handleDebugFace(sender, args);
-            case "center"  -> handleDebugCenter(sender, args);
-            case "grid"    -> handleDebugGrid(sender, args);
-            case "tilerot" -> handleDebugTilerot(sender, args);
-            case "headrot" -> handleDebugHeadrot(sender, args);
-            case "rebake"  -> handleDebugRebake(sender, args);
+            case "face"      -> handleDebugFace(sender, args);
+            case "center"    -> handleDebugCenter(sender, args);
+            case "grid"      -> handleDebugGrid(sender, args);
+            case "tilerot"   -> handleDebugTilerot(sender, args);
+            case "headrot"   -> handleDebugHeadrot(sender, args);
+            case "sourcerot" -> handleDebugSourcerot(sender, args);
+            case "rebake"    -> handleDebugRebake(sender, args);
             default -> {
                 sender.sendMessage("§cUnknown debug target: " + args[1]);
                 yield true;
             }
         };
+    }
+
+    private boolean handleDebugSourcerot(CommandSender sender, String[] args) {
+        // /tessera debug sourcerot <facedir> <0|90|180|270>
+        // /tessera debug sourcerot reset [facedir]
+        // Rotates the source block-face texture before splitting. Use this
+        // when an entire block face appears rotated/flipped (vs. tilerot
+        // which rotates each chunk's tile in-plane). Bake-time, so the
+        // registry is auto-invalidated and the next test re-bakes.
+        if (args.length >= 3 && args[2].equalsIgnoreCase("reset")) {
+            if (args.length == 3) {
+                SourceRotations.resetAll();
+                sender.sendMessage("§aReset all source rotations.");
+            } else {
+                FaceDir d = parseFaceDir(args[3]);
+                if (d == null) { sender.sendMessage("§cUnknown facedir: " + args[3]); return true; }
+                SourceRotations.reset(d);
+                sender.sendMessage("§aReset source rotation for " + d + " to "
+                        + SourceRotations.defaultOf(d) + "°.");
+            }
+            int cleared = registry.invalidateAll();
+            sender.sendMessage("§7Cleared " + cleared + " registry entr"
+                    + (cleared == 1 ? "y" : "ies") + "; next /tessera test will re-bake.");
+            return true;
+        }
+        if (args.length < 4) {
+            sender.sendMessage("§c/tessera debug sourcerot <up|down|north|south|east|west> <0|90|180|270> | reset [facedir]");
+            return true;
+        }
+        FaceDir d = parseFaceDir(args[2]);
+        if (d == null) { sender.sendMessage("§cUnknown facedir: " + args[2]); return true; }
+        try {
+            int deg = Integer.parseInt(args[3]);
+            SourceRotations.set(d, deg);
+            int cleared = registry.invalidateAll();
+            sender.sendMessage("§aSet source rotation for " + d + " = " + SourceRotations.of(d) + "°.");
+            sender.sendMessage("§7Cleared " + cleared + " registry entr"
+                    + (cleared == 1 ? "y" : "ies") + "; next /tessera test will re-bake (a few seconds).");
+        } catch (NumberFormatException nfe) {
+            sender.sendMessage("§cExpected an integer multiple of 90.");
+        } catch (IllegalArgumentException iae) {
+            sender.sendMessage("§c" + iae.getMessage());
+        }
+        return true;
+    }
+
+    private static FaceDir parseFaceDir(String s) {
+        try { return FaceDir.valueOf(s.toUpperCase(Locale.ROOT)); }
+        catch (IllegalArgumentException e) { return null; }
     }
 
     private boolean handleDebugHeadrot(CommandSender sender, String[] args) {

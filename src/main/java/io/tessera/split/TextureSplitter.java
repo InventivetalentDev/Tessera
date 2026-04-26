@@ -46,9 +46,13 @@ public final class TextureSplitter {
     public List<ChunkSpec> split(BlockModel model, int gridN) {
         if (gridN < 1) throw new IllegalArgumentException("gridN must be ≥ 1");
         // Vanilla textures are 16x16. Pre-slice each face into a gridN x gridN tile array.
+        // Each face's source is optionally pre-rotated by SourceRotations.of(faceDir),
+        // which is the user-tunable "rotate the whole block face" knob — distinct
+        // from per-tile in-plane rotation (TileRotations).
         EnumMap<FaceDir, BufferedImage[][]> tilesByFace = new EnumMap<>(FaceDir.class);
         for (FaceDir d : FaceDir.values()) {
-            tilesByFace.put(d, sliceFace(model.face(d), gridN));
+            BufferedImage rotated = rotate90Multiples(model.face(d), SourceRotations.of(d));
+            tilesByFace.put(d, sliceFace(rotated, gridN));
         }
 
         List<ChunkSpec> out = new ArrayList<>();
@@ -87,6 +91,35 @@ public final class TextureSplitter {
             }
         }
         return tiles;
+    }
+
+    /**
+     * 90° multiple rotation of a square source texture. Mirrors the same
+     * function in SkinAssembler — kept private here so TextureSplitter has
+     * no dep on the skin package.
+     */
+    private static BufferedImage rotate90Multiples(BufferedImage src, int degrees) {
+        int turns = (((degrees % 360) + 360) % 360) / 90;
+        if (turns == 0) return src;
+        int w = src.getWidth();
+        int h = src.getHeight();
+        int outW = (turns % 2 == 1) ? h : w;
+        int outH = (turns % 2 == 1) ? w : h;
+        BufferedImage out = new BufferedImage(outW, outH, BufferedImage.TYPE_INT_ARGB);
+        for (int y = 0; y < h; y++) {
+            for (int x = 0; x < w; x++) {
+                int rgb = src.getRGB(x, y);
+                int nx, ny;
+                switch (turns) {
+                    case 1 -> { nx = h - 1 - y; ny = x; }
+                    case 2 -> { nx = w - 1 - x; ny = h - 1 - y; }
+                    case 3 -> { nx = y;         ny = w - 1 - x; }
+                    default -> { nx = x; ny = y; }
+                }
+                out.setRGB(nx, ny, rgb);
+            }
+        }
+        return out;
     }
 
     private static int[] sourceTile(FaceDir d, int cx, int cy, int cz, int n) {
