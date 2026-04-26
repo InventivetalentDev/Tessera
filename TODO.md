@@ -1,0 +1,2 @@
+- [ ] should generate heads for blocks not in heads.json at runtime
+- [ ] add command tab-complete
