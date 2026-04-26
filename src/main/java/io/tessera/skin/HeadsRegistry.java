@@ -177,6 +177,29 @@ public final class HeadsRegistry {
     }
 
     /**
+     * Forget runtime registration for {@code key} so the next request
+     * re-runs the bake. Bundled heads.json entries are also cleared by
+     * this — re-launching the plugin will reload them from disk.
+     */
+    public boolean invalidate(BlockKey key) {
+        return blocks.remove(key) != null;
+    }
+
+    /**
+     * Forget every runtime-registered (and bundled) entry. Used by
+     * {@code /tessera debug tilerot} since changing tile rotation needs
+     * fresh PNGs uploaded — the dedup hash is computed pre-rotation, so
+     * existing cached entries would otherwise mask the change.
+     */
+    public int invalidateAll() {
+        int n = blocks.size();
+        blocks.clear();
+        // hashIndex stays — its only consumer is BlockBaker.findByHash,
+        // which is bypassed when TileRotations.consumeStale is true.
+        return n;
+    }
+
+    /**
      * Build a runtime {@link HeadSkin} from a registry entry. The skin has no
      * tile bitmaps (those were baked away into the MineSkin texture) and no
      * chunk bookkeeping — it exists purely to feed

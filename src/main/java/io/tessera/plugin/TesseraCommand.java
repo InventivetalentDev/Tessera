@@ -28,7 +28,7 @@ import java.util.Locale;
  * v1 command surface for testing the splitting/effect pipeline. Subcommands:
  *
  * <pre>
- *   /tessera test [material]            bake (if needed) + spawn FakeBlock at look location
+ *   /tessera test [material] [static]   bake (if needed) + spawn FakeBlock; "static" = no shrink
  *   /tessera reload                     reload config.yml
  *
  *   /tessera debug grid [material]      preview cube lattice with default Steve skin
@@ -38,15 +38,17 @@ import java.util.Locale;
  *   /tessera debug center reset
  *   /tessera debug headrot &lt;face&gt; &lt;0|90|180|270&gt; runtime spin around outward axis
  *   /tessera debug headrot reset [face]
- *   /tessera debug tilerot &lt;face&gt; &lt;0|90|180|270&gt; bake-time tile rotation
+ *   /tessera debug tilerot &lt;face&gt; &lt;0|90|180|270&gt; bake-time tile rotation (auto-invalidates registry)
  *   /tessera debug tilerot reset [face]
+ *   /tessera debug rebake [material]    invalidate registry so next test re-bakes
  * </pre>
  *
  * <p>headrot vs tilerot: both visually rotate the texture on the visible
  * face. headrot does it at runtime by spinning the cube — instant, no
- * re-bake. tilerot rotates the source tile before paint — requires
- * re-bake but has zero runtime cost. Use headrot for empirical tuning;
- * fold the working values into TileRotations.DEFAULTS once stable.
+ * re-bake. tilerot rotates the source tile before paint — auto-invalidates
+ * the registry so the next test re-uploads PNGs to MineSkin. Use headrot
+ * for fast empirical tuning; fold the working values into
+ * TileRotations.DEFAULTS once stable to drop the runtime quaternion mul.
  *
  * v2 will add /tessera physics presets.
  */
@@ -92,12 +94,16 @@ public final class TesseraCommand implements CommandExecutor {
             sender.sendMessage("§cUnknown material: " + args[1]);
             return true;
         }
+        // Optional trailing "static" flag → spawn without the shrink effect.
+        // Useful when debugging texture / rotation - the FakeBlock lingers
+        // for STATIC_LIFETIME_TICKS so you can rotate around and inspect.
+        boolean staticMode = false;
+        for (int i = 2; i < args.length; i++) {
+            if (args[i].equalsIgnoreCase("static")) staticMode = true;
+        }
         BlockKey key = BlockKey.of(mat.getKey().getNamespace() + ":" + mat.getKey().getKey());
-        // Spawn in the air block adjacent to whatever the player is looking
-        // at (the face the ray hit), not inside the target block - otherwise
-        // the chunks render inside an opaque cube and you see nothing
-        // unless the target is glass or leaves.
         Location target = pickTargetLocation(p);
+        boolean st = staticMode;
 
         if (!registry.has(key)) {
             if (plugin.tesseraConfig().mineskinApiKey().isBlank()) {
@@ -115,20 +121,31 @@ public final class TesseraCommand implements CommandExecutor {
                     sender.sendMessage("§cBake failed: unsupported block, or upload error (see console).");
                     return;
                 }
-                sender.sendMessage("§aBake complete; spawning.");
-                spawnTestEffect(sender, p, key, target);
+                sender.sendMessage("§aBake complete; spawning" + (st ? " (static)" : "") + ".");
+                spawnTest(sender, p, key, target, st);
             }));
             return true;
         }
 
-        spawnTestEffect(sender, p, key, target);
+        spawnTest(sender, p, key, target, st);
         return true;
     }
 
-    private void spawnTestEffect(CommandSender sender, Player p, BlockKey key, Location target) {
+    /**
+     * If {@code staticMode}, spawn and let it linger for ~30s without running
+     * any effect — useful when debugging texture/rotation issues without
+     * being rushed by the shrink animation.
+     */
+    private void spawnTest(CommandSender sender, Player p, BlockKey key, Location target, boolean staticMode) {
         FakeBlock fb = factory.create(target, key);
         if (fb.chunks().isEmpty()) {
             sender.sendMessage("§cFakeBlock has 0 chunks - heads.json entry for " + key + " is empty.");
+            return;
+        }
+        if (staticMode) {
+            sender.sendMessage("§aSpawned static FakeBlock for " + key + " at " + formatLoc(target)
+                    + " (auto-removed in 30s)");
+            Bukkit.getScheduler().runTaskLater(plugin, fb::despawn, 30L * 20L);
             return;
         }
         EffectContext ctx = new EffectContext(
@@ -157,6 +174,7 @@ public final class TesseraCommand implements CommandExecutor {
             case "grid"    -> handleDebugGrid(sender, args);
             case "tilerot" -> handleDebugTilerot(sender, args);
             case "headrot" -> handleDebugHeadrot(sender, args);
+            case "rebake"  -> handleDebugRebake(sender, args);
             default -> {
                 sender.sendMessage("§cUnknown debug target: " + args[1]);
                 yield true;
@@ -218,7 +236,9 @@ public final class TesseraCommand implements CommandExecutor {
                 sender.sendMessage("§aReset tile rotation for " + f + " to "
                         + TileRotations.defaultOf(f) + "°.");
             }
-            sender.sendMessage("§7Re-bake heads.json to see this take effect on real blocks.");
+            int cleared = registry.invalidateAll();
+            sender.sendMessage("§7Cleared " + cleared + " registry entr"
+                    + (cleared == 1 ? "y" : "ies") + "; next /tessera test will re-bake.");
             return true;
         }
         if (args.length < 4) {
@@ -230,13 +250,35 @@ public final class TesseraCommand implements CommandExecutor {
         try {
             int deg = Integer.parseInt(args[3]);
             TileRotations.set(face, deg);
+            // Invalidate everything so the next /tessera test or BlockBreak
+            // triggers a fresh bake. Without this the registry hit short-
+            // circuits the baker, leaving the rotation change invisible.
+            int cleared = registry.invalidateAll();
             sender.sendMessage("§aSet tile rotation for " + face + " = " + TileRotations.of(face) + "°.");
-            sender.sendMessage("§7Re-bake heads.json (./gradlew tesseraBake) — rotation is applied at paint time.");
+            sender.sendMessage("§7Cleared " + cleared + " registry entr"
+                    + (cleared == 1 ? "y" : "ies") + "; next /tessera test will re-bake (a few seconds).");
         } catch (NumberFormatException nfe) {
             sender.sendMessage("§cExpected an integer multiple of 90.");
         } catch (IllegalArgumentException iae) {
             sender.sendMessage("§c" + iae.getMessage());
         }
+        return true;
+    }
+
+    private boolean handleDebugRebake(CommandSender sender, String[] args) {
+        // /tessera debug rebake [material]   (no arg → invalidate all)
+        if (args.length < 3) {
+            int n = registry.invalidateAll();
+            sender.sendMessage("§aCleared " + n + " registry entries; next /tessera test will re-bake.");
+            return true;
+        }
+        Material mat = Material.matchMaterial(args[2]);
+        if (mat == null) { sender.sendMessage("§cUnknown material: " + args[2]); return true; }
+        BlockKey key = BlockKey.of(mat.getKey().getNamespace() + ":" + mat.getKey().getKey());
+        boolean removed = registry.invalidate(key);
+        sender.sendMessage(removed
+                ? "§aCleared " + key + " from registry; next /tessera test will re-bake."
+                : "§7" + key + " was not in the registry.");
         return true;
     }
 
