@@ -1,0 +1,51 @@
+# One block ID per line (with or without minecraft: prefix).
+# Lines starting with # are comments.
+#
+# This is the v1 fixture set used to develop and verify the bake pipeline.
+# Expand to the full ~100 common blocks in step 12 of the plan.
+
+# Stone family — uniform cube_all
+stone
+cobblestone
+deepslate
+andesite
+diorite
+granite
+netherrack
+end_stone
+sandstone
+nether_quartz_ore
+
+# Soil — uniform cube_all
+dirt
+coarse_dirt
+gravel
+sand
+red_sand
+
+# Wood — cube_column (different top/side)
+oak_log
+spruce_log
+birch_log
+jungle_log
+acacia_log
+dark_oak_log
+mangrove_log
+cherry_log
+
+# Planks — uniform cube_all
+oak_planks
+spruce_planks
+birch_planks
+jungle_planks
+acacia_planks
+dark_oak_planks
+
+# Construction — uniform cube_all
+bricks
+stone_bricks
+nether_bricks
+prismarine_bricks
+mossy_cobblestone
+cracked_stone_bricks
+chiseled_stone_bricks

@@ -1,0 +1,30 @@
+# MineSkin API key — required for runtime uploads of blocks not in the
+# bundled heads.json. Get one at https://account.mineskin.org/.
+# Without a key the plugin only renders blocks present in heads.json
+# and falls back to vanilla particles for anything else.
+mineskinApiKey: ""
+
+# How many chunks per axis each block is split into.
+# 4 means 4x4 tiles per face, 4x4x4 = 64 chunk volumes per block (56 visible).
+# Default texture resolution is 16x16 px; chunkGridSize must divide 16.
+chunkGridSize: 4
+
+# Materials this plugin should animate. Use ["*"] for all full-cube blocks.
+enabledMaterials: ["*"]
+
+# Materials to never animate, even if "*" is enabled.
+disabledMaterials:
+  - "minecraft:water"
+  - "minecraft:lava"
+  - "minecraft:fire"
+  - "minecraft:soul_fire"
+
+# Total duration of the directional-shrink break animation in milliseconds.
+effectDurationMs: 600
+
+# Hard cap on concurrent FakeBlocks (sub-block effect entities).
+# Excess block-break events fall back to the vanilla animation.
+maxConcurrentFakeBlocks: 8
+
+# Verbose logging for asset resolution and skin packing.
+debug: false

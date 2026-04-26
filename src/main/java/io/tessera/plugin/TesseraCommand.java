@@ -1,0 +1,182 @@
+package io.tessera.plugin;
+
+import io.tessera.assemble.BlockGeometry;
+import io.tessera.assemble.FaceRotations;
+import io.tessera.assemble.FakeBlockFactory;
+import io.tessera.core.BlockKey;
+import io.tessera.core.FakeBlock;
+import io.tessera.core.HeadFace;
+import io.tessera.effect.EffectContext;
+import io.tessera.effect.builtin.DirectionalShrinkEffect;
+import io.tessera.skin.HeadsRegistry;
+import org.bukkit.Location;
+import org.bukkit.Material;
+import org.bukkit.command.Command;
+import org.bukkit.command.CommandExecutor;
+import org.bukkit.command.CommandSender;
+import org.bukkit.entity.Player;
+import org.joml.Vector3f;
+
+import java.util.Locale;
+
+/**
+ * v1 command surface for testing the splitting/effect pipeline. Subcommands:
+ *
+ * <pre>
+ *   /tessera test [material]            spawn a FakeBlock at the player's look location
+ *   /tessera reload                     reload config.yml
+ *   /tessera debug face <face> <x> <y> <z>   override a FaceRotations entry
+ *   /tessera debug face reset [face]    restore default(s)
+ *   /tessera debug center <x> <y> <z>   override BlockGeometry.CUBE_CENTER_PRE
+ *   /tessera debug center reset         restore default
+ * </pre>
+ *
+ * v2 will add /tessera physics presets.
+ */
+public final class TesseraCommand implements CommandExecutor {
+
+    private final TesseraPlugin plugin;
+    private final FakeBlockFactory factory;
+    private final HeadsRegistry registry;
+
+    public TesseraCommand(TesseraPlugin plugin, FakeBlockFactory factory, HeadsRegistry registry) {
+        this.plugin = plugin;
+        this.factory = factory;
+        this.registry = registry;
+    }
+
+    @Override
+    public boolean onCommand(CommandSender sender, Command cmd, String label, String[] args) {
+        if (args.length == 0) {
+            sender.sendMessage("§7/tessera test [material] | reload | debug face|center …");
+            return true;
+        }
+        return switch (args[0].toLowerCase(Locale.ROOT)) {
+            case "test"   -> handleTest(sender, args);
+            case "reload" -> handleReload(sender);
+            case "debug"  -> handleDebug(sender, args);
+            default -> {
+                sender.sendMessage("§cUnknown subcommand: " + args[0]);
+                yield true;
+            }
+        };
+    }
+
+    private boolean handleTest(CommandSender sender, String[] args) {
+        if (!(sender instanceof Player p)) {
+            sender.sendMessage("§cTest must be run by a player.");
+            return true;
+        }
+        Material mat = args.length > 1 ? Material.matchMaterial(args[1]) : Material.STONE;
+        if (mat == null) {
+            sender.sendMessage("§cUnknown material: " + args[1]);
+            return true;
+        }
+        BlockKey key = BlockKey.of(mat.getKey().getNamespace() + ":" + mat.getKey().getKey());
+        if (!registry.has(key)) {
+            sender.sendMessage("§cNot in heads.json: " + key + ". Run ./gradlew tesseraBake to add it.");
+            return true;
+        }
+        Location target = p.getTargetBlockExact(8) != null
+                ? p.getTargetBlockExact(8).getLocation()
+                : p.getLocation();
+        FakeBlock fb = factory.create(target, key);
+        EffectContext ctx = new EffectContext(
+                p.getEyeLocation().getDirection(),
+                System.currentTimeMillis(),
+                plugin.tesseraConfig().effectDurationMs(),
+                plugin);
+        new DirectionalShrinkEffect().apply(fb, ctx);
+        sender.sendMessage("§aSpawned FakeBlock for " + key + " at " + formatLoc(target));
+        return true;
+    }
+
+    private boolean handleReload(CommandSender sender) {
+        plugin.reloadTesseraConfig();
+        sender.sendMessage("§aTessera config reloaded.");
+        return true;
+    }
+
+    private boolean handleDebug(CommandSender sender, String[] args) {
+        if (args.length < 2) {
+            sender.sendMessage("§7/tessera debug face|center …");
+            return true;
+        }
+        return switch (args[1].toLowerCase(Locale.ROOT)) {
+            case "face"   -> handleDebugFace(sender, args);
+            case "center" -> handleDebugCenter(sender, args);
+            default -> {
+                sender.sendMessage("§cUnknown debug target: " + args[1]);
+                yield true;
+            }
+        };
+    }
+
+    private boolean handleDebugFace(CommandSender sender, String[] args) {
+        // /tessera debug face <face> <x> <y> <z>
+        // /tessera debug face reset [face]
+        if (args.length >= 3 && args[2].equalsIgnoreCase("reset")) {
+            if (args.length == 3) {
+                FaceRotations.resetAll();
+                sender.sendMessage("§aReset all face rotations.");
+            } else {
+                HeadFace face = parseFace(args[3]);
+                if (face == null) { sender.sendMessage("§cUnknown face: " + args[3]); return true; }
+                FaceRotations.reset(face);
+                sender.sendMessage("§aReset " + face + " rotation.");
+            }
+            return true;
+        }
+        if (args.length < 6) {
+            sender.sendMessage("§c/tessera debug face <face> <xDeg> <yDeg> <zDeg>");
+            return true;
+        }
+        HeadFace face = parseFace(args[2]);
+        if (face == null) { sender.sendMessage("§cUnknown face: " + args[2]); return true; }
+        try {
+            float x = Float.parseFloat(args[3]);
+            float y = Float.parseFloat(args[4]);
+            float z = Float.parseFloat(args[5]);
+            FaceRotations.set(face, x, y, z);
+            sender.sendMessage("§aSet " + face + " = (" + x + ", " + y + ", " + z + ")°");
+        } catch (NumberFormatException nfe) {
+            sender.sendMessage("§cExpected three numeric degrees.");
+        }
+        return true;
+    }
+
+    private boolean handleDebugCenter(CommandSender sender, String[] args) {
+        if (args.length >= 3 && args[2].equalsIgnoreCase("reset")) {
+            BlockGeometry.cubeCenterPre(BlockGeometry.CUBE_CENTER_PRE_DEFAULT);
+            sender.sendMessage("§aReset CUBE_CENTER_PRE to default " + formatVec(BlockGeometry.cubeCenterPre()));
+            return true;
+        }
+        if (args.length < 5) {
+            sender.sendMessage("§c/tessera debug center <x> <y> <z> | reset");
+            return true;
+        }
+        try {
+            float x = Float.parseFloat(args[2]);
+            float y = Float.parseFloat(args[3]);
+            float z = Float.parseFloat(args[4]);
+            BlockGeometry.cubeCenterPre(new Vector3f(x, y, z));
+            sender.sendMessage("§aSet CUBE_CENTER_PRE = (" + x + ", " + y + ", " + z + ")");
+        } catch (NumberFormatException nfe) {
+            sender.sendMessage("§cExpected three numeric components.");
+        }
+        return true;
+    }
+
+    private static HeadFace parseFace(String s) {
+        try { return HeadFace.valueOf(s.toUpperCase(Locale.ROOT)); }
+        catch (IllegalArgumentException e) { return null; }
+    }
+
+    private static String formatLoc(Location l) {
+        return String.format(Locale.ROOT, "(%.1f, %.1f, %.1f)", l.getX(), l.getY(), l.getZ());
+    }
+
+    private static String formatVec(Vector3f v) {
+        return String.format(Locale.ROOT, "(%.3f, %.3f, %.3f)", v.x, v.y, v.z);
+    }
+}
