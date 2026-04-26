@@ -164,7 +164,7 @@ public final class SkinUploader {
         File pngFile = png.toFile();
         GenerateRequest request = GenerateRequest.upload(pngFile)
                 .name("tessera-" + head.id())
-                .visibility(Visibility.PRIVATE);
+                .visibility(Visibility.UNLISTED);
 
         return client.queue().submit(request)
                 .thenCompose(qr -> {
