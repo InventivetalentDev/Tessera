@@ -18,4 +18,3 @@ test-server/
 gradlew
 gradlew.bat
 .gradle
-gradle/
