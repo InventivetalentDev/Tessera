@@ -1,0 +1,19 @@
+.gradle/
+build/
+.idea/
+.vscode/
+*.iml
+*.ipr
+*.iws
+out/
+bin/
+
+# Paper test server (run-paper)
+run/
+
+# Tessera build-time caches
+build/tessera-cache/
+
+# OS junk
+.DS_Store
+Thumbs.db

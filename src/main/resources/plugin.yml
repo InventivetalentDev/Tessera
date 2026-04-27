@@ -1,0 +1,15 @@
+name: Tessera
+version: 0.1.0-SNAPSHOT
+main: io.tessera.plugin.TesseraPlugin
+api-version: '1.21'
+authors: [inventivetalent]
+description: Splits Minecraft blocks into chunk-sized player-head display entities for break animations and effects.
+folia-supported: false
+commands:
+  tessera:
+    description: Tessera management and debug commands.
+    permission: tessera.command
+permissions:
+  tessera.command:
+    description: Use /tessera commands.
+    default: op
