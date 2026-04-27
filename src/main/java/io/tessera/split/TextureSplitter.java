@@ -25,7 +25,7 @@ import java.util.Map;
  * <p>Per-face source-tile mapping (matches the standard vanilla face UV
  * conventions; verified empirically in step 11 of the plan):
  * <ul>
- *   <li>UP    (+Y) — tileX = cx,             tileY = (N-1) − cz</li>
+ *   <li>UP    (+Y) — tileX = cx,             tileY = cz</li>
  *   <li>DOWN  (-Y) — tileX = cx,             tileY = cz</li>
  *   <li>NORTH (-Z) — tileX = (N-1) − cx,     tileY = (N-1) − cy</li>
  *   <li>SOUTH (+Z) — tileX = cx,             tileY = (N-1) − cy</li>
@@ -144,7 +144,14 @@ public final class TextureSplitter {
     private static int[] sourceTile(FaceDir d, int cx, int cy, int cz, int n) {
         int last = n - 1;
         return switch (d) {
-            case UP    -> new int[] { cx,        last - cz };
+            // UP and DOWN both use (cx, cz) — vanilla cube up-face and
+            // down-face default UVs share image-X = world +X, image-Y = world +Z.
+            // The BOTTOM U pre-mirror in SkinAssembler handles the down-face
+            // U-flip quirk separately. Earlier `(cx, last - cz)` for UP
+            // V-flipped at the chunk-grid level: invisible on V-symmetric
+            // textures (oak_planks, stone) but visibly mirrored on
+            // V-asymmetric ones (oak_log_top rings, pumpkin_top stem).
+            case UP    -> new int[] { cx,        cz };
             case DOWN  -> new int[] { cx,        cz };
             case NORTH -> new int[] { last - cx, last - cy };
             case SOUTH -> new int[] { cx,        last - cy };
