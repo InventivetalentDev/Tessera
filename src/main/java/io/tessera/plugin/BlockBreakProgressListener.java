@@ -92,7 +92,7 @@ public final class BlockBreakProgressListener implements Listener {
         TesseraConfig cfg = plugin.tesseraConfig();
         if (cfg.animationMode() != AnimationMode.PROGRESS) return;
 
-        Entity src = Bukkit.getEntity(event.getSourceUniqueId());
+        Entity src = event.getEntity();
         if (!(src instanceof Player player)) return;
 
         Block block = event.getBlock();
