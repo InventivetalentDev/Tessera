@@ -211,4 +211,43 @@ public final class BlockBaker {
         Files.createDirectories(pngDir);
         return true;
     }
+
+    /**
+     * Diagnostic-only: split + pack + assemble {@code key}'s textures locally
+     * and write one PNG per chunk into {@code outDir} with chunk-coordinate
+     * filenames (e.g. {@code 3-3-1.png}). No upload, no registry side-effects.
+     * Lets a developer inspect exactly what bytes are being painted into each
+     * chunk's head canvas — pairs with {@code /tessera debug dumppng}.
+     */
+    public int dumpPng(BlockKey key, Path outDir) throws IOException {
+        Optional<BlockModel> modelOpt = resolver.resolve(key);
+        if (modelOpt.isEmpty()) return 0;
+        BlockModel model = modelOpt.get();
+
+        int gridN = registry.gridN();
+        List<ChunkSpec> chunks = splitter.split(model, gridN);
+        HeadSkinPacker.Result packed = packer.pack(chunks);
+
+        Files.createDirectories(outDir);
+        int written = 0;
+        for (Map.Entry<ChunkSpec, HeadSkin> entry : packed.chunkToHead().entrySet()) {
+            ChunkSpec chunk = entry.getKey();
+            HeadSkin head = entry.getValue();
+            Path tmp = assembler.assemble(head, outDir);
+            ChunkCoord c = chunk.coord();
+            Path named = outDir.resolve(c.x() + "-" + c.y() + "-" + c.z() + ".png");
+            Files.deleteIfExists(named);
+            Files.copy(tmp, named);
+            written++;
+        }
+        // Clean up the UUID-named intermediate files SkinAssembler wrote.
+        try (var stream = Files.list(outDir)) {
+            stream.filter(p -> {
+                String n = p.getFileName().toString();
+                // Heuristic: UUID has 4 dashes. Coord names have 2.
+                return n.endsWith(".png") && n.length() > 12 && n.chars().filter(ch -> ch == '-').count() >= 4;
+            }).forEach(p -> { try { Files.deleteIfExists(p); } catch (IOException ignored) {} });
+        }
+        return written;
+    }
 }
