@@ -37,10 +37,17 @@ animationMode: progress
 
 # Progress-mode only. Send sendBlockChange(BARRIER) to the breaker so they
 # don't see the real block layered behind the shrinking FakeBlock chunks.
-# The real block stays on the server. NOTE: barriers are unbreakable in
-# survival mode, so enabling this may stall mining for survival players;
-# debug logs will tell you if progress events keep firing.
-clientHideRealBlock: true
+# The real block stays on the server.
+#
+# DISABLED BY DEFAULT: confirmed empirically that this breaks survival
+# mining. The server's BlockBreakProgressUpdateEvent stream still fires
+# normally (server still sees the real block) but the client refuses to
+# send the final "destroy completed" packet for a BARRIER, so vanilla
+# never fires BlockBreakEvent and the block doesn't actually break. With
+# this off, the FakeBlock chunks visually overlap the real block while
+# it's being mined; as they shrink the vanilla crack overlay shows
+# through underneath.
+clientHideRealBlock: false
 
 # Progress-mode only. Width of the shrink wave along the breaker's eye
 # direction (0..1). Smaller = sharper wave front; larger = more chunks

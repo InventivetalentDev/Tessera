@@ -49,7 +49,7 @@ public record TesseraConfig(
                 cfg.getInt("effectDurationMs", 600),
                 cfg.getInt("maxConcurrentFakeBlocks", 8),
                 mode,
-                cfg.getBoolean("clientHideRealBlock", true),
+                cfg.getBoolean("clientHideRealBlock", false),
                 cfg.getDouble("waveWindow", 0.25d),
                 cfg.getDouble("progressMinDelta", 0.02d),
                 cfg.getBoolean("debug", false)

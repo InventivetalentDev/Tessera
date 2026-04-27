@@ -130,7 +130,13 @@ public final class BlockBreakProgressListener implements Listener {
             tb.state = State.FORWARD;
         }
 
-        if (Math.abs(progress - tb.lastAppliedProgress) < cfg.progressMinDelta()) return;
+        if (Math.abs(progress - tb.lastAppliedProgress) < cfg.progressMinDelta()) {
+            // Server is still emitting events (player is actively mining), even
+            // though the value didn't change enough to repaint. Refresh the
+            // watchdog timestamp so it doesn't trip while mining is still live.
+            tb.lastUpdateTickMs = System.currentTimeMillis();
+            return;
+        }
 
         applyForward(tb, progress, cfg);
     }
