@@ -35,19 +35,17 @@ maxConcurrentFakeBlocks: 8
 #                wave on the empty cell over effectDurationMs.
 animationMode: progress
 
-# Progress-mode only. Send sendBlockChange(BARRIER) to the breaker so they
-# don't see the real block layered behind the shrinking FakeBlock chunks.
-# The real block stays on the server.
+# Progress-mode only. Send sendBlockChange(BARRIER) to the breaker so the
+# real block doesn't z-fight with (or hide behind) the shrinking FakeBlock
+# chunks. The real block stays on the server.
 #
-# DISABLED BY DEFAULT: confirmed empirically that this breaks survival
-# mining. The server's BlockBreakProgressUpdateEvent stream still fires
-# normally (server still sees the real block) but the client refuses to
-# send the final "destroy completed" packet for a BARRIER, so vanilla
-# never fires BlockBreakEvent and the block doesn't actually break. With
-# this off, the FakeBlock chunks visually overlap the real block while
-# it's being mined; as they shrink the vanilla crack overlay shows
-# through underneath.
-clientHideRealBlock: false
+# Survival caveat: a client mining a BARRIER refuses to send the final
+# "destroy completed" packet, so vanilla on its own never fires
+# BlockBreakEvent. The plugin compensates by force-breaking the real
+# block via Player.breakBlock(...) once the progress wave reaches 1.0 —
+# that fires BlockBreakEvent synchronously, runs enchantments, and
+# produces tool-correct drops just like a normal break.
+clientHideRealBlock: true
 
 # Progress-mode only. Width of the shrink wave along the breaker's eye
 # direction (0..1). Smaller = sharper wave front; larger = more chunks

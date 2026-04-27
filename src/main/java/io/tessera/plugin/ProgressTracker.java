@@ -52,6 +52,7 @@ public final class ProgressTracker {
         public long lastUpdateTickMs;
         public State state;
         public boolean barrierSent;
+        public boolean autoBreakTriggered;     // we already called player.breakBlock; don't re-fire
         public BukkitTask reverseTask;         // non-null only while REVERSING
 
         public TrackedBreak(UUID playerId, BlockKey key, Location origin,
@@ -71,6 +72,7 @@ public final class ProgressTracker {
             this.lastUpdateTickMs = System.currentTimeMillis();
             this.state = State.FORWARD;
             this.barrierSent = false;
+            this.autoBreakTriggered = false;
             this.reverseTask = null;
         }
     }

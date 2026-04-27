@@ -220,6 +220,34 @@ public final class BlockBreakProgressListener implements Listener {
                 progress, cfg.waveWindow(), FORWARD_INTERP_TICKS, cfg.progressMinDelta());
         tb.lastAppliedProgress = progress;
         tb.lastUpdateTickMs = System.currentTimeMillis();
+        maybeForceBreak(tb, progress, cfg);
+    }
+
+    /**
+     * If we hid the real block as BARRIER, the client refuses to send the
+     * "destroy completed" packet for it, so vanilla never finalises the break
+     * and {@link org.bukkit.event.block.BlockBreakEvent} never fires. Once
+     * progress reaches 1.0 we drive the break ourselves via
+     * {@link Player#breakBlock(Block)} — that fires BlockBreakEvent
+     * (which our {@link BlockBreakListener} routes back through
+     * {@link #onRealBreak}), respects enchantments, and produces tool-correct
+     * drops. The {@code autoBreakTriggered} flag keeps it idempotent.
+     */
+    private void maybeForceBreak(TrackedBreak tb, double progress, TesseraConfig cfg) {
+        if (tb.autoBreakTriggered) return;
+        if (!tb.barrierSent) return;       // vanilla mining will finish on its own
+        if (progress < 0.999d) return;
+        Player player = Bukkit.getPlayer(tb.currentPlayerId);
+        if (player == null) return;
+        Block worldBlock = player.getWorld().getBlockAt(
+                tb.origin.getBlockX(), tb.origin.getBlockY(), tb.origin.getBlockZ());
+        tb.autoBreakTriggered = true;
+        if (cfg.debug()) plugin.getLogger().info(
+                "[debug-progress] force-break " + tb.key + " at " + worldBlock.getLocation()
+                        + " by=" + player.getName());
+        // Fires BlockBreakEvent synchronously; our BlockBreakListener.onBreak
+        // sees the active tracker and disposes it via onRealBreak.
+        player.breakBlock(worldBlock);
     }
 
     private void transferOwnership(TrackedBreak tb, BlockPosKey posKey, Player newPlayer,
