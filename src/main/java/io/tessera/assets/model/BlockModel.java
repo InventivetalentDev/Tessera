@@ -4,6 +4,7 @@ import io.tessera.core.BlockKey;
 import io.tessera.core.FaceDir;
 
 import java.awt.image.BufferedImage;
+import java.util.Collections;
 import java.util.EnumMap;
 import java.util.Map;
 
@@ -16,6 +17,14 @@ import java.util.Map;
  * <p>{@link #tinted} flags blocks that need biome-tint applied at render time
  * (grass_block top, oak_leaves, etc.). v1 declines to render tinted blocks
  * since we'd need biome-aware shading; v2 may support it.
+ *
+ * <p>{@link #variantRotations} maps each blockstate variant key (e.g.
+ * {@code "axis=x"}, {@code "facing=west,lit=false"}) to the world-space
+ * quaternion that variant requires. The textures themselves came from the
+ * variant with no rotation (the canonical variant), so applying the
+ * appropriate quaternion at spawn time produces the correctly-oriented
+ * render for every other variant of the same block. Map is empty for
+ * multipart blockstates and for blocks with only one variant.
  */
 public final class BlockModel {
 
@@ -23,8 +32,14 @@ public final class BlockModel {
     private final EnumMap<FaceDir, BufferedImage> faces;
     private final boolean tinted;
     private final String parentChain;
+    private final Map<String, ModelResolver.VariantRotation> variantRotations;
 
     public BlockModel(BlockKey key, Map<FaceDir, BufferedImage> faces, boolean tinted, String parentChain) {
+        this(key, faces, tinted, parentChain, Collections.emptyMap());
+    }
+
+    public BlockModel(BlockKey key, Map<FaceDir, BufferedImage> faces, boolean tinted, String parentChain,
+                      Map<String, ModelResolver.VariantRotation> variantRotations) {
         if (faces.size() != 6) {
             throw new IllegalArgumentException(
                     "BlockModel must have all 6 face textures, got " + faces.keySet());
@@ -33,6 +48,7 @@ public final class BlockModel {
         this.faces = new EnumMap<>(faces);
         this.tinted = tinted;
         this.parentChain = parentChain;
+        this.variantRotations = Map.copyOf(variantRotations);
     }
 
     public BlockKey key() { return key; }
@@ -45,5 +61,9 @@ public final class BlockModel {
 
     public Map<FaceDir, BufferedImage> faces() {
         return Map.copyOf(faces);
+    }
+
+    public Map<String, ModelResolver.VariantRotation> variantRotations() {
+        return variantRotations;
     }
 }

@@ -7,11 +7,13 @@ import com.google.gson.JsonParser;
 import io.tessera.assets.fetch.McAssetClient;
 import io.tessera.core.BlockKey;
 import io.tessera.core.FaceDir;
+import org.joml.Quaternionf;
 
 import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.util.Collections;
 import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -83,13 +85,13 @@ public final class ModelResolver {
             JsonObject blockstate = JsonParser.parseString(
                     client.fetchString(version, "blockstates/" + key.path() + ".json"))
                     .getAsJsonObject();
-            String modelName = pickFirstVariantModel(blockstate);
-            if (modelName == null) {
+            BlockstateVariants vs = parseVariants(blockstate);
+            if (vs.canonicalModelName == null) {
                 logger.fine("[" + key + "] blockstate has no usable variant; skipping");
                 return Optional.empty();
             }
 
-            ResolvedModel resolved = resolveModelChain(modelName);
+            ResolvedModel resolved = resolveModelChain(vs.canonicalModelName);
             if (!CUBE_PARENTS.contains(resolved.terminalParent)) {
                 logger.fine("[" + key + "] non-cube parent " + resolved.terminalParent + "; skipping");
                 return Optional.empty();
@@ -101,7 +103,7 @@ public final class ModelResolver {
                 return Optional.empty();
             }
             boolean tinted = TINTED_BLOCKS.contains(key.path());
-            return Optional.of(new BlockModel(key, faces, tinted, resolved.terminalParent));
+            return Optional.of(new BlockModel(key, faces, tinted, resolved.terminalParent, vs.rotations()));
         } catch (McAssetClient.AssetNotFoundException missing) {
             logger.fine("[" + key + "] no blockstate on mcasset.cloud (" + missing.getMessage() + ")");
             return Optional.empty();
@@ -114,24 +116,69 @@ public final class ModelResolver {
         }
     }
 
-    private static String pickFirstVariantModel(JsonObject blockstate) {
+    /**
+     * Per-variant rotation hints from a blockstate JSON. Carries the raw
+     * {@code x}/{@code y} integers (multiples of 90, in degrees) so the
+     * values round-trip cleanly through {@code heads.json} without any
+     * quaternion-to-Euler ambiguity. Use {@link #toQuat} for the runtime
+     * world-space rotation.
+     *
+     * <p>Vanilla composition order: {@code y} (yaw) is applied after
+     * {@code x} (pitch) — i.e. tilt the cube up/down first, then spin
+     * around the world Y axis.
+     */
+    public record VariantRotation(int xDeg, int yDeg) {
+        public static final VariantRotation IDENTITY = new VariantRotation(0, 0);
+
+        public Quaternionf toQuat() {
+            return new Quaternionf()
+                    .rotateY((float) Math.toRadians(yDeg))
+                    .rotateX((float) Math.toRadians(xDeg));
+        }
+    }
+
+    /**
+     * Carries the per-block result of parsing a blockstate JSON: which model
+     * to bake textures from (canonical = the variant with no x/y rotation
+     * hints, falling back to the first one), plus a map from variant key
+     * (e.g. {@code "axis=x"}, {@code "facing=west,lit=false"}) to the
+     * rotation that variant requires for correct world orientation.
+     *
+     * <p>Used by {@link #doResolve} to feed both the texture pipeline and
+     * the runtime spawn-time rotation lookup. Variant keys mirror vanilla's
+     * format (alphabetically sorted, comma-separated). Multipart blockstates
+     * collapse to empty since per-state rotation isn't meaningful for them
+     * in v1.
+     */
+    public record BlockstateVariants(String canonicalModelName, Map<String, VariantRotation> rotations) {}
+
+    private static BlockstateVariants parseVariants(JsonObject blockstate) {
         if (blockstate.has("variants")) {
             JsonObject variants = blockstate.getAsJsonObject("variants");
+            String canonical = null;
+            String firstSeen = null;
+            Map<String, VariantRotation> rotations = new LinkedHashMap<>();
             for (Map.Entry<String, JsonElement> e : variants.entrySet()) {
                 JsonElement v = e.getValue();
                 JsonObject obj = v.isJsonArray() ? v.getAsJsonArray().get(0).getAsJsonObject() : v.getAsJsonObject();
-                return obj.get("model").getAsString();
+                String model = obj.get("model").getAsString();
+                int xDeg = obj.has("x") ? obj.get("x").getAsInt() : 0;
+                int yDeg = obj.has("y") ? obj.get("y").getAsInt() : 0;
+                rotations.put(e.getKey(), new VariantRotation(xDeg, yDeg));
+                if (firstSeen == null) firstSeen = model;
+                if (canonical == null && xDeg == 0 && yDeg == 0) canonical = model;
             }
+            return new BlockstateVariants(canonical != null ? canonical : firstSeen, rotations);
         }
         if (blockstate.has("multipart")) {
             JsonArray arr = blockstate.getAsJsonArray("multipart");
             if (arr.size() > 0) {
                 JsonElement applied = arr.get(0).getAsJsonObject().get("apply");
                 JsonObject obj = applied.isJsonArray() ? applied.getAsJsonArray().get(0).getAsJsonObject() : applied.getAsJsonObject();
-                return obj.get("model").getAsString();
+                return new BlockstateVariants(obj.get("model").getAsString(), Collections.emptyMap());
             }
         }
-        return null;
+        return new BlockstateVariants(null, Collections.emptyMap());
     }
 
     private static final class ResolvedModel {

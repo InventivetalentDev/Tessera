@@ -207,7 +207,7 @@ public final class BlockBaker {
             return false;
         }
 
-        registry.register(key, chunkMap);
+        registry.register(key, chunkMap, model.variantRotations());
         Files.createDirectories(pngDir);
         return true;
     }

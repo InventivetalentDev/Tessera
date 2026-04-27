@@ -79,11 +79,24 @@ public final class FakeBlockFactory {
      * @param blockKey the namespaced ID of the block being replaced
      */
     public FakeBlock create(Location blockLocation, BlockKey blockKey) {
+        return create(blockLocation, blockKey, new Quaternionf());
+    }
+
+    /**
+     * Spawn a FakeBlock with a non-identity block rotation — used to honour
+     * vanilla blockstate variants (e.g. {@code oak_log[axis=x]} ships with
+     * {@code x:90, y:90} relative to the canonical baked model). The
+     * rotation is applied as the {@link BlockGeometry}'s {@code L} matrix:
+     * the cube formation rotates as a whole, while each chunk's individual
+     * canonical rotation (the {@code R} matrix) stays the same so all
+     * outward faces continue to render their correct slot tile.
+     */
+    public FakeBlock create(Location blockLocation, BlockKey blockKey, Quaternionf blockRotation) {
         World world = blockLocation.getWorld();
         if (world == null) throw new IllegalArgumentException("Location has no world");
 
         int gridN = registry.gridN();
-        BlockGeometry geom = BlockGeometry.axisAligned(gridN);
+        BlockGeometry geom = new BlockGeometry(gridN, blockRotation);
 
         // Snap to block grid origin — the lower NW-down corner of the cell.
         Location origin = new Location(world,
