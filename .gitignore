@@ -1,19 +1,21 @@
 .gradle/
 build/
 .idea/
-.vscode/
 *.iml
-*.ipr
 *.iws
+*.ipr
 out/
+.vscode/
+.settings/
+.classpath
+.project
 bin/
 
-# Paper test server (run-paper)
+# Local testing
 run/
+test-server/
 
-# Tessera build-time caches
-build/tessera-cache/
-
-# OS junk
-.DS_Store
-Thumbs.db
+gradlew
+gradlew.bat
+.gradle
+gradle/
