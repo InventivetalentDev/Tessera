@@ -96,6 +96,21 @@ public final class HeadSkinPacker {
      * Inverse of {@link #faceDirToHeadFace}. Lives here so the canonical
      * mapping between block-local FaceDir and skin-local HeadFace stays
      * in one place.
+     *
+     * <p><b>RIGHT↔WEST, LEFT↔EAST is intentional</b> and matches the vanilla
+     * player-head model's cube UVs. The model's {@code east} (+X) face
+     * samples skin pixels {@code (16, 8)-(24, 16)} — the LEFT slot
+     * (wearer's left cheek; with Steve facing +Z south, the wearer's left
+     * side is at +X). Symmetrically, the model's {@code west} (-X) face
+     * samples the RIGHT slot. Under canonical rotation, world east shows
+     * LEFT-slot pixels and world west shows RIGHT-slot pixels, so the
+     * outward EAST tile must be packed into LEFT and the outward WEST tile
+     * into RIGHT. Mirroring this naively (LEFT→WEST, RIGHT→EAST) is
+     * invisible on uniform-textured blocks but produces wrong textures on
+     * the top/bottom rows of east/west faces for non-uniform blocks like
+     * oak_log: those chunks fill RIGHT with the EAST source bark, which
+     * the renderer then shows on world west, while LEFT receives the
+     * cross-section filler that the renderer shows on world east.
      */
     public static FaceDir headFaceToFaceDir(HeadFace f) {
         return switch (f) {
@@ -103,8 +118,8 @@ public final class HeadSkinPacker {
             case BOTTOM -> FaceDir.DOWN;
             case FRONT  -> FaceDir.SOUTH;
             case BACK   -> FaceDir.NORTH;
-            case RIGHT  -> FaceDir.EAST;
-            case LEFT   -> FaceDir.WEST;
+            case RIGHT  -> FaceDir.WEST;
+            case LEFT   -> FaceDir.EAST;
         };
     }
 
@@ -114,8 +129,8 @@ public final class HeadSkinPacker {
             case DOWN  -> HeadFace.BOTTOM;
             case SOUTH -> HeadFace.FRONT;
             case NORTH -> HeadFace.BACK;
-            case EAST  -> HeadFace.RIGHT;
-            case WEST  -> HeadFace.LEFT;
+            case EAST  -> HeadFace.LEFT;
+            case WEST  -> HeadFace.RIGHT;
         };
     }
 }

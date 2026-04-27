@@ -34,21 +34,29 @@ HeadRotations.compose(HeadFace.FRONT, FaceDir.SOUTH, FaceRotations.of(HeadFace.F
 `FaceRotations.FRONT` is `Ry(180°)`. That cancels the player-head
 ItemStack's built-in `Ry(180°)` (documented in `FaceRotations`'s
 javadoc). With the two flips cancelling, the cube renders identity in
-world space, so each UV slot's normal lands on its like-named world axis:
+world space. Slot-to-world mapping is then dictated by the vanilla head
+model's per-face UVs (which faces sample which skin region):
 
-| HeadFace slot | UV-space normal | World direction after canonical rotation | FaceDir |
-|---------------|------------------|------------------------------------------|---------|
-| TOP           | +Y               | +Y (up)                                  | UP      |
-| BOTTOM        | −Y               | −Y (down)                                | DOWN    |
-| FRONT         | +Z               | +Z (south)                               | SOUTH   |
-| BACK          | −Z               | −Z (north)                               | NORTH   |
-| RIGHT         | +X               | +X (east)                                | EAST    |
-| LEFT          | −X               | −X (west)                                | WEST    |
+| HeadFace slot | Skin UV rect    | Model cube face that samples it | World direction | FaceDir |
+|---------------|-----------------|---------------------------------|-----------------|---------|
+| TOP           | (8,0)-(16,8)    | up                              | +Y (up)         | UP      |
+| BOTTOM        | (16,0)-(24,8)   | down (U-flipped, see SkinAssembler) | −Y (down)   | DOWN    |
+| FRONT         | (8,8)-(16,16)   | south                           | +Z (south)      | SOUTH   |
+| BACK          | (24,8)-(32,16)  | north                           | −Z (north)      | NORTH   |
+| LEFT          | (16,8)-(24,16)  | east                            | +X (east)       | EAST    |
+| RIGHT         | (0,8)-(8,16)    | west                            | −X (west)       | WEST    |
 
-`HeadSkinPacker.buildFaceTiles` already paints each outward `FaceDir`'s
-tile into its matching `HeadFace` slot, so once the cube is canonically
-rotated, every outward face shows the correct tile to whichever direction
-that face points.
+The X axes look swapped relative to slot-name intuition: the LEFT slot
+("wearer's left cheek") renders on world *east*, and RIGHT renders on
+*west*. That's because Steve's natural orientation faces south, and the
+wearer's left side is at +X when facing south. The vanilla model's
+`east` cube face is wired to sample the LEFT skin region, full stop.
+
+`HeadSkinPacker.buildFaceTiles` accounts for this when packing: each
+outward `FaceDir`'s tile is placed into the slot that actually renders
+on that world direction (so `chunk.tile(EAST)` goes into LEFT, not
+RIGHT), and once the cube is canonically rotated every outward face
+shows the correct tile.
 
 `HeadRotations` is composed in for the per-slot debug spin, but with
 canonical rotation the spin is now around the FRONT slot's local +Z
@@ -134,10 +142,12 @@ If a face still looks off after the canonical-rotation fix:
    debug markers.
 2. Look at each face from outside the block. You should see one HeadFace
    fill colour per face: `TOP`=light gray, `BOTTOM`=dark gray,
-   `FRONT`=orange (south), `BACK`=purple (north), `RIGHT`=magenta (east),
-   `LEFT`=teal (west). Same colour everywhere on the face including
-   edges and corners — *not* a different colour per chunk row. If you do
-   see per-row variation, the canonical rotation isn't being applied.
+   `FRONT`=orange (south), `BACK`=purple (north), `LEFT`=teal (east),
+   `RIGHT`=magenta (west). The X swap is real — see the slot↔world
+   direction table at the top of this doc. Same colour everywhere on the
+   face including edges and corners — *not* a different colour per chunk
+   row. If you do see per-row variation, the canonical rotation isn't
+   being applied.
 3. Read the four border colours on each face (red top / green right /
    blue bottom / yellow left). If a face has them rotated, set
    `TileRotations.<that-slot>` to the rotation that brings them upright.
