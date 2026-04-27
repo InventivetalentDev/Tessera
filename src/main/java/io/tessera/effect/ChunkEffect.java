@@ -10,6 +10,10 @@ import io.tessera.core.FakeBlock;
  */
 public interface ChunkEffect {
 
-    /** Apply the effect. Must be called on the main thread. */
-    void apply(FakeBlock fakeBlock, EffectContext ctx);
+    /**
+     * Apply the effect on a fixed timeline derived from {@link EffectContext}.
+     * Used by the post-break path and the instamine fallback. Must be called
+     * on the main thread.
+     */
+    void applyTimed(FakeBlock fakeBlock, EffectContext ctx);
 }

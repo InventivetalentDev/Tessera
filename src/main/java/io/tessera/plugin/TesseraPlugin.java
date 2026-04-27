@@ -27,6 +27,7 @@ public final class TesseraPlugin extends JavaPlugin {
     private SkinDiskCache diskCache;
     private BlockBaker baker;
     private java.util.concurrent.ExecutorService bakerExecutor;
+    private BlockBreakProgressListener progressListener;
 
     @Override
     public void onEnable() {
@@ -53,8 +54,13 @@ public final class TesseraPlugin extends JavaPlugin {
         this.bakerExecutor = Executors.newFixedThreadPool(2, named("Tessera-Baker"));
         this.baker = new BlockBaker(getLogger(), assets, mcVersion, registry, uploader, diskCache, pngDir, bakerExecutor);
 
+        AtomicInteger active = new AtomicInteger();
+        ProgressTracker tracker = new ProgressTracker();
+        this.progressListener = new BlockBreakProgressListener(this, blockFactory, registry, active, tracker);
+        getServer().getPluginManager().registerEvents(progressListener, this);
         getServer().getPluginManager().registerEvents(
-                new BlockBreakListener(this, blockFactory, registry, baker), this);
+                new BlockBreakListener(this, blockFactory, registry, baker, active, tracker, progressListener), this);
+        progressListener.start();
 
         PluginCommand cmd = getCommand("tessera");
         if (cmd != null) cmd.setExecutor(new TesseraCommand(this, blockFactory, registry, baker));
@@ -66,6 +72,7 @@ public final class TesseraPlugin extends JavaPlugin {
 
     @Override
     public void onDisable() {
+        if (progressListener != null) progressListener.shutdown();
         if (itemFactory != null) itemFactory.clear();
         if (uploader != null) uploader.cancelAll();
         if (bakerExecutor != null) bakerExecutor.shutdownNow();

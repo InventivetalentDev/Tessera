@@ -3,11 +3,10 @@ package io.tessera.effect.builtin;
 import io.tessera.core.ChunkRef;
 import io.tessera.core.FakeBlock;
 import io.tessera.effect.ChunkEffect;
+import io.tessera.effect.ChunkWaveSampler;
 import io.tessera.effect.EffectContext;
 import org.bukkit.Bukkit;
 import org.bukkit.util.Transformation;
-import org.bukkit.util.Vector;
-import org.joml.Quaternionf;
 import org.joml.Vector3f;
 
 import java.util.ArrayList;
@@ -17,14 +16,23 @@ import java.util.List;
 /**
  * Shrinks every chunk to scale 0 in a wave that travels in the breaker's
  * look direction — chunks closest to the breaker shrink first, far ones
- * last. The effect lasts {@link EffectContext#durationMs} total; each
- * chunk's individual shrink takes {@link #PER_CHUNK_INTERP_MS}.
+ * last. Two entry points:
  *
- * <p>Implementation note: the shrink uses Display interpolation, not
- * per-tick server work — we set {@code interpolationDuration} and a new
- * scale-0 transformation; the client lerps to it. Total server cost per
- * effect = N scheduled tasks (one per chunk to kick off the interpolation
- * at its wave-arrival tick) + 1 cleanup task.
+ * <ul>
+ *   <li>{@link #applyTimed(FakeBlock, EffectContext)} — schedules per-chunk
+ *       interpolations on a fixed timeline. Used after a vanilla
+ *       BlockBreakEvent (post-break mode and the instamine fallback).</li>
+ *   <li>{@link #applyAtProgress} — applies a single snapshot of the wave at
+ *       a given mining progress. Used by the progress-driven mode, which
+ *       calls this on every {@code BlockBreakProgressUpdateEvent}.</li>
+ * </ul>
+ *
+ * <p>Both paths share the per-chunk wave-position math via
+ * {@link ChunkWaveSampler}.
+ *
+ * <p>Implementation note: shrinks use Display interpolation, not per-tick
+ * server work — we set {@code interpolationDuration} and a new scale
+ * transformation; the client lerps to it.
  */
 public final class DirectionalShrinkEffect implements ChunkEffect {
 
@@ -32,36 +40,14 @@ public final class DirectionalShrinkEffect implements ChunkEffect {
     private static final int MS_PER_TICK = 50;
 
     @Override
-    public void apply(FakeBlock fakeBlock, EffectContext ctx) {
-        Vector dir = ctx.breakerEyeDir();
-        Vector3f dirJoml = new Vector3f((float) dir.getX(), (float) dir.getY(), (float) dir.getZ());
-
-        List<ChunkRef> chunks = new ArrayList<>(fakeBlock.chunks());
+    public void applyTimed(FakeBlock fakeBlock, EffectContext ctx) {
+        List<ChunkRef> chunks = fakeBlock.chunks();
         if (chunks.isEmpty()) {
             fakeBlock.despawn();
             return;
         }
 
-        // Project each chunk's local center onto the breaker's view direction.
-        // Smaller projection = closer to camera = shrink earlier in the wave.
-        // localCenter() is in the unrotated grid; for variant-rotated blocks
-        // (axis=x logs, facing=east furnaces) we rotate `rel` by the block's
-        // L matrix so the wave follows the visible cube, not the underlying
-        // grid. Identity rotation makes transform a no-op.
-        Quaternionf blockRot = fakeBlock.blockRotation();
-        Vector3f blockCenter = new Vector3f(0.5f, 0.5f, 0.5f);
-        double[] projections = new double[chunks.size()];
-        double minProj = Double.POSITIVE_INFINITY;
-        double maxProj = Double.NEGATIVE_INFINITY;
-        for (int i = 0; i < chunks.size(); i++) {
-            Vector3f rel = chunks.get(i).localCenter().sub(blockCenter);
-            blockRot.transform(rel);
-            double p = rel.dot(dirJoml);
-            projections[i] = p;
-            if (p < minProj) minProj = p;
-            if (p > maxProj) maxProj = p;
-        }
-        double range = Math.max(1e-6, maxProj - minProj);
+        double[] t = ChunkWaveSampler.precomputeT(fakeBlock, ctx.breakerEyeDir());
 
         int interpTicks = Math.max(1, PER_CHUNK_INTERP_MS / MS_PER_TICK);
         int totalTicks  = Math.max(interpTicks + 1, ctx.durationMs() / MS_PER_TICK);
@@ -71,17 +57,12 @@ public final class DirectionalShrinkEffect implements ChunkEffect {
             ChunkRef chunk = chunks.get(i);
             // proj > 0 = chunk on far side of block (in same direction as
             // the player's look vector). proj < 0 = near side. We want
-            // near-side chunks to shrink FIRST (small delay), far-side
-            // LAST. After normalising, smallest-proj chunks (near side)
-            // get t = 0 and largest (far side) get t = 1, so delay = t.
-            double t = (projections[i] - minProj) / range;
-            // Invert so the wave appears to fold toward the player.
-            // Earlier we used (1 - t) which sent the wave the wrong way:
-            // far chunks shrunk first because their large t flipped to
-            // a small delay.
-            int delayTicks = (int) Math.round(t * waveTicks);
+            // near-side chunks (small t) to shrink FIRST (small delay), far
+            // ones LAST.
+            int delayTicks = (int) Math.round(t[i] * waveTicks);
 
-            Bukkit.getScheduler().runTaskLater(ctx.plugin(), () -> shrinkChunk(chunk, interpTicks),
+            Bukkit.getScheduler().runTaskLater(ctx.plugin(),
+                    () -> shrinkChunkToZero(chunk, interpTicks),
                     Math.max(0, delayTicks));
         }
 
@@ -91,7 +72,58 @@ public final class DirectionalShrinkEffect implements ChunkEffect {
                 totalTicks + 2L);
     }
 
-    private static void shrinkChunk(ChunkRef chunk, int interpTicks) {
+    /**
+     * Apply a single wave-snapshot at the given mining {@code progress} (0..1).
+     * Each chunk is scaled to {@code base * (1 - shrunkFraction(t, progress, window))},
+     * where {@code base} is its initial spawn scale (taken from {@code baseScales[i]}).
+     * Chunks whose scale changes by less than {@code minScaleDelta} from
+     * {@code prevScales[i]} are skipped to avoid redundant interpolation packets;
+     * applied scales are written back into {@code prevScales} for the next call.
+     *
+     * <p>Does NOT despawn the FakeBlock — caller owns lifecycle.
+     */
+    public static void applyAtProgress(FakeBlock fakeBlock,
+                                       double[] chunkT,
+                                       float[] baseScales,
+                                       float[] prevScales,
+                                       double progress,
+                                       double window,
+                                       int interpTicks,
+                                       double minScaleDelta) {
+        List<ChunkRef> chunks = fakeBlock.chunks();
+        int n = chunks.size();
+        if (n == 0) return;
+        int interp = Math.max(0, interpTicks);
+        for (int i = 0; i < n; i++) {
+            ChunkRef chunk = chunks.get(i);
+            if (chunk.display().isDead()) continue;
+            double s = ChunkWaveSampler.shrunkFraction(chunkT[i], progress, window);
+            float target = (float) (baseScales[i] * (1.0 - s));
+            if (Math.abs(target - prevScales[i]) < minScaleDelta) continue;
+            prevScales[i] = target;
+            Transformation cur = chunk.display().getTransformation();
+            Transformation next = new Transformation(
+                    cur.getTranslation(),
+                    cur.getLeftRotation(),
+                    new Vector3f(target, target, target),
+                    cur.getRightRotation());
+            chunk.display().setInterpolationDelay(0);
+            chunk.display().setInterpolationDuration(interp);
+            chunk.display().setTransformation(next);
+        }
+    }
+
+    /** Capture the per-chunk uniform spawn scales (the X component, since spawns are uniform). */
+    public static float[] captureBaseScales(FakeBlock fakeBlock) {
+        List<ChunkRef> chunks = fakeBlock.chunks();
+        float[] out = new float[chunks.size()];
+        for (int i = 0; i < chunks.size(); i++) {
+            out[i] = chunks.get(i).display().getTransformation().getScale().x;
+        }
+        return out;
+    }
+
+    private static void shrinkChunkToZero(ChunkRef chunk, int interpTicks) {
         if (chunk.display().isDead()) return;
         Transformation cur = chunk.display().getTransformation();
         Transformation zero = new Transformation(
@@ -110,7 +142,4 @@ public final class DirectionalShrinkEffect implements ChunkEffect {
         out.sort(Comparator.comparingInt(ChunkRef::manhattanFromSurface));
         return out;
     }
-
-    @SuppressWarnings("unused")
-    private static Quaternionf identityQuat() { return new Quaternionf(); }
 }
