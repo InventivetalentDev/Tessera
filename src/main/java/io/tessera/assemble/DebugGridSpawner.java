@@ -68,6 +68,11 @@ public final class DebugGridSpawner {
 
         ItemStack head = new ItemStack(Material.PLAYER_HEAD);
 
+        // Match FakeBlockFactory: one canonical rotation for every chunk so
+        // every UV slot's normal aligns with its like-named world FaceDir.
+        Quaternionf canonicalRotation = HeadRotations.compose(
+                HeadFace.FRONT, FaceDir.SOUTH, FaceRotations.of(HeadFace.FRONT));
+
         List<ItemDisplay> spawned = new ArrayList<>();
         for (int x = 0; x < gridN; x++) {
             for (int y = 0; y < gridN; y++) {
@@ -75,9 +80,7 @@ public final class DebugGridSpawner {
                     if (!isVisible(x, y, z, gridN)) continue;
 
                     ChunkCoord c = new ChunkCoord(x, y, z);
-                    FaceDir primary = primaryFaceFor(c, gridN);
-                    HeadFace headFace = mapFaceDir(primary);
-                    Quaternionf faceRot = HeadRotations.compose(headFace, primary, FaceRotations.of(headFace));
+                    Quaternionf faceRot = canonicalRotation;
 
                     Vector3f translation = geom.translationFor(c, faceRot);
                     float scale = geom.chunkScale();
@@ -113,23 +116,5 @@ public final class DebugGridSpawner {
             if (d.isOutwardAt(x, y, z, gridN)) return true;
         }
         return false;
-    }
-
-    private static FaceDir primaryFaceFor(ChunkCoord c, int gridN) {
-        for (FaceDir d : FaceDir.values()) {
-            if (d.isOutwardAt(c.x(), c.y(), c.z(), gridN)) return d;
-        }
-        return FaceDir.UP;
-    }
-
-    private static HeadFace mapFaceDir(FaceDir d) {
-        return switch (d) {
-            case UP    -> HeadFace.TOP;
-            case DOWN  -> HeadFace.BOTTOM;
-            case SOUTH -> HeadFace.FRONT;
-            case NORTH -> HeadFace.BACK;
-            case EAST  -> HeadFace.RIGHT;
-            case WEST  -> HeadFace.LEFT;
-        };
     }
 }

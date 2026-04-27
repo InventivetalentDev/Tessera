@@ -7,7 +7,6 @@ import io.tessera.core.FaceDir;
 import io.tessera.core.FakeBlock;
 import io.tessera.core.HeadFace;
 import io.tessera.skin.HeadSkin;
-import io.tessera.skin.HeadSkinPacker;
 import io.tessera.skin.HeadsRegistry;
 import org.bukkit.Location;
 import org.bukkit.World;
@@ -29,10 +28,27 @@ import java.util.Map;
  *
  * <p>Bukkit transform composition (see {@link BlockGeometry}):
  * {@code worldVertex = entityLocation + T + L*S*R*v}. We set
- * {@code L = blockRotation} (identity in v1), {@code R = faceRotation}
- * (picks which head-cube face is shown), {@code S = uniform chunkScale},
- * and {@code T = blockGeometry.translationFor(coord, R)} which compensates
+ * {@code L = blockRotation} (identity in v1), {@code R = canonicalRotation}
+ * (a single rotation applied to every chunk that aligns each HeadFace UV
+ * slot's normal with its corresponding world FaceDir),
+ * {@code S = uniform chunkScale}, and
+ * {@code T = blockGeometry.translationFor(coord, R)} which compensates
  * for the head's intrinsic {@code CUBE_CENTER_PRE} offset.
+ *
+ * <p><b>Canonical rotation:</b> the player-head ItemStack's natural render
+ * applies {@code Ry(180°)} to the cube (FRONT slot, UV +Z, ends up at world
+ * -Z). Applying {@code Ry(180°)} again on top cancels that, so all six UV
+ * slot normals land on their like-named world axes:
+ * {@code TOP → +Y, BOTTOM → -Y, FRONT → +Z (south), BACK → -Z (north),
+ * RIGHT → +X (east), LEFT → -X (west)}. With
+ * {@link io.tessera.skin.HeadSkinPacker} painting each outward FaceDir's
+ * tile into its matching HeadFace slot, every viewer sees the correct
+ * tile on whichever face they look at — no per-chunk rotation pick required.
+ *
+ * <p>Mosaikin's per-face FaceRotations table only made sense in that
+ * project's "one face shown per head" model. Tessera needs all outward
+ * faces of every chunk to be simultaneously correct, which only the
+ * canonical rotation gives us.
  *
  * <p>All {@link ItemDisplay}s share the entity location at the block's
  * lower-NW-down corner; per-chunk offsets live entirely in the
@@ -74,14 +90,19 @@ public final class FakeBlockFactory {
         Map<ChunkCoord, HeadsRegistry.Entry> chunks = registry.chunksFor(blockKey);
         List<ChunkRef> refs = new ArrayList<>(chunks.size());
 
+        // Same rotation for every chunk — see class doc. FRONT's FaceRotations
+        // entry happens to be Ry(180°), which combined with the head item's
+        // built-in Ry(180°) lands every UV slot on its like-named world axis.
+        // HeadRotations is composed in for the per-slot debug spin knob.
+        Quaternionf canonicalRotation = HeadRotations.compose(
+                HeadFace.FRONT, FaceDir.SOUTH, FaceRotations.of(HeadFace.FRONT));
+
         for (Map.Entry<ChunkCoord, HeadsRegistry.Entry> entry : chunks.entrySet()) {
             ChunkCoord coord = entry.getKey();
             HeadSkin head = HeadsRegistry.toHeadSkin(entry.getValue());
             ItemStack itemStack = itemFactory.build(head);
 
-            FaceDir primary = pickPrimaryFace(coord, gridN);
-            HeadFace headFace = HeadSkinPacker.faceDirToHeadFace(primary);
-            Quaternionf faceRot = HeadRotations.compose(headFace, primary, FaceRotations.of(headFace));
+            Quaternionf faceRot = canonicalRotation;
 
             Vector3f translation = geom.translationFor(coord, faceRot);
             float scale = geom.chunkScale();
@@ -109,24 +130,6 @@ public final class FakeBlockFactory {
         }
 
         return new FakeBlock(origin, blockKey, gridN, refs);
-    }
-
-    /**
-     * Pick the {@link FaceDir} whose tile the chunk should "advertise" via
-     * its head-cube rotation. For face-center chunks (1 outward face) it's
-     * that face. For edge/corner chunks we pick deterministically — the
-     * head's adjacent slots will show the other outward tiles correctly,
-     * but the face rotation only orients one of them as "front".
-     *
-     * <p>Order matches {@link FaceDir} declaration: vertical (DOWN, UP) is
-     * preferred so blocks broken from above see the top face oriented
-     * outward. v1: simple iteration; v2 may pick by player view direction.
-     */
-    private static FaceDir pickPrimaryFace(ChunkCoord coord, int gridN) {
-        for (FaceDir d : FaceDir.values()) {
-            if (d.isOutwardAt(coord.x(), coord.y(), coord.z(), gridN)) return d;
-        }
-        throw new IllegalStateException("Interior chunk should have been filtered out: " + coord);
     }
 
     private static EnumSet<FaceDir> outwardFacesAt(ChunkCoord c, int gridN) {
