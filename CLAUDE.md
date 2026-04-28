@@ -13,9 +13,15 @@ gradle root project is `tessera`, package root is `io.tessera`.
 
 ## Build / Run / Bake
 
-The repo intentionally does **not** vendor a Gradle wrapper (see `.gitignore`).
-Use a system `gradle` (any 8.x that supports the `paperweight.userdev` plugin).
-Java toolchain is **JDK 25** but `release` is set to **21** for bytecode.
+The `gradle/wrapper/` jar + properties **are** committed (gradle 8.14.3 pinned
+in `gradle-wrapper.properties`), but the `gradlew` / `gradlew.bat` launch
+scripts are gitignored. Either run `gradle wrapper` once locally to drop the
+scripts, or use a system `gradle` (any 8.x that supports the
+`paperweight.userdev` plugin) — invoking `gradle <task>` works in both cases.
+CI (`.github/workflows/build.yml`) uses `gradle/actions/setup-gradle@v4` with
+the pinned `gradle-version: '8.14.3'` and runs `gradle build --no-daemon` on
+JDK 21. Java toolchain is **JDK 25** but `release` is set to **21** for
+bytecode, so any JDK ≥21 can consume the artifact.
 
 - `gradle build` — compile + run the (currently empty) test suite + produce the
   shaded plugin jar in `build/libs/tessera-<version>.jar`.
@@ -84,11 +90,14 @@ Pipeline stages (`io.tessera.skin.bake.BlockBaker.doBake` / `BakeMain.bakeOne`):
 spawns immediately (registry hit) or kicks off async runtime baking and spawns
 post-bake.
 
-`assemble.FakeBlockFactory.create` is the entry point that turns a `BlockKey` +
-world location into a `FakeBlock` (a list of `ChunkRef` = `ItemDisplay` +
-local-grid metadata). One `ItemDisplay` per visible chunk; all share the
-block-corner entity location so a single `Location.teleport` would move the
-whole lattice (intended for v2 physics).
+`assemble.FakeBlockFactory.create(loc, key, blockRotation)` is the entry point
+that turns a `BlockKey` + world location + per-state rotation into a
+`FakeBlock` (a list of `ChunkRef` = `ItemDisplay` + local-grid metadata). One
+`ItemDisplay` per visible chunk; all share the block-corner entity location so
+a single `Location.teleport` would move the whole lattice (intended for v2
+physics). The `blockRotation` quaternion is applied as `leftRotation` (block-
+level orientation), independent of the canonical face-rotation `rightRotation`
+(see invariant below).
 
 `effect.builtin.DirectionalShrinkEffect` is the only v1 effect: it scales each
 chunk to 0 with a wave delay computed from each chunk's projection on the
@@ -96,13 +105,51 @@ breaker's eye direction. Uses Display interpolation (client-side lerp), not
 per-tick server work — server cost is N scheduler tasks for N chunks plus one
 cleanup.
 
+### Variant rotation pipeline
+
+Anything orientable (logs, furnaces, observers, stairs…) has multiple
+blockstate variants whose rendered model differs by an `x`/`y` rotation. We
+bake the canonical (no-rotation) variant once and then rotate the entire
+FakeBlock at spawn time:
+
+1. **Bake time** (`assets.model.ModelResolver.parseVariants`): walks the
+   blockstate JSON's `variants` map, picks the variant with `x=0,y=0` (or the
+   first one as fallback) as the canonical model to extract textures from,
+   and records each variant key's `(xDeg, yDeg)` as a
+   `ModelResolver.VariantRotation`. `BakeMain` writes those into
+   `heads.json` under `blocks.<id>.variants` (alongside `chunks`). The new
+   schema wraps each block as `{ "chunks": {…}, "variants": {…} }`; the
+   legacy flat schema (chunk keys at top level, no wrapper) is still parsed
+   by `HeadsRegistry.parseBlock` for backward compat.
+2. **Spawn time** (`plugin.BlockBreakListener.spawn`):
+   `VariantKey.fromBlockData(blockData)` produces a vanilla-format key (e.g.
+   `axis=y`, `facing=west,lit=false`); `VariantKey.pickMatching` narrows it
+   against `registry.variantsFor(key)` by progressively dropping nuisance
+   properties (`waterlogged`, `powered`, …) until a known variant matches;
+   `registry.rotationFor(key, matchedKey)` returns the JOML quaternion
+   (`Ry(−y)·Rx(x)` — note the negated Y because vanilla's `y` rotates
+   clockwise from above whereas JOML's `rotateY` is right-handed) that gets
+   passed as `blockRotation` to `FakeBlockFactory.create`. Identity if
+   nothing matches, which renders as the canonical variant.
+
+This handles **orientation only** — state-dependent textures (lit furnace
+fronts, redstone-lamp glow) still render the canonical variant's textures,
+correctly oriented (see `TODO.md`).
+
 ### Critical invariant: canonical face rotation
 
 Every `ItemDisplay` in a `FakeBlock` uses **the same** `rightRotation`:
 `HeadRotations.compose(FRONT, SOUTH, FaceRotations.of(FRONT))` — which is
 `Ry(180°)` cancelling the player-head ItemStack's intrinsic `Ry(180°)`. With
 that cancellation, every UV slot's normal lands on its like-named world axis
-(`TOP→+Y`, `FRONT→+Z (south)`, `RIGHT→+X (east)`, etc.).
+(`TOP→+Y`, `BOTTOM→−Y`, `FRONT→+Z (south)`, `BACK→−Z (north)`).
+
+**The X axis is mirrored from what the slot names suggest:** the player-head
+model's `east` (+X) face samples the `LEFT` UV slot, and `west` (−X) samples
+`RIGHT`. So `HeadSkinPacker.headFaceToFaceDir` maps `RIGHT→WEST` and
+`LEFT→EAST`. This is invisible on uniform-textured blocks but mandatory for
+non-uniform blocks like `oak_log`; see PR #4 / the javadoc on
+`HeadSkinPacker.headFaceToFaceDir` for the full reasoning.
 
 `HeadSkinPacker.buildFaceTiles` paints each outward `FaceDir`'s tile into its
 matching `HeadFace` slot, so the canonical rotation makes every outward face
