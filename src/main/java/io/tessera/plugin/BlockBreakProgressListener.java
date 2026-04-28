@@ -10,6 +10,7 @@ import io.tessera.plugin.ProgressTracker.BlockPosKey;
 import io.tessera.plugin.ProgressTracker.State;
 import io.tessera.plugin.ProgressTracker.TrackedBreak;
 import io.tessera.plugin.TesseraConfig.AnimationMode;
+import io.tessera.plugin.TesseraConfig.CollapseStyle;
 import io.tessera.skin.HeadsRegistry;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
@@ -21,7 +22,9 @@ import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
+import org.bukkit.event.block.Action;
 import org.bukkit.event.player.PlayerChangedWorldEvent;
+import org.bukkit.event.player.PlayerInteractEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.scheduler.BukkitTask;
 import org.bukkit.util.Vector;
@@ -56,8 +59,20 @@ public final class BlockBreakProgressListener implements Listener {
     private static final long WATCHDOG_STALE_BOOTSTRAP_MS = 2500L;
     private static final long WATCHDOG_STALE_MIN_MS = 800L;
     private static final long WATCHDOG_STALE_MAX_MS = 4000L;
-    private static final int FORWARD_INTERP_TICKS = 1;
+    private static final int FORWARD_INTERP_TICKS_FALLBACK = 1;
     private static final int REVERSE_INTERP_TICKS = 1;
+    private static final long MS_PER_TICK = 50L;
+    // Vanilla mining surfaces 10 destroy stages, so each progress event nominally
+    // covers 0.1 of progress. We extrapolate one stage ahead so the client can
+    // smoothly lerp through the gap until the next event arrives.
+    private static final double STAGE_PER_EVENT = 0.1d;
+    // Cap predictive lookahead so a long pause near p≈0.9 doesn't force the
+    // client to lerp toward p≥1.0 (which would visually finish the break).
+    private static final double PREDICTIVE_TARGET_MAX = 0.95d;
+    // Don't extrapolate beyond this gap — slow blocks (obsidian etc.) can have
+    // multi-second gaps and we don't want a single event to stretch a smooth
+    // interpolation that long if mining stops.
+    private static final long MAX_INTERP_MS = 800L;
 
     private final TesseraPlugin plugin;
     private final FakeBlockFactory factory;
@@ -140,6 +155,16 @@ public final class BlockBreakProgressListener implements Listener {
             tb.state = State.FORWARD;
         }
 
+        // First real progress event for a speculative spawn confirms the
+        // player is actually mining. Drop the flag so the watchdog stops
+        // using the (short) left-click grace window for staleness.
+        if (tb.speculative) {
+            tb.speculative = false;
+            if (cfg.debug()) plugin.getLogger().info(
+                    "[debug-progress] speculative-confirmed " + tb.key + " at " + posKey
+                            + " progress=" + fmt(progress));
+        }
+
         // Update the per-tracker inter-event EMA so the watchdog can scale
         // its stale threshold to the block's actual cadence (slow blocks
         // emit events ~600-1000ms apart and would otherwise oscillate).
@@ -159,15 +184,91 @@ public final class BlockBreakProgressListener implements Listener {
     }
 
     /**
-     * Auto-tuned stale threshold: BOOTSTRAP until we've seen at least one
-     * inter-event gap, otherwise 3x EMA + 200ms slack clamped to [MIN, MAX].
+     * Speculative pre-spawn on left-click. Vanilla's first
+     * BlockBreakProgressUpdateEvent arrives only when the client crosses the
+     * 0.1 destroy-stage boundary, which on a default-speed mine is ~600ms
+     * after the player started swinging. Catching the click lets us spawn
+     * immediately so the animation actually starts when the player starts
+     * mining, not 600ms in.
+     *
+     * <p>If the click was a no-commit swing (player didn't actually start
+     * mining), no progress event will arrive and either the configured grace
+     * window or the watchdog reverses the speculative spawn back out.
      */
-    private static long staleThresholdFor(TrackedBreak tb) {
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onInteract(PlayerInteractEvent event) {
+        if (event.getAction() != Action.LEFT_CLICK_BLOCK) return;
+        TesseraConfig cfg = plugin.tesseraConfig();
+        if (cfg.animationMode() != AnimationMode.PROGRESS) return;
+        if (!cfg.startOnLeftClick()) return;
+
+        Block block = event.getClickedBlock();
+        if (block == null) return;
+        Player player = event.getPlayer();
+
+        // Skip instamine: post-break path will handle it cleanly with the
+        // full timed wave; pre-spawning would just be redundant.
+        try {
+            if (block.getBreakSpeed(player) >= 1.0f) return;
+        } catch (NoSuchMethodError ignored) {
+            // Older Paper without Block#getBreakSpeed; fall through and pre-spawn anyway.
+        }
+
+        Location breakLoc = block.getLocation();
+        BlockPosKey posKey = BlockPosKey.of(breakLoc);
+        // Already tracking this block - the in-flight tracker handles further events.
+        if (tracker.get(posKey) != null) return;
+
+        spawnAndRegister(player, block, breakLoc, posKey, 0d, cfg);
+        TrackedBreak tb = tracker.get(posKey);
+        if (tb == null) return; // gated out (not enabled / not baked / cap)
+        tb.speculative = true;
+        tb.initialGapEstimateMs = estimateInitialGapMs(block, player, cfg);
+        // Drive the watchdog off the configured grace, not the bootstrap default,
+        // so an idle swing rolls back quickly.
+        tb.lastUpdateTickMs = System.currentTimeMillis();
+        if (cfg.debug()) plugin.getLogger().info(
+                "[debug-progress] speculative-spawn at " + posKey
+                        + " player=" + player.getName()
+                        + " initialGapMs=" + tb.initialGapEstimateMs);
+    }
+
+    /**
+     * Auto-tuned stale threshold: speculative trackers use the configured
+     * left-click grace window so a no-commit swing rolls back quickly;
+     * otherwise BOOTSTRAP until we've seen at least one inter-event gap,
+     * then 3x EMA + 200ms slack clamped to [MIN, MAX].
+     */
+    private static long staleThresholdFor(TrackedBreak tb, TesseraConfig cfg) {
+        if (tb.speculative) return Math.max(100L, cfg.leftClickGraceMs());
         if (tb.avgEventGapMs == 0L) return WATCHDOG_STALE_BOOTSTRAP_MS;
         long base = tb.avgEventGapMs * 3L + 200L;
         if (base < WATCHDOG_STALE_MIN_MS) return WATCHDOG_STALE_MIN_MS;
         if (base > WATCHDOG_STALE_MAX_MS) return WATCHDOG_STALE_MAX_MS;
         return base;
+    }
+
+    /**
+     * Best-effort estimate of the gap between vanilla's 0.1-progress events
+     * for this (block, player, tool) combo. Uses Paper's
+     * {@code Block.getBreakSpeed(player)} (per-tick mining progress) when
+     * available; falls back to a reasonable default if the API throws.
+     * Returned value is clamped to [MS_PER_TICK, MAX_INTERP_MS].
+     */
+    private static long estimateInitialGapMs(Block block, Player player, TesseraConfig cfg) {
+        try {
+            float perTick = block.getBreakSpeed(player);
+            if (perTick > 0f) {
+                long perStageMs = (long) Math.ceil(STAGE_PER_EVENT / perTick * MS_PER_TICK);
+                if (perStageMs < MS_PER_TICK) return MS_PER_TICK;
+                if (perStageMs > MAX_INTERP_MS) return MAX_INTERP_MS;
+                return perStageMs;
+            }
+        } catch (NoSuchMethodError | RuntimeException ignored) {
+            // Older Paper or unexpected state - use the configured grace window
+            // as a conservative default.
+        }
+        return Math.max(MS_PER_TICK, Math.min(MAX_INTERP_MS, cfg.leftClickGraceMs()));
     }
 
     @EventHandler(priority = EventPriority.MONITOR)
@@ -249,8 +350,24 @@ public final class BlockBreakProgressListener implements Listener {
     }
 
     private void applyForward(TrackedBreak tb, double progress, TesseraConfig cfg) {
+        double targetProgress;
+        int interpTicks;
+        if (cfg.smoothInterpolation()) {
+            // Lerp toward where we expect to be at the next event so the
+            // 0.1-progress steps don't look chopped. The expected gap comes
+            // from the inter-event EMA once we have data, or the seeded
+            // estimate from Block#getBreakSpeed otherwise.
+            long gapMs = tb.avgEventGapMs > 0L ? tb.avgEventGapMs : tb.initialGapEstimateMs;
+            if (gapMs <= 0L) gapMs = MS_PER_TICK;
+            if (gapMs > MAX_INTERP_MS) gapMs = MAX_INTERP_MS;
+            interpTicks = Math.max(1, (int) Math.round((double) gapMs / MS_PER_TICK));
+            targetProgress = Math.min(PREDICTIVE_TARGET_MAX, progress + STAGE_PER_EVENT);
+        } else {
+            targetProgress = progress;
+            interpTicks = FORWARD_INTERP_TICKS_FALLBACK;
+        }
         DirectionalShrinkEffect.applyAtProgress(tb.fakeBlock, tb.chunkT, tb.baseScales, tb.currentScales,
-                progress, cfg.waveWindow(), FORWARD_INTERP_TICKS, cfg.progressMinDelta());
+                targetProgress, cfg.waveWindow(), interpTicks, cfg.progressMinDelta(), cfg.collapseStyle());
         tb.lastAppliedProgress = progress;
         tb.lastUpdateTickMs = System.currentTimeMillis();
         maybeForceBreak(tb, progress, cfg);
@@ -345,7 +462,7 @@ public final class BlockBreakProgressListener implements Listener {
                 rp = startProgress * (1.0 - (double) elapsed / (double) durationMs);
             }
             DirectionalShrinkEffect.applyAtProgress(tb.fakeBlock, tb.chunkT, tb.baseScales, tb.currentScales,
-                    rp, cfg.waveWindow(), REVERSE_INTERP_TICKS, cfg.progressMinDelta());
+                    rp, cfg.waveWindow(), REVERSE_INTERP_TICKS, cfg.progressMinDelta(), cfg.collapseStyle());
             tb.lastAppliedProgress = rp;
             tb.lastUpdateTickMs = System.currentTimeMillis();
             if (rp <= 0d) {
@@ -395,7 +512,7 @@ public final class BlockBreakProgressListener implements Listener {
         List<BlockPosKey> stale = new ArrayList<>();
         for (var e : tracker.snapshot()) {
             TrackedBreak tb = e.getValue();
-            if (tb.state == State.FORWARD && (now - tb.lastUpdateTickMs) > staleThresholdFor(tb)) {
+            if (tb.state == State.FORWARD && (now - tb.lastUpdateTickMs) > staleThresholdFor(tb, cfg)) {
                 stale.add(e.getKey());
             }
         }
@@ -405,8 +522,9 @@ public final class BlockBreakProgressListener implements Listener {
             if (cfg.debug()) plugin.getLogger().info(
                     "[debug-progress] watchdog-cancel " + tb.key + " at " + k
                             + " stale=" + (now - tb.lastUpdateTickMs) + "ms"
-                            + " threshold=" + staleThresholdFor(tb) + "ms"
-                            + " avgGap=" + tb.avgEventGapMs + "ms");
+                            + " threshold=" + staleThresholdFor(tb, cfg) + "ms"
+                            + " avgGap=" + tb.avgEventGapMs + "ms"
+                            + " speculative=" + tb.speculative);
             beginReverse(tb, k, cfg);
         }
     }

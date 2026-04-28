@@ -31,7 +31,6 @@ public final class BlockBreakListener implements Listener {
     private final FakeBlockFactory factory;
     private final HeadsRegistry registry;
     private final BlockBaker baker;
-    private final DirectionalShrinkEffect effect = new DirectionalShrinkEffect();
     private final AtomicInteger active;
     private final ProgressTracker tracker;
     private final BlockBreakProgressListener progressListener;
@@ -131,7 +130,7 @@ public final class BlockBreakListener implements Listener {
         }
 
         EffectContext ctx = new EffectContext(eyeDir, System.currentTimeMillis(), cfg.effectDurationMs(), plugin);
-        effect.applyTimed(fb, ctx);
+        new DirectionalShrinkEffect(cfg.collapseStyle()).applyTimed(fb, ctx);
 
         long despawnTicks = (cfg.effectDurationMs() / 50L) + 5L;
         plugin.getServer().getScheduler().runTaskLater(plugin, active::decrementAndGet, despawnTicks);

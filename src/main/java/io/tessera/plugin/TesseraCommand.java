@@ -185,7 +185,7 @@ public final class TesseraCommand implements CommandExecutor {
                 System.currentTimeMillis(),
                 plugin.tesseraConfig().effectDurationMs(),
                 plugin);
-        new DirectionalShrinkEffect().applyTimed(fb, ctx);
+        new DirectionalShrinkEffect(plugin.tesseraConfig().collapseStyle()).applyTimed(fb, ctx);
         sender.sendMessage("§aSpawned FakeBlock for " + key + " at " + formatLoc(target));
     }
 
