@@ -22,6 +22,18 @@ repositories {
     maven("https://repo.inventivetalent.org/repository/public/")
 }
 
+// paperweight by default puts the mojang-mapped paper-server jar onto both
+// compileOnly and testImplementation. Its META-INF/services entry registers
+// io.papermc.paper.ServerBuildInfoImpl, whose constructor calls
+// net.minecraft.SharedConstants.getCurrentVersion() — that fails outside a
+// real Paper boot and torpedoes MockBukkit.mock() with a chained
+// ServiceConfigurationError. Restricting the dependency to compileOnly keeps
+// main compilation against the 1.21.4 dev bundle while letting MockBukkit's
+// transitive paper-api 1.21.1 provide the Bukkit surface for tests.
+paperweight {
+    addServerDependencyTo.set(setOf(configurations.compileOnly.get()))
+}
+
 dependencies {
     paperweight.paperDevBundle("1.21.4-R0.1-SNAPSHOT")
 
