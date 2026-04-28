@@ -1,11 +1,6 @@
 package io.tessera.assemble;
 
-import io.tessera.core.BlockKey;
-import io.tessera.core.ChunkCoord;
-import io.tessera.core.ChunkRef;
-import io.tessera.core.FaceDir;
-import io.tessera.core.FakeBlock;
-import io.tessera.core.HeadFace;
+import io.tessera.core.*;
 import io.tessera.skin.HeadSkin;
 import io.tessera.skin.HeadsRegistry;
 import org.bukkit.Location;
@@ -76,7 +71,7 @@ public final class FakeBlockFactory {
      * it (the listener checks {@code registry.has(blockKey)} before calling).
      *
      * @param blockLocation the world location of the block (any coordinate inside the cell works; we floor it)
-     * @param blockKey the namespaced ID of the block being replaced
+     * @param blockKey      the namespaced ID of the block being replaced
      */
     public FakeBlock create(Location blockLocation, BlockKey blockKey) {
         return create(blockLocation, blockKey, new Quaternionf());
@@ -136,6 +131,15 @@ public final class FakeBlockFactory {
                 d.setTransformation(tx);
                 d.setInterpolationDuration(0);
                 d.setInterpolationDelay(0);
+                // Solid blocks store light-level 0 internally — the light engine only
+                // records light in air/transparent spaces, not inside opaque blocks.
+                // At break time the position is still solid (or air but not yet
+                // propagated), so Block.getLightFromSky() / getLightFromBlocks()
+                // both return 0, causing the entity to flash black. Pinning (15,15)
+                // avoids the flicker; the correct fix is to delay spawn by one tick
+                // so propagation completes, then omit setBrightness and let the
+                // entity sample its position naturally.
+                d.setBrightness(new org.bukkit.entity.Display.Brightness(15, 15));
                 d.setViewRange(1.0f);
                 d.setPersistent(false);
             });
