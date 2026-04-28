@@ -8,6 +8,7 @@ import com.google.gson.JsonParser;
 import io.tessera.assets.fetch.McAssetClient;
 import io.tessera.assets.model.BlockModel;
 import io.tessera.assets.model.ModelResolver;
+import io.tessera.assets.model.ModelResolver.VariantRotation;
 import io.tessera.core.BlockKey;
 import io.tessera.core.ChunkSpec;
 import io.tessera.skin.HeadSkin;
@@ -193,8 +194,25 @@ public final class BakeMain {
         if (chunkToHash.isEmpty()) {
             logger.info("[" + key + "] no completed skins; not writing a block entry");
             state.blocks.remove(key.asString());
+            state.variants.remove(key.asString());
         } else {
             state.blocks.put(key.asString(), chunkToHash);
+            // Capture per-variant rotation hints alongside the chunk map so
+            // the runtime can orient oak_log[axis=x] etc. correctly without
+            // re-parsing the blockstate JSON. Empty for blocks with only
+            // one variant (no rotation needed) — those entries omit the
+            // "variants" subobject entirely on write.
+            TreeMap<String, ModelResolver.VariantRotation> variantMap = new TreeMap<>();
+            for (Map.Entry<String, ModelResolver.VariantRotation> e : model.variantRotations().entrySet()) {
+                if (e.getValue().xDeg() != 0 || e.getValue().yDeg() != 0) {
+                    variantMap.put(e.getKey(), e.getValue());
+                }
+            }
+            if (variantMap.isEmpty()) {
+                state.variants.remove(key.asString());
+            } else {
+                state.variants.put(key.asString(), variantMap);
+            }
         }
     }
 
@@ -221,6 +239,7 @@ public final class BakeMain {
         String version;
         int gridN;
         TreeMap<String, TreeMap<String, String>> blocks = new TreeMap<>();
+        TreeMap<String, TreeMap<String, VariantRotation>> variants = new TreeMap<>();
         TreeMap<String, Skin> skinByHash = new TreeMap<>();
 
         BakeState(String version, int gridN) {
@@ -249,12 +268,29 @@ public final class BakeMain {
             }
             if (root.has("blocks")) {
                 for (Map.Entry<String, JsonElement> b : root.getAsJsonObject("blocks").entrySet()) {
+                    JsonObject blockObj = b.getValue().getAsJsonObject();
                     TreeMap<String, String> chunks = new TreeMap<>();
-                    for (Map.Entry<String, JsonElement> c : b.getValue().getAsJsonObject().entrySet()) {
-                        String hash = c.getValue().getAsJsonObject().get("skinHash").getAsString();
-                        chunks.put(c.getKey(), hash);
+                    // Accept both legacy (chunk coords at top-level) and
+                    // wrapper schemas. Skip "variants" key; treat anything
+                    // else with a "skinHash" sub-key as a chunk entry.
+                    for (Map.Entry<String, JsonElement> c : blockObj.entrySet()) {
+                        if (c.getKey().equals("variants")) continue;
+                        if (!c.getValue().isJsonObject()) continue;
+                        JsonObject co = c.getValue().getAsJsonObject();
+                        if (!co.has("skinHash")) continue;
+                        chunks.put(c.getKey(), co.get("skinHash").getAsString());
                     }
                     s.blocks.put(b.getKey(), chunks);
+                    if (blockObj.has("variants")) {
+                        TreeMap<String, VariantRotation> vmap = new TreeMap<>();
+                        for (Map.Entry<String, JsonElement> ve : blockObj.getAsJsonObject("variants").entrySet()) {
+                            JsonObject v = ve.getValue().getAsJsonObject();
+                            int xDeg = v.has("x") ? v.get("x").getAsInt() : 0;
+                            int yDeg = v.has("y") ? v.get("y").getAsInt() : 0;
+                            vmap.put(ve.getKey(), new VariantRotation(xDeg, yDeg));
+                        }
+                        s.variants.put(b.getKey(), vmap);
+                    }
                 }
             }
             return s;
@@ -285,6 +321,17 @@ public final class BakeMain {
                             JsonObject chunk = new JsonObject();
                             chunk.addProperty("skinHash", c.getValue());
                             block.add(c.getKey(), chunk);
+                        }
+                        TreeMap<String, VariantRotation> vmap = variants.get(entry.getKey());
+                        if (vmap != null && !vmap.isEmpty()) {
+                            JsonObject vJson = new JsonObject();
+                            for (Map.Entry<String, VariantRotation> ve : vmap.entrySet()) {
+                                JsonObject ro = new JsonObject();
+                                if (ve.getValue().xDeg() != 0) ro.addProperty("x", ve.getValue().xDeg());
+                                if (ve.getValue().yDeg() != 0) ro.addProperty("y", ve.getValue().yDeg());
+                                vJson.add(ve.getKey(), ro);
+                            }
+                            block.add("variants", vJson);
                         }
                         blocksJson.add(entry.getKey(), block);
                     });

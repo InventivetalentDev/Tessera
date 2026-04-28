@@ -7,11 +7,13 @@ import com.google.gson.JsonParser;
 import io.tessera.assets.fetch.McAssetClient;
 import io.tessera.core.BlockKey;
 import io.tessera.core.FaceDir;
+import org.joml.Quaternionf;
 
 import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.util.Collections;
 import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -83,13 +85,13 @@ public final class ModelResolver {
             JsonObject blockstate = JsonParser.parseString(
                     client.fetchString(version, "blockstates/" + key.path() + ".json"))
                     .getAsJsonObject();
-            String modelName = pickFirstVariantModel(blockstate);
-            if (modelName == null) {
+            BlockstateVariants vs = parseVariants(blockstate);
+            if (vs.canonicalModelName == null) {
                 logger.fine("[" + key + "] blockstate has no usable variant; skipping");
                 return Optional.empty();
             }
 
-            ResolvedModel resolved = resolveModelChain(modelName);
+            ResolvedModel resolved = resolveModelChain(vs.canonicalModelName);
             if (!CUBE_PARENTS.contains(resolved.terminalParent)) {
                 logger.fine("[" + key + "] non-cube parent " + resolved.terminalParent + "; skipping");
                 return Optional.empty();
@@ -101,7 +103,7 @@ public final class ModelResolver {
                 return Optional.empty();
             }
             boolean tinted = TINTED_BLOCKS.contains(key.path());
-            return Optional.of(new BlockModel(key, faces, tinted, resolved.terminalParent));
+            return Optional.of(new BlockModel(key, faces, tinted, resolved.terminalParent, vs.rotations()));
         } catch (McAssetClient.AssetNotFoundException missing) {
             logger.fine("[" + key + "] no blockstate on mcasset.cloud (" + missing.getMessage() + ")");
             return Optional.empty();
@@ -114,43 +116,117 @@ public final class ModelResolver {
         }
     }
 
-    private static String pickFirstVariantModel(JsonObject blockstate) {
+    /**
+     * Per-variant rotation hints from a blockstate JSON. Carries the raw
+     * {@code x}/{@code y} integers (multiples of 90, in degrees) so the
+     * values round-trip cleanly through {@code heads.json} without any
+     * quaternion-to-Euler ambiguity. Use {@link #toQuat} for the runtime
+     * world-space rotation.
+     *
+     * <p>Vanilla composition order: {@code y} (yaw) is applied after
+     * {@code x} (pitch) — i.e. tilt the cube up/down first, then spin
+     * around the world Y axis.
+     *
+     * <p><b>Y sign:</b> vanilla blockstate's {@code y} rotates clockwise as
+     * viewed from above (so {@code y=90} maps the model's {@code -Z} face to
+     * world {@code +X} — north→east, which matches what
+     * {@code facing=east} variants expect). JOML's {@code rotateY} is the
+     * standard right-hand rule (counter-clockwise from above), so we negate
+     * the angle here. {@code x} matches in both — vanilla's pitch and JOML's
+     * {@code rotateX} are both right-handed, verified against
+     * {@code oak_log[axis=z]} which uses {@code x=90} alone.
+     *
+     * <p>For axis-only blocks (logs) the sign was invisible because
+     * {@code ±X} is the same axis. The bug surfaced only after
+     * {@link #pickFaceTextures} was switched to read per-face textures from
+     * the model's {@code elements} (commit 432a91f) — previously the
+     * {@code switch (parent)} mismapped {@code orientable}'s front from
+     * north to south, accidentally cancelling the toQuat sign error for
+     * {@code facing=east}/{@code west}.
+     */
+    public record VariantRotation(int xDeg, int yDeg) {
+        public static final VariantRotation IDENTITY = new VariantRotation(0, 0);
+
+        public Quaternionf toQuat() {
+            return new Quaternionf()
+                    .rotateY((float) Math.toRadians(-yDeg))
+                    .rotateX((float) Math.toRadians(xDeg));
+        }
+    }
+
+    /**
+     * Carries the per-block result of parsing a blockstate JSON: which model
+     * to bake textures from (canonical = the variant with no x/y rotation
+     * hints, falling back to the first one), plus a map from variant key
+     * (e.g. {@code "axis=x"}, {@code "facing=west,lit=false"}) to the
+     * rotation that variant requires for correct world orientation.
+     *
+     * <p>Used by {@link #doResolve} to feed both the texture pipeline and
+     * the runtime spawn-time rotation lookup. Variant keys mirror vanilla's
+     * format (alphabetically sorted, comma-separated). Multipart blockstates
+     * collapse to empty since per-state rotation isn't meaningful for them
+     * in v1.
+     */
+    public record BlockstateVariants(String canonicalModelName, Map<String, VariantRotation> rotations) {}
+
+    private static BlockstateVariants parseVariants(JsonObject blockstate) {
         if (blockstate.has("variants")) {
             JsonObject variants = blockstate.getAsJsonObject("variants");
+            String canonical = null;
+            String firstSeen = null;
+            Map<String, VariantRotation> rotations = new LinkedHashMap<>();
             for (Map.Entry<String, JsonElement> e : variants.entrySet()) {
                 JsonElement v = e.getValue();
                 JsonObject obj = v.isJsonArray() ? v.getAsJsonArray().get(0).getAsJsonObject() : v.getAsJsonObject();
-                return obj.get("model").getAsString();
+                String model = obj.get("model").getAsString();
+                int xDeg = obj.has("x") ? obj.get("x").getAsInt() : 0;
+                int yDeg = obj.has("y") ? obj.get("y").getAsInt() : 0;
+                rotations.put(e.getKey(), new VariantRotation(xDeg, yDeg));
+                if (firstSeen == null) firstSeen = model;
+                if (canonical == null && xDeg == 0 && yDeg == 0) canonical = model;
             }
+            return new BlockstateVariants(canonical != null ? canonical : firstSeen, rotations);
         }
         if (blockstate.has("multipart")) {
             JsonArray arr = blockstate.getAsJsonArray("multipart");
             if (arr.size() > 0) {
                 JsonElement applied = arr.get(0).getAsJsonObject().get("apply");
                 JsonObject obj = applied.isJsonArray() ? applied.getAsJsonArray().get(0).getAsJsonObject() : applied.getAsJsonObject();
-                return obj.get("model").getAsString();
+                return new BlockstateVariants(obj.get("model").getAsString(), Collections.emptyMap());
             }
         }
-        return null;
+        return new BlockstateVariants(null, Collections.emptyMap());
     }
 
     private static final class ResolvedModel {
         final String terminalParent;
         final Map<String, String> textureVars;
-        ResolvedModel(String terminalParent, Map<String, String> textureVars) {
+        final JsonArray elements;
+        ResolvedModel(String terminalParent, Map<String, String> textureVars, JsonArray elements) {
             this.terminalParent = terminalParent;
             this.textureVars = textureVars;
+            this.elements = elements;
         }
     }
 
     /**
-     * Walk the parent chain accumulating texture-variable bindings, until a
-     * recognized cube parent (or {@code minecraft:block/block}) is hit.
+     * Walk the parent chain to the root, accumulating texture-variable bindings
+     * (child-first wins) and capturing the first {@code elements} array seen
+     * (vanilla overrides elements wholesale, so first-seen wins). The terminal
+     * parent is the first {@link #CUBE_PARENTS} entry encountered, which is
+     * what gates the cube-only filter upstream.
+     *
+     * <p>We always walk to the root rather than breaking at the first cube
+     * parent: vanilla's {@code elements} live in {@code block/cube} (the
+     * deepest parent), but most blocks' immediate parent is something like
+     * {@code cube_column} or {@code orientable} (also in {@link #CUBE_PARENTS}).
+     * Stopping early would never see the elements.
      */
     private ResolvedModel resolveModelChain(String firstModel) throws IOException {
         Map<String, String> tex = new LinkedHashMap<>();
         String current = withDefaultNamespace(firstModel);
         String terminal = null;
+        JsonArray elements = null;
         int hops = 0;
 
         while (hops++ < 16) {
@@ -167,12 +243,16 @@ public final class ModelResolver {
                 }
             }
 
-            if (CUBE_PARENTS.contains(current)) {
-                terminal = current;
-                break;
+            if (elements == null && obj.has("elements")) {
+                elements = obj.getAsJsonArray("elements");
             }
-            if (!obj.has("parent")) {
+
+            if (terminal == null && CUBE_PARENTS.contains(current)) {
                 terminal = current;
+            }
+
+            if (!obj.has("parent")) {
+                if (terminal == null) terminal = current;
                 break;
             }
             current = withDefaultNamespace(obj.get("parent").getAsString());
@@ -183,7 +263,7 @@ public final class ModelResolver {
         for (Map.Entry<String, String> e : tex.entrySet()) {
             resolved.put(e.getKey(), resolveTextureRef(e.getValue(), tex));
         }
-        return new ResolvedModel(terminal, resolved);
+        return new ResolvedModel(terminal, resolved, elements);
     }
 
     private static String resolveTextureRef(String value, Map<String, String> bindings) {
@@ -197,71 +277,56 @@ public final class ModelResolver {
         return s;
     }
 
+    /**
+     * Extract per-face textures by reading the model's {@code elements} array
+     * directly. Each face entry in {@code elements[i].faces.<dir>} carries a
+     * {@code texture} reference (e.g. {@code "#front"}) which we resolve
+     * against the accumulated variable bindings. This is parent-agnostic and
+     * naturally handles {@code cube_all}, {@code cube_column},
+     * {@code orientable}, {@code orientable_with_bottom}, {@code cube_top},
+     * {@code cube_bottom_top} and any future cube parent vanilla introduces.
+     */
     private EnumMap<FaceDir, BufferedImage> pickFaceTextures(BlockKey key, ResolvedModel m) throws IOException {
         EnumMap<FaceDir, BufferedImage> out = new EnumMap<>(FaceDir.class);
-        Map<String, String> t = m.textureVars;
-
-        // For "cube_all" all 6 faces use #all.
-        // For "cube_column" sides=#side, ends=#end.
-        // For "cube_bottom_top" top=#top, bottom=#bottom, sides=#side.
-        // For full "cube" each face is named.
-        String parent = m.terminalParent;
-        switch (parent) {
-            case "minecraft:block/cube_all", "minecraft:block/cube_mirrored_all" -> {
-                BufferedImage all = loadTexture(t.get("all"));
-                for (FaceDir d : FaceDir.values()) out.put(d, all);
+        if (m.elements == null) {
+            logger.fine("[" + key + "] no elements in model chain; skipping");
+            return out;
+        }
+        // CUBE_PARENTS gating upstream guarantees the model is a single full
+        // 1×1×1 cube, so the first full-cube element wins.
+        JsonObject cube = findFullCubeElement(m.elements);
+        if (cube == null || !cube.has("faces")) {
+            logger.fine("[" + key + "] no full-cube element with faces; skipping");
+            return out;
+        }
+        JsonObject faces = cube.getAsJsonObject("faces");
+        for (FaceDir d : FaceDir.values()) {
+            String jsonName = d.jsonName();
+            if (!faces.has(jsonName)) {
+                logger.fine("[" + key + "] face " + jsonName + " missing from cube element");
+                return new EnumMap<>(FaceDir.class);
             }
-            case "minecraft:block/cube_column", "minecraft:block/cube_column_horizontal" -> {
-                BufferedImage side = loadTexture(t.get("side"));
-                BufferedImage end  = loadTexture(t.get("end"));
-                out.put(FaceDir.UP,    end);
-                out.put(FaceDir.DOWN,  end);
-                out.put(FaceDir.NORTH, side);
-                out.put(FaceDir.SOUTH, side);
-                out.put(FaceDir.EAST,  side);
-                out.put(FaceDir.WEST,  side);
-            }
-            case "minecraft:block/cube_bottom_top" -> {
-                BufferedImage top = loadTexture(t.get("top"));
-                BufferedImage bot = loadTexture(t.get("bottom"));
-                BufferedImage side = loadTexture(t.get("side"));
-                out.put(FaceDir.UP,   top);
-                out.put(FaceDir.DOWN, bot);
-                out.put(FaceDir.NORTH, side); out.put(FaceDir.SOUTH, side);
-                out.put(FaceDir.EAST,  side); out.put(FaceDir.WEST,  side);
-            }
-            case "minecraft:block/cube_top" -> {
-                BufferedImage top = loadTexture(t.get("top"));
-                BufferedImage side = loadTexture(t.get("side"));
-                out.put(FaceDir.UP,   top);
-                out.put(FaceDir.DOWN, top);
-                out.put(FaceDir.NORTH, side); out.put(FaceDir.SOUTH, side);
-                out.put(FaceDir.EAST,  side); out.put(FaceDir.WEST,  side);
-            }
-            case "minecraft:block/orientable", "minecraft:block/orientable_with_bottom" -> {
-                BufferedImage top = loadTexture(t.get("top"));
-                BufferedImage bot = parent.endsWith("_with_bottom")
-                        ? loadTexture(t.get("bottom")) : top;
-                BufferedImage front = loadTexture(t.get("front"));
-                BufferedImage side = loadTexture(t.get("side"));
-                out.put(FaceDir.UP,   top);
-                out.put(FaceDir.DOWN, bot);
-                out.put(FaceDir.NORTH, side);
-                out.put(FaceDir.SOUTH, front);
-                out.put(FaceDir.EAST,  side);
-                out.put(FaceDir.WEST,  side);
-            }
-            case "minecraft:block/cube", "minecraft:block/cube_directional", "minecraft:block/cube_mirrored" -> {
-                out.put(FaceDir.UP,    loadTexture(t.getOrDefault("up",    t.get("all"))));
-                out.put(FaceDir.DOWN,  loadTexture(t.getOrDefault("down",  t.get("all"))));
-                out.put(FaceDir.NORTH, loadTexture(t.getOrDefault("north", t.get("all"))));
-                out.put(FaceDir.SOUTH, loadTexture(t.getOrDefault("south", t.get("all"))));
-                out.put(FaceDir.EAST,  loadTexture(t.getOrDefault("east",  t.get("all"))));
-                out.put(FaceDir.WEST,  loadTexture(t.getOrDefault("west",  t.get("all"))));
-            }
-            default -> logger.fine("[" + key + "] unsupported cube parent " + parent);
+            String ref = faces.getAsJsonObject(jsonName).get("texture").getAsString();
+            String resolved = resolveTextureRef(ref, m.textureVars);
+            out.put(d, loadTexture(resolved));
         }
         return out;
+    }
+
+    private static JsonObject findFullCubeElement(JsonArray elements) {
+        for (JsonElement e : elements) {
+            JsonObject obj = e.getAsJsonObject();
+            if (isFullCubeBounds(obj)) return obj;
+        }
+        return null;
+    }
+
+    private static boolean isFullCubeBounds(JsonObject element) {
+        if (!element.has("from") || !element.has("to")) return false;
+        JsonArray from = element.getAsJsonArray("from");
+        JsonArray to = element.getAsJsonArray("to");
+        return from.get(0).getAsFloat() == 0f && from.get(1).getAsFloat() == 0f && from.get(2).getAsFloat() == 0f
+            && to.get(0).getAsFloat() == 16f && to.get(1).getAsFloat() == 16f && to.get(2).getAsFloat() == 16f;
     }
 
     private BufferedImage loadTexture(String ref) throws IOException {

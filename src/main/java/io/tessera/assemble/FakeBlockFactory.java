@@ -37,13 +37,17 @@ import java.util.Map;
  *
  * <p><b>Canonical rotation:</b> the player-head ItemStack's natural render
  * applies {@code Ry(180°)} to the cube (FRONT slot, UV +Z, ends up at world
- * -Z). Applying {@code Ry(180°)} again on top cancels that, so all six UV
- * slot normals land on their like-named world axes:
- * {@code TOP → +Y, BOTTOM → -Y, FRONT → +Z (south), BACK → -Z (north),
- * RIGHT → +X (east), LEFT → -X (west)}. With
- * {@link io.tessera.skin.HeadSkinPacker} painting each outward FaceDir's
- * tile into its matching HeadFace slot, every viewer sees the correct
- * tile on whichever face they look at — no per-chunk rotation pick required.
+ * -Z). Applying {@code Ry(180°)} again on top cancels that, so the cube
+ * renders identity in world space. The skin-region → world-direction map
+ * is then determined by the vanilla head model's per-face UVs:
+ * {@code TOP → +Y (up), BOTTOM → -Y (down), FRONT → +Z (south),
+ * BACK → -Z (north), LEFT → +X (east), RIGHT → -X (west)}. The X axes
+ * are swapped relative to slot-name intuition because the model's
+ * {@code east} cube face samples the LEFT skin region (the wearer's left
+ * cheek, which with Steve facing south is at +X). {@code HeadSkinPacker}
+ * accounts for this: each outward FaceDir's tile is packed into the slot
+ * that the model actually shows on that world direction, so every viewer
+ * sees the correct tile on whichever face they look at.
  *
  * <p>Mosaikin's per-face FaceRotations table only made sense in that
  * project's "one face shown per head" model. Tessera needs all outward
@@ -75,11 +79,24 @@ public final class FakeBlockFactory {
      * @param blockKey the namespaced ID of the block being replaced
      */
     public FakeBlock create(Location blockLocation, BlockKey blockKey) {
+        return create(blockLocation, blockKey, new Quaternionf());
+    }
+
+    /**
+     * Spawn a FakeBlock with a non-identity block rotation — used to honour
+     * vanilla blockstate variants (e.g. {@code oak_log[axis=x]} ships with
+     * {@code x:90, y:90} relative to the canonical baked model). The
+     * rotation is applied as the {@link BlockGeometry}'s {@code L} matrix:
+     * the cube formation rotates as a whole, while each chunk's individual
+     * canonical rotation (the {@code R} matrix) stays the same so all
+     * outward faces continue to render their correct slot tile.
+     */
+    public FakeBlock create(Location blockLocation, BlockKey blockKey, Quaternionf blockRotation) {
         World world = blockLocation.getWorld();
         if (world == null) throw new IllegalArgumentException("Location has no world");
 
         int gridN = registry.gridN();
-        BlockGeometry geom = BlockGeometry.axisAligned(gridN);
+        BlockGeometry geom = new BlockGeometry(gridN, blockRotation);
 
         // Snap to block grid origin — the lower NW-down corner of the cell.
         Location origin = new Location(world,
@@ -109,7 +126,7 @@ public final class FakeBlockFactory {
 
             Transformation tx = new Transformation(
                     translation,
-                    new Quaternionf(),                    // leftRotation = identity (block rotation)
+                    new Quaternionf(blockRotation),       // L = block rotation (variant Ry/Rx)
                     new Vector3f(scale, scale, scale),
                     faceRot);
 
@@ -129,7 +146,7 @@ public final class FakeBlockFactory {
                     outwardFacesAt(coord, gridN)));
         }
 
-        return new FakeBlock(origin, blockKey, gridN, refs);
+        return new FakeBlock(origin, blockKey, gridN, refs, blockRotation);
     }
 
     private static EnumSet<FaceDir> outwardFacesAt(ChunkCoord c, int gridN) {

@@ -22,15 +22,20 @@ import java.util.Map;
  * sample the (sx,sy) tile of each outward face such that the image lines up
  * across adjacent chunks — i.e. neighbouring chunks' tiles are pixel-adjacent.
  *
- * <p>Per-face source-tile mapping (matches the standard vanilla face UV
- * conventions; verified empirically in step 11 of the plan):
+ * <p>Per-face source-tile mapping. Sides match vanilla
+ * {@code BlockElementFace.defaultFaceUV} verbatim. UP and DOWN match
+ * each other rather than vanilla's mismatched cube up/down convention,
+ * because the player-head model used by ItemDisplay rendering shares
+ * the skin layout's image-Y = +Z direction on both TOP and BOTTOM
+ * (verified empirically — vanilla's cube {@code image-Y = -Z} on DOWN
+ * does not apply to the skull model).
  * <ul>
- *   <li>UP    (+Y) — tileX = cx,             tileY = (N-1) − cz</li>
- *   <li>DOWN  (-Y) — tileX = cx,             tileY = cz</li>
- *   <li>NORTH (-Z) — tileX = (N-1) − cx,     tileY = (N-1) − cy</li>
- *   <li>SOUTH (+Z) — tileX = cx,             tileY = (N-1) − cy</li>
- *   <li>EAST  (+X) — tileX = (N-1) − cz,     tileY = (N-1) − cy</li>
- *   <li>WEST  (-X) — tileX = cz,             tileY = (N-1) − cy</li>
+ *   <li>UP    (+Y) — tileX = cx,             tileY = cz             (image-X = +X, image-Y = +Z)</li>
+ *   <li>DOWN  (-Y) — tileX = cx,             tileY = cz             (image-X = +X, image-Y = +Z, head-model convention)</li>
+ *   <li>NORTH (-Z) — tileX = (N-1) − cx,     tileY = (N-1) − cy     (image-X = -X, image-Y = -Y)</li>
+ *   <li>SOUTH (+Z) — tileX = cx,             tileY = (N-1) − cy     (image-X = +X, image-Y = -Y)</li>
+ *   <li>EAST  (+X) — tileX = (N-1) − cz,     tileY = (N-1) − cy     (image-X = -Z, image-Y = -Y)</li>
+ *   <li>WEST  (-X) — tileX = cz,             tileY = (N-1) − cy     (image-X = +Z, image-Y = -Y)</li>
  * </ul>
  * If an axis flip turns out wrong on a given face during step 11 tuning, fix
  * it in {@link #sourceTile} alone — every other module references chunks by
@@ -144,7 +149,18 @@ public final class TextureSplitter {
     private static int[] sourceTile(FaceDir d, int cx, int cy, int cz, int n) {
         int last = n - 1;
         return switch (d) {
-            case UP    -> new int[] { cx,        last - cz };
+            // UP uses (cx, cz) — image-Y = +Z. DOWN's mapping is also
+            // (cx, cz) here, but the head model's BOTTOM UV actually has
+            // image-Y = -Z (matching vanilla cube DOWN, not TOP); we
+            // compensate via a default V-flip in SourceFlips.DOWN rather
+            // than diverging the lookup here. Sides match the cube
+            // convention verbatim.
+            //
+            // The earlier `(cx, last - cz)` on UP V-flipped at the
+            // chunk-grid level: invisible on V-symmetric textures
+            // (oak_planks, stone) but visibly mirrored on V-asymmetric
+            // ones (oak_log_top rings, pumpkin_top stem).
+            case UP    -> new int[] { cx,        cz };
             case DOWN  -> new int[] { cx,        cz };
             case NORTH -> new int[] { last - cx, last - cy };
             case SOUTH -> new int[] { cx,        last - cy };

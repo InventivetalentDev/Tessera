@@ -34,21 +34,29 @@ HeadRotations.compose(HeadFace.FRONT, FaceDir.SOUTH, FaceRotations.of(HeadFace.F
 `FaceRotations.FRONT` is `Ry(180°)`. That cancels the player-head
 ItemStack's built-in `Ry(180°)` (documented in `FaceRotations`'s
 javadoc). With the two flips cancelling, the cube renders identity in
-world space, so each UV slot's normal lands on its like-named world axis:
+world space. Slot-to-world mapping is then dictated by the vanilla head
+model's per-face UVs (which faces sample which skin region):
 
-| HeadFace slot | UV-space normal | World direction after canonical rotation | FaceDir |
-|---------------|------------------|------------------------------------------|---------|
-| TOP           | +Y               | +Y (up)                                  | UP      |
-| BOTTOM        | −Y               | −Y (down)                                | DOWN    |
-| FRONT         | +Z               | +Z (south)                               | SOUTH   |
-| BACK          | −Z               | −Z (north)                               | NORTH   |
-| RIGHT         | +X               | +X (east)                                | EAST    |
-| LEFT          | −X               | −X (west)                                | WEST    |
+| HeadFace slot | Skin UV rect    | Model cube face that samples it | World direction | FaceDir |
+|---------------|-----------------|---------------------------------|-----------------|---------|
+| TOP           | (8,0)-(16,8)    | up                              | +Y (up)         | UP      |
+| BOTTOM        | (16,0)-(24,8)   | down                            | −Y (down)       | DOWN    |
+| FRONT         | (8,8)-(16,16)   | south                           | +Z (south)      | SOUTH   |
+| BACK          | (24,8)-(32,16)  | north                           | −Z (north)      | NORTH   |
+| LEFT          | (16,8)-(24,16)  | east                            | +X (east)       | EAST    |
+| RIGHT         | (0,8)-(8,16)    | west                            | −X (west)       | WEST    |
 
-`HeadSkinPacker.buildFaceTiles` already paints each outward `FaceDir`'s
-tile into its matching `HeadFace` slot, so once the cube is canonically
-rotated, every outward face shows the correct tile to whichever direction
-that face points.
+The X axes look swapped relative to slot-name intuition: the LEFT slot
+("wearer's left cheek") renders on world *east*, and RIGHT renders on
+*west*. That's because Steve's natural orientation faces south, and the
+wearer's left side is at +X when facing south. The vanilla model's
+`east` cube face is wired to sample the LEFT skin region, full stop.
+
+`HeadSkinPacker.buildFaceTiles` accounts for this when packing: each
+outward `FaceDir`'s tile is placed into the slot that actually renders
+on that world direction (so `chunk.tile(EAST)` goes into LEFT, not
+RIGHT), and once the cube is canonically rotated every outward face
+shows the correct tile.
 
 `HeadRotations` is composed in for the per-slot debug spin, but with
 canonical rotation the spin is now around the FRONT slot's local +Z
@@ -114,10 +122,6 @@ rotation pointing the picked slot east-ish but everything else wrong.
   non-outward slots so identical chunks dedup to one MineSkin upload.
   The filler does no harm under canonical rotation — non-outward slots
   point inward and aren't visible.
-- **The BOTTOM pre-mirror in `SkinAssembler`** — vanilla samples the
-  BOTTOM face with U flipped relative to the other five, so we paint
-  BOTTOM with U swapped on `Graphics2D.drawImage` to cancel that.
-  Independent of orientation strategy.
 - **Nearest-neighbor scaling for tile→slot upscale** — replaced an
   edge-replication padding scheme that produced a stretched-2×2-center
   artifact masking everything else.
@@ -134,10 +138,12 @@ If a face still looks off after the canonical-rotation fix:
    debug markers.
 2. Look at each face from outside the block. You should see one HeadFace
    fill colour per face: `TOP`=light gray, `BOTTOM`=dark gray,
-   `FRONT`=orange (south), `BACK`=purple (north), `RIGHT`=magenta (east),
-   `LEFT`=teal (west). Same colour everywhere on the face including
-   edges and corners — *not* a different colour per chunk row. If you do
-   see per-row variation, the canonical rotation isn't being applied.
+   `FRONT`=orange (south), `BACK`=purple (north), `LEFT`=teal (east),
+   `RIGHT`=magenta (west). The X swap is real — see the slot↔world
+   direction table at the top of this doc. Same colour everywhere on the
+   face including edges and corners — *not* a different colour per chunk
+   row. If you do see per-row variation, the canonical rotation isn't
+   being applied.
 3. Read the four border colours on each face (red top / green right /
    blue bottom / yellow left). If a face has them rotated, set
    `TileRotations.<that-slot>` to the rotation that brings them upright.
@@ -148,3 +154,80 @@ If a face still looks off after the canonical-rotation fix:
 whole source texture per `FaceDir`. They're rarely needed once the
 six-tile orientation is correct — they exist for textures whose source
 orientation disagrees with the chunk-grid axes.
+
+## Per-face texture resolution: read the model, don't switch on parent
+
+Source of truth: `ModelResolver.pickFaceTextures` and `resolveModelChain`.
+
+**Don't** map texture variables to `FaceDir` based on parent name.
+Vanilla model JSON encodes the per-face mapping directly — every cube
+parent's `elements[i].faces.<dir>.texture` is a `"#var"` reference that
+resolves through the texture-variable bindings accumulated up the parent
+chain. Read those refs and you're done; the mapping naturally handles
+`cube`, `cube_all`, `cube_column`, `orientable`, `orientable_with_bottom`,
+`cube_top`, `cube_bottom_top`, and any future cube parent.
+
+The previous parent-switch implementation got `orientable`'s mapping
+wrong: vanilla's `orientable.json` has `north: "#front"`, but the switch
+hardcoded `out.put(FaceDir.SOUTH, front)`. The bug was invisible for
+blocks placed `facing=east`/`west` because `Ry(±90°)` lands the carved
+face on the right axis regardless of which side it started on, but
+flipped `facing=north`/`south` jack o' lanterns and furnaces 180°.
+
+**Chain-walk gotcha.** When you walk the parent chain to harvest texture
+vars + `elements`, do NOT break at the first `CUBE_PARENTS` entry.
+Vanilla's `elements` array lives in `block/cube` (the deepest cube
+parent), but most blocks' immediate parent is something like
+`cube_column` or `orientable` — both also in `CUBE_PARENTS`. Stopping
+early would never reach the model that actually has elements. Walk all
+the way to the root, set `terminal` on the *first* cube parent seen
+(that's still the right answer for the cube-only filter upstream), and
+keep going. Disk-cached, so the extra HTTP calls are free.
+
+## Variant rotation: Minecraft Y is opposite-sign from JOML
+
+Source of truth: `ModelResolver.VariantRotation.toQuat`.
+
+Vanilla blockstate `y` rotates **clockwise** when viewed from above:
+`y=90` maps the model's `-Z` (north) face to world `+X` (east), which is
+exactly what `facing=east` expects. JOML's `rotateY` is the standard
+right-hand rule (counter-clockwise from above), the opposite sense. So
+`toQuat` negates `yDeg` before feeding it to `rotateY`.
+
+`xDeg` does *not* need negation: vanilla pitch and JOML's `rotateX` are
+both right-handed. Verified against `oak_log[axis=z]` (`x=90` alone),
+which renders correctly with the unflipped sign.
+
+**Why it took two bugs to surface this.** The original `toQuat` fed
+`yDeg` straight in (wrong sign). The original `pickFaceTextures` for
+`orientable` put `front` on south instead of north (wrong face). Those
+two bugs cancelled exactly for `facing=east`/`west` (start with front on
++Z, JOML +90° → +X = east; right answer for the wrong reason), so only
+`facing=north`/`south` looked broken. Axis-only blocks (logs) didn't
+care because `±X` is the same axis.
+
+After fixing `pickFaceTextures` to read from `elements`, the toQuat sign
+error became the sole remaining offset and surfaced as east/west
+swapped. **Order matters**: the texture fix has to come first or the
+two errors keep cancelling. Lesson generalised: when two transformations
+compose and one looks "right," verify each in isolation against
+ground-truth before assuming the chain is correct.
+
+## BOTTOM face: image-Y = -Z, not +Z
+
+The head model's BOTTOM UV slot has image-Y pointing toward world `-Z`
+(matching vanilla cube DOWN), not `+Z` (matching TOP) as a previous
+empirical pass had concluded. That earlier conclusion was reached by
+testing with rotationally near-symmetric textures (`oak_log_top` rings,
+`pumpkin_top` stem) — the V-flip difference was invisible on those.
+Once the parent-switch removal correctly routed `furnace_side` (a
+highly directional texture with a chimney groove at the top) onto DOWN,
+the mismatch became unmistakable.
+
+Encoded as `SourceFlips.DEFAULTS.DOWN = V`, applied by
+`TextureSplitter` before slicing. The splitter's `sourceTile` lookup
+keeps `(cx, cz)` for both UP and DOWN — the V-flip in SourceFlips
+expresses the BOTTOM-vs-TOP UV difference cleanly without diverging the
+per-face lookup. Verified against furnaces (chimney groove orientation
+on the bottom face) and jack o' lanterns (pumpkin_top stem position).
+

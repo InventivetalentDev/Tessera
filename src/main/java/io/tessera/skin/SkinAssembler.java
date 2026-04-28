@@ -14,21 +14,21 @@ import java.util.Map;
 
 /**
  * Paints up to 6 chunk tiles onto a 64x64 transparent skin canvas. Mosaikin
- * port — the BOTTOM-flip is the critical bit and is preserved verbatim.
+ * port — but the BOTTOM U-pre-mirror that came over from Mosaikin has been
+ * removed; see history below.
  *
- * <p><b>BOTTOM face quirk:</b> vanilla Minecraft samples the head's BOTTOM
- * face with its U axis flipped relative to all other faces. If we painted
- * the chunk normally into the BOTTOM UV rect, the rendered face would show
- * the image mirrored horizontally. To compensate, BOTTOM tiles are
- * pre-mirrored on paint via the 9-arg {@code drawImage} with swapped
- * destination {@code dx1}/{@code dx2}. The vanilla renderer's flip then
- * cancels our flip, leaving the image right-side-up on the cube.
+ * <p><b>BOTTOM face note:</b> vanilla block rendering samples the BOTTOM
+ * face with U flipped, but the player-head model's BOTTOM UV (used by
+ * ItemDisplay rendering) does <em>not</em> apply the same flip. An earlier
+ * version of this class pre-mirrored BOTTOM tiles on paint to compensate
+ * for the assumed flip — that was wrong, and produced an X-flipped BOTTOM
+ * face that was invisible on V/H-symmetric textures (oak_planks, stone)
+ * but mirrored asymmetric ones (oak_log_top rings). Now BOTTOM paints
+ * identically to the other faces.
  *
  * <p>Tile-to-region paste rule: a chunk's tile (typically 4x4 px when
- * {@code gridN=4}) is center-pasted into the 8x8 region. Edge pixels are
- * padded outward to fill the full 8x8 so that any 8x8 mip-mapping or
- * texture-filter sampling produces consistent colors at the seam between
- * chunk heads. (For {@code gridN=2}, tile = 8x8, no padding needed.)
+ * {@code gridN=4}) is upscaled with nearest-neighbor sampling to the 8x8
+ * slot region by {@link #nearestNeighborScale}.
  */
 public final class SkinAssembler {
 
@@ -80,15 +80,7 @@ public final class SkinAssembler {
         BufferedImage flipped = applyFlip(rotated, TileFlips.of(face));
         BufferedImage scaled = nearestNeighborScale(flipped, face.width(), face.height());
 
-        if (face == HeadFace.BOTTOM) {
-            // Mirror horizontally on paint: dx1/dx2 swap = source U-axis flips.
-            g.drawImage(scaled,
-                    face.u1, face.v0, face.u0, face.v1,
-                    0, 0, scaled.getWidth(), scaled.getHeight(),
-                    null);
-        } else {
-            g.drawImage(scaled, face.u0, face.v0, null);
-        }
+        g.drawImage(scaled, face.u0, face.v0, null);
     }
 
     /** Apply horizontal/vertical/both mirror per {@link TileFlips}. */

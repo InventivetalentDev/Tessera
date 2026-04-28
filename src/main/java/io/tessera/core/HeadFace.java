@@ -17,11 +17,16 @@ public enum HeadFace {
     TOP    ( 8,  0, 16,  8),
     /** Bottom of head — vanilla samples this with U flipped; SkinAssembler pre-mirrors. */
     BOTTOM (16,  0, 24,  8),
-    /** Wearer's right cheek (i.e. the cube's +X face when the head is identity-rotated). */
+    /** Wearer's right cheek — sampled by the model's {@code west} (-X) cube
+     *  face, so under canonical rotation this slot's pixels render on
+     *  world west. (With Steve facing +Z south, the wearer's right side is
+     *  at -X.) */
     RIGHT  ( 0,  8,  8, 16),
-    /** Wearer's face — the +Z face of the cube in skin-UV space. */
+    /** Wearer's face — sampled by the model's {@code south} (+Z) cube face;
+     *  renders on world south under canonical rotation. */
     FRONT  ( 8,  8, 16, 16),
-    /** Wearer's left cheek. */
+    /** Wearer's left cheek — sampled by the model's {@code east} (+X) cube
+     *  face; renders on world east under canonical rotation. */
     LEFT   (16,  8, 24, 16),
     /** Back of head. */
     BACK   (24,  8, 32, 16);

@@ -3,6 +3,7 @@ package io.tessera.plugin;
 import io.tessera.assemble.FakeBlockFactory;
 import io.tessera.core.BlockKey;
 import io.tessera.core.FakeBlock;
+import io.tessera.core.VariantKey;
 import io.tessera.effect.EffectContext;
 import io.tessera.effect.builtin.DirectionalShrinkEffect;
 import io.tessera.skin.HeadsRegistry;
@@ -10,12 +11,14 @@ import io.tessera.skin.bake.BlockBaker;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.Material;
+import org.bukkit.block.data.BlockData;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.block.BlockBreakEvent;
 import org.bukkit.util.Vector;
+import org.joml.Quaternionf;
 
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -53,11 +56,14 @@ public final class BlockBreakListener implements Listener {
         }
 
         Location breakLoc = event.getBlock().getLocation();
+        // BlockData captures the full state (axis, facing, lit, ...) — needed
+        // so non-default variants render with the correct rotation.
+        BlockData blockData = event.getBlock().getBlockData();
         Vector eyeDir = event.getPlayer().getEyeLocation().getDirection();
         UUID world = event.getPlayer().getWorld().getUID();
 
         if (registry.has(key)) {
-            spawn(key, breakLoc, eyeDir, cfg);
+            spawn(key, blockData, breakLoc, eyeDir, cfg);
             return;
         }
 
@@ -74,16 +80,24 @@ public final class BlockBreakListener implements Listener {
             if (!ok) return;
             // Re-check world is still loaded; player may have logged off.
             if (Bukkit.getWorld(world) == null) return;
-            Bukkit.getScheduler().runTask(plugin, () -> spawn(key, breakLoc, eyeDir, cfg));
+            Bukkit.getScheduler().runTask(plugin, () -> spawn(key, blockData, breakLoc, eyeDir, cfg));
         });
     }
 
-    private void spawn(BlockKey key, Location breakLoc, Vector eyeDir, TesseraConfig cfg) {
+    private void spawn(BlockKey key, BlockData blockData, Location breakLoc, Vector eyeDir, TesseraConfig cfg) {
         if (active.get() >= cfg.maxConcurrentFakeBlocks()) return;
         active.incrementAndGet();
+        // Resolve the blockstate variant rotation (identity if the block has
+        // no per-state variants registered or the state doesn't match any
+        // known key). Falling back to identity = render as canonical
+        // variant, which is a reasonable default for unsupported states.
+        String fullStateKey = VariantKey.fromBlockData(blockData);
+        String matchedKey = VariantKey.pickMatching(fullStateKey, registry.variantsFor(key).keySet());
+        Quaternionf blockRotation = registry.rotationFor(key, matchedKey);
+
         FakeBlock fb;
         try {
-            fb = factory.create(breakLoc, key);
+            fb = factory.create(breakLoc, key, blockRotation);
         } catch (RuntimeException re) {
             active.decrementAndGet();
             plugin.getLogger().warning("Failed to spawn FakeBlock for " + key + ": " + re.getMessage());
