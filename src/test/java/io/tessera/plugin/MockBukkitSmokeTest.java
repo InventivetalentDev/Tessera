@@ -15,14 +15,11 @@ import static org.junit.jupiter.api.Assertions.assertSame;
  * server boots and tears down cleanly so later integration tests can build
  * on it.
  *
- * <p>Loading {@link TesseraPlugin} directly under MockBukkit-v1.20 currently
- * fails — our {@code plugin.yml} declares {@code api-version: '1.21'} and
- * {@link TesseraPlugin#onEnable()} touches Paper-only APIs (ItemDisplay,
- * {@code Bukkit.getMinecraftVersion}) plus a bundled {@code /heads.json}.
- * Once a MockBukkit-v1.21 artifact is available we should add a
- * full-lifecycle test ({@code MockBukkit.load(TesseraPlugin.class)} +
- * onEnable/onDisable assertions). Until then, this smoke test verifies the
- * harness wiring without booting the plugin.
+ * <p>A full-lifecycle test that loads {@link TesseraPlugin} via
+ * {@code MockBukkit.load(TesseraPlugin.class)} is the obvious next step;
+ * splitting it out keeps this smoke test fast (no plugin.yml parse, no
+ * {@code onEnable} side effects) and lets us isolate harness regressions
+ * from plugin-internal regressions.
  */
 class MockBukkitSmokeTest {
 
