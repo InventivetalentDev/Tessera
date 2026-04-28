@@ -136,7 +136,6 @@ public final class FakeBlockFactory {
                 d.setTransformation(tx);
                 d.setInterpolationDuration(0);
                 d.setInterpolationDelay(0);
-                d.setBrightness(new org.bukkit.entity.Display.Brightness(15, 15));
                 d.setViewRange(1.0f);
                 d.setPersistent(false);
             });

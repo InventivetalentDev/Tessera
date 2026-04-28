@@ -71,7 +71,24 @@ public final class HeadSkinPacker {
         for (HeadFace hf : HeadFace.values()) {
             FaceDir matching = headFaceToFaceDir(hf);
             BufferedImage tile = chunk.tile(matching);
-            out.put(hf, tile != null ? tile : filler);
+            out.put(hf, applyShade(tile != null ? tile : filler, matching.shade()));
+        }
+        return out;
+    }
+
+    private static BufferedImage applyShade(BufferedImage src, float factor) {
+        if (factor == 1.0f) return src;
+        int w = src.getWidth(), h = src.getHeight();
+        BufferedImage out = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB);
+        for (int y = 0; y < h; y++) {
+            for (int x = 0; x < w; x++) {
+                int argb = src.getRGB(x, y);
+                int a =  (argb >> 24) & 0xFF;
+                int r = (int)(((argb >> 16) & 0xFF) * factor);
+                int g = (int)(((argb >>  8) & 0xFF) * factor);
+                int b = (int)(( argb        & 0xFF) * factor);
+                out.setRGB(x, y, (a << 24) | (r << 16) | (g << 8) | b);
+            }
         }
         return out;
     }
