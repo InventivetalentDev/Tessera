@@ -139,7 +139,7 @@ public final class FakeBlockFactory {
                 // avoids the flicker; the correct fix is to delay spawn by one tick
                 // so propagation completes, then omit setBrightness and let the
                 // entity sample its position naturally.
-                d.setBrightness(new org.bukkit.entity.Display.Brightness(15, 15));
+//                d.setBrightness(new org.bukkit.entity.Display.Brightness(14, 14));
                 d.setViewRange(1.0f);
                 d.setPersistent(false);
             });
