@@ -149,19 +149,17 @@ public final class TextureSplitter {
     private static int[] sourceTile(FaceDir d, int cx, int cy, int cz, int n) {
         int last = n - 1;
         return switch (d) {
-            // UP and DOWN both use (cx, cz). Vanilla `defaultFaceUV`
-            // (BlockElementFace) has DOWN at image-Y = -Z, but the
-            // player-head model used by ItemDisplay rendering doesn't
-            // follow that — its BOTTOM UV shares image-Y = +Z with TOP,
-            // matching the standard player skin layout convention. Sides
-            // match the cube convention verbatim.
+            // UP uses (cx, cz) — image-Y = +Z. DOWN's mapping is also
+            // (cx, cz) here, but the head model's BOTTOM UV actually has
+            // image-Y = -Z (matching vanilla cube DOWN, not TOP); we
+            // compensate via a default V-flip in SourceFlips.DOWN rather
+            // than diverging the lookup here. Sides match the cube
+            // convention verbatim.
             //
             // The earlier `(cx, last - cz)` on UP V-flipped at the
             // chunk-grid level: invisible on V-symmetric textures
             // (oak_planks, stone) but visibly mirrored on V-asymmetric
-            // ones (oak_log_top rings, pumpkin_top stem). Likewise an
-            // attempt to set DOWN to `(cx, last - cz)` to mirror the
-            // cube convention introduced an inverse V-flip there.
+            // ones (oak_log_top rings, pumpkin_top stem).
             case UP    -> new int[] { cx,        cz };
             case DOWN  -> new int[] { cx,        cz };
             case NORTH -> new int[] { last - cx, last - cy };

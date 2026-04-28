@@ -213,39 +213,21 @@ two errors keep cancelling. Lesson generalised: when two transformations
 compose and one looks "right," verify each in isolation against
 ground-truth before assuming the chain is correct.
 
-## Known issue: BOTTOM face on directional blocks looks rotated/flipped
+## BOTTOM face: image-Y = -Z, not +Z
 
-Symptom: after the parent-switch removal, furnace and jack o' lantern
-bottom faces appear rotated or mirrored relative to vanilla. Furnaces
-are the obvious case — vanilla's `orientable.json` has `down: "#side"`,
-so the bottom now correctly shows `furnace_side` (a highly directional
-texture with a chimney groove at the top). Before the fix, the
-parent-switch mistakenly painted `#top` on DOWN, hiding any UV mismatch
-behind a near-symmetric texture.
+The head model's BOTTOM UV slot has image-Y pointing toward world `-Z`
+(matching vanilla cube DOWN), not `+Z` (matching TOP) as a previous
+empirical pass had concluded. That earlier conclusion was reached by
+testing with rotationally near-symmetric textures (`oak_log_top` rings,
+`pumpkin_top` stem) — the V-flip difference was invisible on those.
+Once the parent-switch removal correctly routed `furnace_side` (a
+highly directional texture with a chimney groove at the top) onto DOWN,
+the mismatch became unmistakable.
 
-The DOWN splitter mapping (`TextureSplitter.sourceTile`) is currently
-`(cx, cz)` — same as UP — based on empirical tuning with rotation-
-symmetric textures (oak_log_top rings, pumpkin_top). With a clearly
-directional texture now landing on the bottom, the head model's BOTTOM
-UV convention may not actually match TOP's the way the prior fix
-assumed.
-
-**Diagnostic recipe** (to converge on the right per-face transform
-without guessing):
-
-1. `/tessera debug debugtex on`, break + replace a furnace, look at the
-   bottom face from below. The four border colours (red top, green
-   right, blue bottom, yellow left) tell you the slot's image-axis
-   orientation directly.
-2. If borders are rotated relative to upright: `/tessera debug tilerot
-   bottom <90|180|270>` until they read upright.
-3. If borders are mirrored: `/tessera debug tileflip bottom <h|v|hv>`.
-4. If neither alone fixes it, the issue is at the source-texture level
-   (image-X/Y axes don't align with the chunk-grid axes for that face);
-   try `/tessera debug sourcerot down` / `sourceflip down`.
-5. Once tuned, fold the value into `TileRotations.DEFAULTS` /
-   `TileFlips.DEFAULTS` for `BOTTOM`, or `SourceRotations.DEFAULTS` /
-   `SourceFlips.DEFAULTS` for `DOWN`. Re-test with `oak_log_top`,
-   `pumpkin_top`, and stone to make sure the previously-correct cases
-   stay correct.
+Encoded as `SourceFlips.DEFAULTS.DOWN = V`, applied by
+`TextureSplitter` before slicing. The splitter's `sourceTile` lookup
+keeps `(cx, cz)` for both UP and DOWN — the V-flip in SourceFlips
+expresses the BOTTOM-vs-TOP UV difference cleanly without diverging the
+per-face lookup. Verified against furnaces (chimney groove orientation
+on the bottom face) and jack o' lanterns (pumpkin_top stem position).
 

@@ -53,6 +53,18 @@ public final class SourceFlips {
 
     static {
         for (FaceDir f : FaceDir.values()) DEFAULTS.put(f, Flip.NONE);
+        // DOWN: V-flip the source before slicing. The head model's BOTTOM
+        // UV has image-Y = -Z, matching vanilla cube DOWN, while
+        // TextureSplitter.sourceTile uses (cx, cz) for both UP and DOWN
+        // (image-Y = +Z) — that's correct for UP but not DOWN. Easier to
+        // express the BOTTOM convention as a source flip than to special-
+        // case the DOWN tile lookup. Verified empirically with furnace_side
+        // (chimney groove orientation) and pumpkin_top (stem position) on
+        // furnaces / jack o' lanterns. The earlier (cx, cz)-on-DOWN
+        // empirical tuning used oak_log_top (rings) and pumpkin_top, both
+        // near-rotationally-symmetric, so the mismatch was invisible until
+        // the parent-switch removal correctly routed furnace_side to DOWN.
+        DEFAULTS.put(FaceDir.DOWN, Flip.V);
         CURRENT.putAll(DEFAULTS);
     }
 
