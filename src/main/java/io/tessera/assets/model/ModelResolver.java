@@ -126,13 +126,30 @@ public final class ModelResolver {
      * <p>Vanilla composition order: {@code y} (yaw) is applied after
      * {@code x} (pitch) — i.e. tilt the cube up/down first, then spin
      * around the world Y axis.
+     *
+     * <p><b>Y sign:</b> vanilla blockstate's {@code y} rotates clockwise as
+     * viewed from above (so {@code y=90} maps the model's {@code -Z} face to
+     * world {@code +X} — north→east, which matches what
+     * {@code facing=east} variants expect). JOML's {@code rotateY} is the
+     * standard right-hand rule (counter-clockwise from above), so we negate
+     * the angle here. {@code x} matches in both — vanilla's pitch and JOML's
+     * {@code rotateX} are both right-handed, verified against
+     * {@code oak_log[axis=z]} which uses {@code x=90} alone.
+     *
+     * <p>For axis-only blocks (logs) the sign was invisible because
+     * {@code ±X} is the same axis. The bug surfaced only after
+     * {@link #pickFaceTextures} was switched to read per-face textures from
+     * the model's {@code elements} (commit 432a91f) — previously the
+     * {@code switch (parent)} mismapped {@code orientable}'s front from
+     * north to south, accidentally cancelling the toQuat sign error for
+     * {@code facing=east}/{@code west}.
      */
     public record VariantRotation(int xDeg, int yDeg) {
         public static final VariantRotation IDENTITY = new VariantRotation(0, 0);
 
         public Quaternionf toQuat() {
             return new Quaternionf()
-                    .rotateY((float) Math.toRadians(yDeg))
+                    .rotateY((float) Math.toRadians(-yDeg))
                     .rotateX((float) Math.toRadians(xDeg));
         }
     }
