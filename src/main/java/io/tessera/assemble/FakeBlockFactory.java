@@ -8,6 +8,7 @@ import org.bukkit.World;
 import org.bukkit.entity.ItemDisplay;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.util.Transformation;
+import org.bukkit.util.Vector;
 import org.joml.Quaternionf;
 import org.joml.Vector3f;
 
@@ -74,7 +75,30 @@ public final class FakeBlockFactory {
      * @param blockKey      the namespaced ID of the block being replaced
      */
     public FakeBlock create(Location blockLocation, BlockKey blockKey) {
-        return create(blockLocation, BakeKey.untinted(blockKey), new Quaternionf());
+        return create(blockLocation, BakeKey.untinted(blockKey), new Quaternionf(), false, null);
+    }
+
+    public FakeBlock create(Location blockLocation, BlockKey blockKey, Quaternionf blockRotation) {
+        return create(blockLocation, BakeKey.untinted(blockKey), blockRotation, false, null);
+    }
+
+    /**
+     * Tint-aware overload: looks up chunks via {@link BakeKey} so per-tint
+     * runtime variants (grass/leaves baked against a specific biome color)
+     * resolve to their own chunk map rather than the canonical untinted one.
+     */
+    public FakeBlock create(Location blockLocation, BakeKey bakeKey, Quaternionf blockRotation) {
+        return create(blockLocation, bakeKey, blockRotation, false, null);
+    }
+
+    /**
+     * Untinted convenience for callers that don't need biome-tint awareness.
+     * Wraps the {@code blockKey} as {@link BakeKey#untinted(BlockKey)} and
+     * delegates to the {@link BakeKey}-keyed implementation.
+     */
+    public FakeBlock create(Location blockLocation, BlockKey blockKey,
+                            Quaternionf blockRotation, boolean fillInterior, Vector eyeDir) {
+        return create(blockLocation, BakeKey.untinted(blockKey), blockRotation, fillInterior, eyeDir);
     }
 
     /**
@@ -85,17 +109,18 @@ public final class FakeBlockFactory {
      * the cube formation rotates as a whole, while each chunk's individual
      * canonical rotation (the {@code R} matrix) stays the same so all
      * outward faces continue to render their correct slot tile.
+     *
+     * <p>If {@code fillInterior} is {@code true}, the (gridN−2)³ chunks that
+     * normally make up the hollow center are also spawned, restricted to the
+     * half of the cube nearest the breaker (the far half is invisible until
+     * the wave is mostly through, so leaving it hollow saves entities at the
+     * cost of a brief peek-through near animation end). Interior chunks
+     * borrow the skin of an outer face-center chunk — close enough for the
+     * brief moment they're visible during the wave passage. {@code eyeDir}
+     * is required when {@code fillInterior} is true; it's ignored otherwise.
      */
-    public FakeBlock create(Location blockLocation, BlockKey blockKey, Quaternionf blockRotation) {
-        return create(blockLocation, BakeKey.untinted(blockKey), blockRotation);
-    }
-
-    /**
-     * Tint-aware overload: looks up chunks via {@link BakeKey} so per-tint
-     * runtime variants (grass/leaves baked against a specific biome color)
-     * resolve to their own chunk map rather than the canonical untinted one.
-     */
-    public FakeBlock create(Location blockLocation, BakeKey bakeKey, Quaternionf blockRotation) {
+    public FakeBlock create(Location blockLocation, BakeKey bakeKey,
+                            Quaternionf blockRotation, boolean fillInterior, Vector eyeDir) {
         World world = blockLocation.getWorld();
         if (world == null) throw new IllegalArgumentException("Location has no world");
 
@@ -158,7 +183,106 @@ public final class FakeBlockFactory {
                     outwardFacesAt(coord, gridN)));
         }
 
+        if (fillInterior && gridN >= 3 && !chunks.isEmpty()) {
+            spawnInteriorChunks(world, origin, geom, chunks, blockRotation,
+                    canonicalRotation, gridN, eyeDir, refs);
+        }
+
         return new FakeBlock(origin, bakeKey.block(), gridN, refs, blockRotation);
+    }
+
+    /**
+     * Spawn the inner (gridN−2)³ chunks (those with no outward face) using
+     * a donor outer chunk's skin. Restricts to the breaker-facing half via
+     * the rotated-local-center · eyeDir projection so we only pay the entity
+     * cost for chunks the player will actually see during the wave passage.
+     * Identity threshold (chunks at the cube's midplane and nearer) is the
+     * sweet spot — covers the visible half plus a slim safety margin.
+     */
+    private void spawnInteriorChunks(World world, Location origin, BlockGeometry geom,
+                                     Map<ChunkCoord, HeadsRegistry.Entry> chunks,
+                                     Quaternionf blockRotation, Quaternionf canonicalRotation,
+                                     int gridN, Vector eyeDir,
+                                     List<ChunkRef> refs) {
+        HeadsRegistry.Entry donorEntry = pickInteriorDonor(chunks, gridN);
+        if (donorEntry == null) return;
+        HeadSkin donorSkin = HeadsRegistry.toHeadSkin(donorEntry);
+        ItemStack donorStack = itemFactory.build(donorSkin);
+
+        // Eye direction (block-rotation-aware), used to pick the half closest
+        // to the breaker. If unavailable we fill everything — the caller
+        // should avoid that at high gridN.
+        Vector3f dir = null;
+        if (eyeDir != null) {
+            Vector e = eyeDir.clone().normalize();
+            dir = new Vector3f((float) e.getX(), (float) e.getY(), (float) e.getZ());
+        }
+        Vector3f blockCenter = new Vector3f(0.5f, 0.5f, 0.5f);
+
+        for (int x = 1; x < gridN - 1; x++) {
+            for (int y = 1; y < gridN - 1; y++) {
+                for (int z = 1; z < gridN - 1; z++) {
+                    ChunkCoord coord = new ChunkCoord(x, y, z);
+                    if (dir != null) {
+                        // Same projection as ChunkWaveSampler — chunks with
+                        // negative projection sit on the breaker-facing side
+                        // of the cube center and are exposed early in the
+                        // wave. Drop the far-side ones to keep entity count
+                        // manageable.
+                        Vector3f rel = geom.chunkLocalCenter(coord).sub(blockCenter);
+                        blockRotation.transform(rel);
+                        if (rel.dot(dir) > 0f) continue;
+                    }
+
+                    Vector3f translation = geom.translationFor(coord, canonicalRotation);
+                    float scale = geom.chunkScale();
+                    Transformation tx = new Transformation(
+                            translation,
+                            new Quaternionf(blockRotation),
+                            new Vector3f(scale, scale, scale),
+                            canonicalRotation);
+
+                    ItemStack stackCopy = donorStack.clone();
+                    ItemDisplay display = world.spawn(origin, ItemDisplay.class, d -> {
+                        d.setItemStack(stackCopy);
+                        d.setItemDisplayTransform(ItemDisplay.ItemDisplayTransform.NONE);
+                        d.setTransformation(tx);
+                        d.setInterpolationDuration(0);
+                        d.setInterpolationDelay(0);
+                        d.setViewRange(1.0f);
+                        d.setPersistent(false);
+                    });
+
+                    refs.add(new ChunkRef(display, coord,
+                            geom.chunkLocalCenter(coord),
+                            EnumSet.noneOf(FaceDir.class)));
+                }
+            }
+        }
+    }
+
+    /**
+     * Pick a sensible donor skin for interior chunks: prefer a face-center
+     * chunk (one outward face only), since its filler-tile fallback in
+     * {@link io.tessera.skin.HeadSkinPacker} replicates the visible face
+     * texture across all six head-skin slots — so the interior chunk
+     * shows the block's surface texture from any viewing angle. Falls back
+     * to the first available chunk if no face-center is found (e.g. some
+     * weird gridN=2 case).
+     */
+    private static HeadsRegistry.Entry pickInteriorDonor(Map<ChunkCoord, HeadsRegistry.Entry> chunks, int gridN) {
+        HeadsRegistry.Entry fallback = null;
+        for (Map.Entry<ChunkCoord, HeadsRegistry.Entry> e : chunks.entrySet()) {
+            if (fallback == null) fallback = e.getValue();
+            ChunkCoord c = e.getKey();
+            int outward = 0;
+            int last = gridN - 1;
+            if (c.x() == 0 || c.x() == last) outward++;
+            if (c.y() == 0 || c.y() == last) outward++;
+            if (c.z() == 0 || c.z() == last) outward++;
+            if (outward == 1) return e.getValue();
+        }
+        return fallback;
     }
 
     private static EnumSet<FaceDir> outwardFacesAt(ChunkCoord c, int gridN) {

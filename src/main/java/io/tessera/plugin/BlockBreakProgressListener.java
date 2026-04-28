@@ -313,17 +313,17 @@ public final class BlockBreakProgressListener implements Listener {
         String matchedKey = VariantKey.pickMatching(fullStateKey, registry.variantsFor(key).keySet());
         Quaternionf blockRotation = registry.rotationFor(key, matchedKey);
 
+        Vector eyeDir = player.getEyeLocation().getDirection();
         active.incrementAndGet();
         FakeBlock fb;
         try {
-            fb = factory.create(breakLoc, bakeKey, blockRotation);
+            fb = factory.create(breakLoc, bakeKey, blockRotation, cfg.fillInterior(), eyeDir);
         } catch (RuntimeException re) {
             active.decrementAndGet();
             plugin.getLogger().warning("Failed to spawn FakeBlock for " + bakeKey + ": " + re.getMessage());
             return;
         }
 
-        Vector eyeDir = player.getEyeLocation().getDirection();
         double[] chunkT = io.tessera.effect.ChunkWaveSampler.precomputeT(fb, eyeDir);
         float[] base = DirectionalShrinkEffect.captureBaseScales(fb);
         float[] current = base.clone();

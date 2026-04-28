@@ -122,7 +122,7 @@ public final class BlockBreakListener implements Listener {
 
         FakeBlock fb;
         try {
-            fb = factory.create(breakLoc, bakeKey, blockRotation);
+            fb = factory.create(breakLoc, bakeKey, blockRotation, cfg.fillInterior(), eyeDir);
         } catch (RuntimeException re) {
             active.decrementAndGet();
             plugin.getLogger().warning("Failed to spawn FakeBlock for " + bakeKey + ": " + re.getMessage());

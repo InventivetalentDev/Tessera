@@ -74,6 +74,18 @@ animation:
   # any given moment.
   waveWindow: 0.25
 
+  # Spawn extra chunks inside the cube so the player doesn't see straight
+  # through holes in the lattice while the wave is mid-animation. Only
+  # interior chunks on the half of the cube nearest the breaker are
+  # filled — the far half stays hollow since by the time the wave reaches
+  # it, the cube is mostly gone and the brief peek-through is hidden by
+  # the speed of the animation.
+  #
+  # Cost scales with gridN: at gridN=4 it's +4 entities per FakeBlock
+  # (negligible); at gridN=8 it's +108 per FakeBlock — consider lowering
+  # limits.maxConcurrentFakeBlocks if you raise gridN with this on.
+  fillInterior: false
+
 progress:
   # Send sendBlockChange(BARRIER) to the breaker so the real block doesn't
   # z-fight with (or hide behind) the shrinking FakeBlock chunks. The real
