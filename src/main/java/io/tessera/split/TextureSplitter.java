@@ -22,15 +22,15 @@ import java.util.Map;
  * sample the (sx,sy) tile of each outward face such that the image lines up
  * across adjacent chunks — i.e. neighbouring chunks' tiles are pixel-adjacent.
  *
- * <p>Per-face source-tile mapping (matches the standard vanilla face UV
- * conventions; verified empirically in step 11 of the plan):
+ * <p>Per-face source-tile mapping, matched to vanilla
+ * {@code BlockElementFace.defaultFaceUV}:
  * <ul>
- *   <li>UP    (+Y) — tileX = cx,             tileY = cz</li>
- *   <li>DOWN  (-Y) — tileX = cx,             tileY = cz</li>
- *   <li>NORTH (-Z) — tileX = (N-1) − cx,     tileY = (N-1) − cy</li>
- *   <li>SOUTH (+Z) — tileX = cx,             tileY = (N-1) − cy</li>
- *   <li>EAST  (+X) — tileX = (N-1) − cz,     tileY = (N-1) − cy</li>
- *   <li>WEST  (-X) — tileX = cz,             tileY = (N-1) − cy</li>
+ *   <li>UP    (+Y) — tileX = cx,             tileY = cz             (image-X = +X, image-Y = +Z)</li>
+ *   <li>DOWN  (-Y) — tileX = cx,             tileY = (N-1) − cz     (image-X = +X, image-Y = -Z)</li>
+ *   <li>NORTH (-Z) — tileX = (N-1) − cx,     tileY = (N-1) − cy     (image-X = -X, image-Y = -Y)</li>
+ *   <li>SOUTH (+Z) — tileX = cx,             tileY = (N-1) − cy     (image-X = +X, image-Y = -Y)</li>
+ *   <li>EAST  (+X) — tileX = (N-1) − cz,     tileY = (N-1) − cy     (image-X = -Z, image-Y = -Y)</li>
+ *   <li>WEST  (-X) — tileX = cz,             tileY = (N-1) − cy     (image-X = +Z, image-Y = -Y)</li>
  * </ul>
  * If an axis flip turns out wrong on a given face during step 11 tuning, fix
  * it in {@link #sourceTile} alone — every other module references chunks by
@@ -144,17 +144,16 @@ public final class TextureSplitter {
     private static int[] sourceTile(FaceDir d, int cx, int cy, int cz, int n) {
         int last = n - 1;
         return switch (d) {
-            // UP and DOWN both use (cx, cz). Vanilla `block/cube` up- and
-            // down-face default UVs share image-X = world +X, image-Y =
-            // world +Z. The player-head model's TOP/BOTTOM UVs follow the
-            // same convention for ItemDisplay rendering — there is no
-            // U-flip on BOTTOM despite what vanilla *block* rendering does.
-            // Earlier `(cx, last - cz)` for UP V-flipped at the chunk-grid
-            // level: invisible on V-symmetric textures (oak_planks, stone)
-            // but visibly mirrored on V-asymmetric ones (oak_log_top rings,
-            // pumpkin_top stem).
+            // Per vanilla `defaultFaceUV` (BlockElementFace), the cube
+            // up- and down-face UVs differ on the v axis: UP has image-Y =
+            // world +Z, DOWN has image-Y = world -Z. So they need different
+            // tileY formulas. Sides match the same source verbatim.
+            // Earlier `(cx, last - cz)` for UP and `(cx, cz)` for DOWN had
+            // the swap inverted — invisible on V-symmetric textures
+            // (oak_planks, stone) but visibly mirrored on V-asymmetric
+            // ones (oak_log_top rings, pumpkin_top stem).
             case UP    -> new int[] { cx,        cz };
-            case DOWN  -> new int[] { cx,        cz };
+            case DOWN  -> new int[] { cx,        last - cz };
             case NORTH -> new int[] { last - cx, last - cy };
             case SOUTH -> new int[] { cx,        last - cy };
             case EAST  -> new int[] { last - cz, last - cy };
