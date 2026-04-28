@@ -33,7 +33,11 @@ dependencies {
     // include it but the runtime plugin just sees Paper's copy first.
     implementation("org.joml:joml:1.10.5")
 
-    testImplementation(platform("org.junit:junit-bom:5.11.3"))
+    // MockBukkit ships a shaded Paper server so tests can boot a fake Bukkit
+    // runtime in-JVM. The v1.20 artifact transitively pulls paper-api
+    // 1.20.6-R0.1-SNAPSHOT and junit-jupiter, matching our main classpath.
+    testImplementation("com.github.seeseemelk:MockBukkit-v1.20:3.93.2")
+    testImplementation(platform("org.junit:junit-bom:5.10.3"))
     testImplementation("org.junit.jupiter:junit-jupiter")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
