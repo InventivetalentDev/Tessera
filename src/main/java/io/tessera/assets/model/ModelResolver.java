@@ -10,7 +10,10 @@ import io.tessera.core.FaceDir;
 import org.joml.Quaternionf;
 
 import javax.imageio.ImageIO;
+import java.awt.Graphics2D;
+import java.awt.color.ColorSpace;
 import java.awt.image.BufferedImage;
+import java.awt.image.Raster;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -337,7 +340,7 @@ public final class ModelResolver {
         // Block textures live under textures/<path>.png with leading "block/"
         // already part of the path (e.g. "block/stone").
         byte[] png = client.fetch(version, "textures/" + path + ".png");
-        BufferedImage full = ImageIO.read(new ByteArrayInputStream(stripColorChunks(png)));
+        BufferedImage full = normalizeToArgb(ImageIO.read(new ByteArrayInputStream(stripColorChunks(png))));
         if (full == null) throw new IOException("failed to decode " + ref);
         // Animated textures are tall (e.g. 16×64 for 4 frames). Take frame 0.
         if (full.getHeight() > full.getWidth()) {
@@ -377,9 +380,47 @@ public final class ModelResolver {
                 pos += 12 + len;
             }
             return out.toByteArray();
-        } catch (IOException e) {
+        } catch (Exception e) {
             return png; // ByteArrayOutputStream never throws; satisfy javac
         }
+    }
+
+    /**
+     * Ensures the decoded image is {@link BufferedImage#TYPE_INT_ARGB} with raw
+     * pixel values unchanged. This is necessary for grayscale PNGs: Java's
+     * {@code TYPE_BYTE_GRAY} uses {@code CS_GRAY} (linear, gamma=1.0). Any call
+     * to {@link BufferedImage#getRGB} on such an image converts linear-gray →
+     * sRGB by applying the gamma-2.2 encode, brightening mid-range values
+     * (e.g. stone gray 126 → ~182). Vanilla stone.png is a grayscale PNG, which
+     * is why the baked skin appeared ~46% too bright while RGBA textures like
+     * light_gray_concrete were unaffected.
+     *
+     * <p>For grayscale images the raster is read directly — {@code getSample()}
+     * returns the raw stored byte without colour-space conversion — and the grey
+     * value is mapped to R=G=B in the ARGB output. For all other types the image
+     * is already in an sRGB-compatible space and a plain {@link Graphics2D} copy
+     * (no colour conversion) suffices.
+     */
+    private static BufferedImage normalizeToArgb(BufferedImage src) {
+        if (src.getType() == BufferedImage.TYPE_INT_ARGB) return src;
+        int w = src.getWidth(), h = src.getHeight();
+        BufferedImage dst = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB);
+        if (src.getColorModel().getColorSpace().getType() == ColorSpace.TYPE_GRAY) {
+            Raster raster = src.getRaster();
+            boolean hasAlpha = src.getColorModel().hasAlpha();
+            for (int y = 0; y < h; y++) {
+                for (int x = 0; x < w; x++) {
+                    int v = raster.getSample(x, y, 0);
+                    int a = hasAlpha ? raster.getSample(x, y, 1) : 255;
+                    dst.setRGB(x, y, (a << 24) | (v << 16) | (v << 8) | v);
+                }
+            }
+        } else {
+            Graphics2D g = dst.createGraphics();
+            g.drawImage(src, 0, 0, null);
+            g.dispose();
+        }
+        return dst;
     }
 
     private static String withDefaultNamespace(String s) {
