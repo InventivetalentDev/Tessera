@@ -154,3 +154,98 @@ If a face still looks off after the canonical-rotation fix:
 whole source texture per `FaceDir`. They're rarely needed once the
 six-tile orientation is correct — they exist for textures whose source
 orientation disagrees with the chunk-grid axes.
+
+## Per-face texture resolution: read the model, don't switch on parent
+
+Source of truth: `ModelResolver.pickFaceTextures` and `resolveModelChain`.
+
+**Don't** map texture variables to `FaceDir` based on parent name.
+Vanilla model JSON encodes the per-face mapping directly — every cube
+parent's `elements[i].faces.<dir>.texture` is a `"#var"` reference that
+resolves through the texture-variable bindings accumulated up the parent
+chain. Read those refs and you're done; the mapping naturally handles
+`cube`, `cube_all`, `cube_column`, `orientable`, `orientable_with_bottom`,
+`cube_top`, `cube_bottom_top`, and any future cube parent.
+
+The previous parent-switch implementation got `orientable`'s mapping
+wrong: vanilla's `orientable.json` has `north: "#front"`, but the switch
+hardcoded `out.put(FaceDir.SOUTH, front)`. The bug was invisible for
+blocks placed `facing=east`/`west` because `Ry(±90°)` lands the carved
+face on the right axis regardless of which side it started on, but
+flipped `facing=north`/`south` jack o' lanterns and furnaces 180°.
+
+**Chain-walk gotcha.** When you walk the parent chain to harvest texture
+vars + `elements`, do NOT break at the first `CUBE_PARENTS` entry.
+Vanilla's `elements` array lives in `block/cube` (the deepest cube
+parent), but most blocks' immediate parent is something like
+`cube_column` or `orientable` — both also in `CUBE_PARENTS`. Stopping
+early would never reach the model that actually has elements. Walk all
+the way to the root, set `terminal` on the *first* cube parent seen
+(that's still the right answer for the cube-only filter upstream), and
+keep going. Disk-cached, so the extra HTTP calls are free.
+
+## Variant rotation: Minecraft Y is opposite-sign from JOML
+
+Source of truth: `ModelResolver.VariantRotation.toQuat`.
+
+Vanilla blockstate `y` rotates **clockwise** when viewed from above:
+`y=90` maps the model's `-Z` (north) face to world `+X` (east), which is
+exactly what `facing=east` expects. JOML's `rotateY` is the standard
+right-hand rule (counter-clockwise from above), the opposite sense. So
+`toQuat` negates `yDeg` before feeding it to `rotateY`.
+
+`xDeg` does *not* need negation: vanilla pitch and JOML's `rotateX` are
+both right-handed. Verified against `oak_log[axis=z]` (`x=90` alone),
+which renders correctly with the unflipped sign.
+
+**Why it took two bugs to surface this.** The original `toQuat` fed
+`yDeg` straight in (wrong sign). The original `pickFaceTextures` for
+`orientable` put `front` on south instead of north (wrong face). Those
+two bugs cancelled exactly for `facing=east`/`west` (start with front on
++Z, JOML +90° → +X = east; right answer for the wrong reason), so only
+`facing=north`/`south` looked broken. Axis-only blocks (logs) didn't
+care because `±X` is the same axis.
+
+After fixing `pickFaceTextures` to read from `elements`, the toQuat sign
+error became the sole remaining offset and surfaced as east/west
+swapped. **Order matters**: the texture fix has to come first or the
+two errors keep cancelling. Lesson generalised: when two transformations
+compose and one looks "right," verify each in isolation against
+ground-truth before assuming the chain is correct.
+
+## Known issue: BOTTOM face on directional blocks looks rotated/flipped
+
+Symptom: after the parent-switch removal, furnace and jack o' lantern
+bottom faces appear rotated or mirrored relative to vanilla. Furnaces
+are the obvious case — vanilla's `orientable.json` has `down: "#side"`,
+so the bottom now correctly shows `furnace_side` (a highly directional
+texture with a chimney groove at the top). Before the fix, the
+parent-switch mistakenly painted `#top` on DOWN, hiding any UV mismatch
+behind a near-symmetric texture.
+
+The DOWN splitter mapping (`TextureSplitter.sourceTile`) is currently
+`(cx, cz)` — same as UP — based on empirical tuning with rotation-
+symmetric textures (oak_log_top rings, pumpkin_top). With a clearly
+directional texture now landing on the bottom, the head model's BOTTOM
+UV convention may not actually match TOP's the way the prior fix
+assumed.
+
+**Diagnostic recipe** (to converge on the right per-face transform
+without guessing):
+
+1. `/tessera debug debugtex on`, break + replace a furnace, look at the
+   bottom face from below. The four border colours (red top, green
+   right, blue bottom, yellow left) tell you the slot's image-axis
+   orientation directly.
+2. If borders are rotated relative to upright: `/tessera debug tilerot
+   bottom <90|180|270>` until they read upright.
+3. If borders are mirrored: `/tessera debug tileflip bottom <h|v|hv>`.
+4. If neither alone fixes it, the issue is at the source-texture level
+   (image-X/Y axes don't align with the chunk-grid axes for that face);
+   try `/tessera debug sourcerot down` / `sourceflip down`.
+5. Once tuned, fold the value into `TileRotations.DEFAULTS` /
+   `TileFlips.DEFAULTS` for `BOTTOM`, or `SourceRotations.DEFAULTS` /
+   `SourceFlips.DEFAULTS` for `DOWN`. Re-test with `oak_log_top`,
+   `pumpkin_top`, and stone to make sure the previously-correct cases
+   stay correct.
+
