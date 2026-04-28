@@ -22,6 +22,18 @@ repositories {
     maven("https://repo.inventivetalent.org/repository/public/")
 }
 
+// paperweight by default puts the mojang-mapped paper-server jar onto both
+// compileOnly and testImplementation. Its META-INF/services entry registers
+// io.papermc.paper.ServerBuildInfoImpl, whose constructor calls
+// net.minecraft.SharedConstants.getCurrentVersion() — that fails outside a
+// real Paper boot and torpedoes MockBukkit.mock() with a chained
+// ServiceConfigurationError. Restricting the dependency to compileOnly keeps
+// main compilation against the 1.21.4 dev bundle while letting MockBukkit's
+// transitive paper-api 1.21.1 provide the Bukkit surface for tests.
+paperweight {
+    addServerDependencyTo.set(setOf(configurations.compileOnly.get()))
+}
+
 dependencies {
     paperweight.paperDevBundle("1.21.4-R0.1-SNAPSHOT")
 
@@ -33,13 +45,26 @@ dependencies {
     // include it but the runtime plugin just sees Paper's copy first.
     implementation("org.joml:joml:1.10.5")
 
-    testImplementation(platform("org.junit:junit-bom:5.11.3"))
+    // MockBukkit boots a fake Bukkit runtime in-JVM so we can integration-test
+    // listeners/commands without spinning up a real Paper server. We use the
+    // v1.21 artifact (transitive paper-api 1.21.1-R0.1-SNAPSHOT) to avoid a
+    // classpath clash with the project's paper-api 1.21.4 — the older v1.20
+    // artifact pulls 1.20.6 and breaks Bukkit's service-loader init.
+    testImplementation("com.github.seeseemelk:MockBukkit-v1.21:3.133.2")
+    testImplementation(platform("org.junit:junit-bom:5.10.3"))
     testImplementation("org.junit.jupiter:junit-jupiter")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 
 tasks.test {
     useJUnitPlatform()
+    testLogging {
+        events("passed", "skipped", "failed")
+        exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+        showCauses = true
+        showStackTraces = true
+        showStandardStreams = false
+    }
 }
 
 tasks.runServer {
