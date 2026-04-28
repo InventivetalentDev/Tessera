@@ -12,7 +12,9 @@ import org.joml.Quaternionf;
 import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.Collections;
 import java.util.EnumMap;
 import java.util.HashMap;
@@ -335,13 +337,49 @@ public final class ModelResolver {
         // Block textures live under textures/<path>.png with leading "block/"
         // already part of the path (e.g. "block/stone").
         byte[] png = client.fetch(version, "textures/" + path + ".png");
-        BufferedImage full = ImageIO.read(new ByteArrayInputStream(png));
+        BufferedImage full = ImageIO.read(new ByteArrayInputStream(stripColorChunks(png)));
         if (full == null) throw new IOException("failed to decode " + ref);
         // Animated textures are tall (e.g. 16×64 for 4 frames). Take frame 0.
         if (full.getHeight() > full.getWidth()) {
             return full.getSubimage(0, 0, full.getWidth(), full.getWidth());
         }
         return full;
+    }
+
+    /**
+     * Strips {@code gAMA}, {@code sRGB}, {@code iCCP}, and {@code cHRM} chunks
+     * from a PNG byte array before passing it to {@link ImageIO#read}.
+     *
+     * <p>Java's ImageIO honours these chunks and applies gamma / colour-profile
+     * corrections when decoding. Vanilla Minecraft block textures (e.g.
+     * {@code stone.png}) ship with a {@code gAMA=100000} chunk that marks the
+     * data as linear-light; ImageIO responds by encoding it to sRGB display
+     * space, boosting mid-range grey 126 → ~182 in the resulting
+     * {@link BufferedImage}. That inflated value is then baked into our player-
+     * head skin and rendered ~46 % too bright in-game. Stripping the metadata
+     * tells ImageIO to treat the bytes as plain sRGB (the same assumption the
+     * Minecraft block-texture atlas loader uses), preserving exact pixel values.
+     */
+    private static byte[] stripColorChunks(byte[] png) {
+        if (png.length < 8) return png;
+        try {
+            ByteArrayOutputStream out = new ByteArrayOutputStream(png.length);
+            out.write(png, 0, 8); // PNG signature
+            int pos = 8;
+            while (pos + 12 <= png.length) {
+                int len = ((png[pos]   & 0xFF) << 24) | ((png[pos+1] & 0xFF) << 16)
+                        | ((png[pos+2] & 0xFF) <<  8) |  (png[pos+3] & 0xFF);
+                if (len < 0 || pos + 12 + len > png.length) break; // malformed
+                String type = new String(png, pos + 4, 4, StandardCharsets.US_ASCII);
+                boolean strip = type.equals("gAMA") || type.equals("sRGB")
+                             || type.equals("iCCP") || type.equals("cHRM");
+                if (!strip) out.write(png, pos, 12 + len);
+                pos += 12 + len;
+            }
+            return out.toByteArray();
+        } catch (IOException e) {
+            return png; // ByteArrayOutputStream never throws; satisfy javac
+        }
     }
 
     private static String withDefaultNamespace(String s) {
