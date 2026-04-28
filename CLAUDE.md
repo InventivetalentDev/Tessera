@@ -13,13 +13,13 @@ gradle root project is `tessera`, package root is `io.tessera`.
 
 ## Build / Run / Bake
 
-The `gradle/wrapper/` jar + properties **are** committed (gradle 8.14.3 pinned
+The `gradle/wrapper/` jar + properties **are** committed (gradle 9.3.0 pinned
 in `gradle-wrapper.properties`), but the `gradlew` / `gradlew.bat` launch
 scripts are gitignored. Either run `gradle wrapper` once locally to drop the
-scripts, or use a system `gradle` (any 8.x that supports the
-`paperweight.userdev` plugin) — invoking `gradle <task>` works in both cases.
-CI (`.github/workflows/build.yml`) uses `gradle/actions/setup-gradle@v4` with
-the pinned `gradle-version: '8.14.3'` and runs `gradle build --no-daemon` on
+scripts, or use a system `gradle` (9.x — `paperweight.userdev` 2.0.0-beta.21
+requires Gradle 9) — invoking `gradle <task>` works in both cases. CI
+(`.github/workflows/build.yml`) uses `gradle/actions/setup-gradle@v4` with
+the pinned `gradle-version: '9.3.0'` and runs `gradle build --no-daemon` on
 JDK 21. Java toolchain is **JDK 25** but `release` is set to **21** for
 bytecode, so any JDK ≥21 can consume the artifact.
 
