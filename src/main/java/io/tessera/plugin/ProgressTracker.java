@@ -50,6 +50,7 @@ public final class ProgressTracker {
         public final float[] currentScales;    // last-applied scale per chunk; updated by applyAtProgress
         public double lastAppliedProgress;
         public long lastUpdateTickMs;
+        public long avgEventGapMs;             // EMA of inter-event gap; 0 until first delta seen
         public State state;
         public boolean barrierSent;
         public boolean autoBreakTriggered;     // we already called player.breakBlock; don't re-fire
@@ -70,6 +71,7 @@ public final class ProgressTracker {
             this.currentScales = currentScales;
             this.lastAppliedProgress = 0d;
             this.lastUpdateTickMs = System.currentTimeMillis();
+            this.avgEventGapMs = 0L;
             this.state = State.FORWARD;
             this.barrierSent = false;
             this.autoBreakTriggered = false;

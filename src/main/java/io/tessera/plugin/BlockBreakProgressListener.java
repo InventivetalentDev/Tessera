@@ -45,7 +45,17 @@ import java.util.concurrent.atomic.AtomicInteger;
 public final class BlockBreakProgressListener implements Listener {
 
     private static final long WATCHDOG_PERIOD_TICKS = 5L; // 250ms
-    private static final long WATCHDOG_STALE_MS = 500L;
+    // Stale threshold is auto-tuned per-tracker from the observed inter-event
+    // gap (Paper fires BlockBreakProgressUpdateEvent on destroy-stage
+    // boundaries — every ~50ms for instamine, ~600ms for obsidian, ~4s for
+    // iron-pick-on-obsidian, etc.). We clamp into [MIN, MAX] so cancel
+    // detection stays responsive and we don't wait forever on stuck trackers.
+    // Until the second progress event arrives we use BOOTSTRAP, since we
+    // have no measurement yet and the first stage of a slow block can be
+    // longer than MIN.
+    private static final long WATCHDOG_STALE_BOOTSTRAP_MS = 2500L;
+    private static final long WATCHDOG_STALE_MIN_MS = 800L;
+    private static final long WATCHDOG_STALE_MAX_MS = 4000L;
     private static final int FORWARD_INTERP_TICKS = 1;
     private static final int REVERSE_INTERP_TICKS = 1;
 
@@ -130,15 +140,34 @@ public final class BlockBreakProgressListener implements Listener {
             tb.state = State.FORWARD;
         }
 
+        // Update the per-tracker inter-event EMA so the watchdog can scale
+        // its stale threshold to the block's actual cadence (slow blocks
+        // emit events ~600-1000ms apart and would otherwise oscillate).
+        long now = System.currentTimeMillis();
+        long gap = now - tb.lastUpdateTickMs;
+        tb.avgEventGapMs = (tb.avgEventGapMs == 0L) ? gap : (tb.avgEventGapMs * 3L + gap) / 4L;
+
         if (Math.abs(progress - tb.lastAppliedProgress) < cfg.progressMinDelta()) {
             // Server is still emitting events (player is actively mining), even
             // though the value didn't change enough to repaint. Refresh the
             // watchdog timestamp so it doesn't trip while mining is still live.
-            tb.lastUpdateTickMs = System.currentTimeMillis();
+            tb.lastUpdateTickMs = now;
             return;
         }
 
         applyForward(tb, progress, cfg);
+    }
+
+    /**
+     * Auto-tuned stale threshold: BOOTSTRAP until we've seen at least one
+     * inter-event gap, otherwise 3x EMA + 200ms slack clamped to [MIN, MAX].
+     */
+    private static long staleThresholdFor(TrackedBreak tb) {
+        if (tb.avgEventGapMs == 0L) return WATCHDOG_STALE_BOOTSTRAP_MS;
+        long base = tb.avgEventGapMs * 3L + 200L;
+        if (base < WATCHDOG_STALE_MIN_MS) return WATCHDOG_STALE_MIN_MS;
+        if (base > WATCHDOG_STALE_MAX_MS) return WATCHDOG_STALE_MAX_MS;
+        return base;
     }
 
     @EventHandler(priority = EventPriority.MONITOR)
@@ -362,7 +391,7 @@ public final class BlockBreakProgressListener implements Listener {
         List<BlockPosKey> stale = new ArrayList<>();
         for (var e : tracker.snapshot()) {
             TrackedBreak tb = e.getValue();
-            if (tb.state == State.FORWARD && (now - tb.lastUpdateTickMs) > WATCHDOG_STALE_MS) {
+            if (tb.state == State.FORWARD && (now - tb.lastUpdateTickMs) > staleThresholdFor(tb)) {
                 stale.add(e.getKey());
             }
         }
@@ -371,7 +400,9 @@ public final class BlockBreakProgressListener implements Listener {
             if (tb == null) continue;
             if (cfg.debug()) plugin.getLogger().info(
                     "[debug-progress] watchdog-cancel " + tb.key + " at " + k
-                            + " stale=" + (now - tb.lastUpdateTickMs) + "ms");
+                            + " stale=" + (now - tb.lastUpdateTickMs) + "ms"
+                            + " threshold=" + staleThresholdFor(tb) + "ms"
+                            + " avgGap=" + tb.avgEventGapMs + "ms");
             beginReverse(tb, k, cfg);
         }
     }
