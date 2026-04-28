@@ -193,10 +193,17 @@ public final class ModelResolver {
     }
 
     /**
-     * Walk the parent chain accumulating texture-variable bindings, until a
-     * recognized cube parent (or {@code minecraft:block/block}) is hit.
-     * The first {@code elements} array seen wins — vanilla models override
-     * elements wholesale at each level, child-first.
+     * Walk the parent chain to the root, accumulating texture-variable bindings
+     * (child-first wins) and capturing the first {@code elements} array seen
+     * (vanilla overrides elements wholesale, so first-seen wins). The terminal
+     * parent is the first {@link #CUBE_PARENTS} entry encountered, which is
+     * what gates the cube-only filter upstream.
+     *
+     * <p>We always walk to the root rather than breaking at the first cube
+     * parent: vanilla's {@code elements} live in {@code block/cube} (the
+     * deepest parent), but most blocks' immediate parent is something like
+     * {@code cube_column} or {@code orientable} (also in {@link #CUBE_PARENTS}).
+     * Stopping early would never see the elements.
      */
     private ResolvedModel resolveModelChain(String firstModel) throws IOException {
         Map<String, String> tex = new LinkedHashMap<>();
@@ -223,12 +230,12 @@ public final class ModelResolver {
                 elements = obj.getAsJsonArray("elements");
             }
 
-            if (CUBE_PARENTS.contains(current)) {
+            if (terminal == null && CUBE_PARENTS.contains(current)) {
                 terminal = current;
-                break;
             }
+
             if (!obj.has("parent")) {
-                terminal = current;
+                if (terminal == null) terminal = current;
                 break;
             }
             current = withDefaultNamespace(obj.get("parent").getAsString());
