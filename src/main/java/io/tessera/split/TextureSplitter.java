@@ -144,13 +144,15 @@ public final class TextureSplitter {
     private static int[] sourceTile(FaceDir d, int cx, int cy, int cz, int n) {
         int last = n - 1;
         return switch (d) {
-            // UP and DOWN both use (cx, cz) — vanilla cube up-face and
-            // down-face default UVs share image-X = world +X, image-Y = world +Z.
-            // The BOTTOM U pre-mirror in SkinAssembler handles the down-face
-            // U-flip quirk separately. Earlier `(cx, last - cz)` for UP
-            // V-flipped at the chunk-grid level: invisible on V-symmetric
-            // textures (oak_planks, stone) but visibly mirrored on
-            // V-asymmetric ones (oak_log_top rings, pumpkin_top stem).
+            // UP and DOWN both use (cx, cz). Vanilla `block/cube` up- and
+            // down-face default UVs share image-X = world +X, image-Y =
+            // world +Z. The player-head model's TOP/BOTTOM UVs follow the
+            // same convention for ItemDisplay rendering — there is no
+            // U-flip on BOTTOM despite what vanilla *block* rendering does.
+            // Earlier `(cx, last - cz)` for UP V-flipped at the chunk-grid
+            // level: invisible on V-symmetric textures (oak_planks, stone)
+            // but visibly mirrored on V-asymmetric ones (oak_log_top rings,
+            // pumpkin_top stem).
             case UP    -> new int[] { cx,        cz };
             case DOWN  -> new int[] { cx,        cz };
             case NORTH -> new int[] { last - cx, last - cy };

@@ -40,7 +40,7 @@ model's per-face UVs (which faces sample which skin region):
 | HeadFace slot | Skin UV rect    | Model cube face that samples it | World direction | FaceDir |
 |---------------|-----------------|---------------------------------|-----------------|---------|
 | TOP           | (8,0)-(16,8)    | up                              | +Y (up)         | UP      |
-| BOTTOM        | (16,0)-(24,8)   | down (U-flipped, see SkinAssembler) | −Y (down)   | DOWN    |
+| BOTTOM        | (16,0)-(24,8)   | down                            | −Y (down)       | DOWN    |
 | FRONT         | (8,8)-(16,16)   | south                           | +Z (south)      | SOUTH   |
 | BACK          | (24,8)-(32,16)  | north                           | −Z (north)      | NORTH   |
 | LEFT          | (16,8)-(24,16)  | east                            | +X (east)       | EAST    |
@@ -122,10 +122,6 @@ rotation pointing the picked slot east-ish but everything else wrong.
   non-outward slots so identical chunks dedup to one MineSkin upload.
   The filler does no harm under canonical rotation — non-outward slots
   point inward and aren't visible.
-- **The BOTTOM pre-mirror in `SkinAssembler`** — vanilla samples the
-  BOTTOM face with U flipped relative to the other five, so we paint
-  BOTTOM with U swapped on `Graphics2D.drawImage` to cancel that.
-  Independent of orientation strategy.
 - **Nearest-neighbor scaling for tile→slot upscale** — replaced an
   edge-replication padding scheme that produced a stretched-2×2-center
   artifact masking everything else.
