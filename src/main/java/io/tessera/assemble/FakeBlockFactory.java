@@ -126,7 +126,7 @@ public final class FakeBlockFactory {
 
             Transformation tx = new Transformation(
                     translation,
-                    new Quaternionf(),                    // leftRotation = identity (block rotation)
+                    new Quaternionf(blockRotation),       // L = block rotation (variant Ry/Rx)
                     new Vector3f(scale, scale, scale),
                     faceRot);
 
