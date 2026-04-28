@@ -3,6 +3,7 @@ package io.tessera.skin.bake;
 import io.tessera.assets.fetch.McAssetClient;
 import io.tessera.assets.model.BlockModel;
 import io.tessera.assets.model.ModelResolver;
+import io.tessera.core.BakeKey;
 import io.tessera.core.BlockKey;
 import io.tessera.core.ChunkCoord;
 import io.tessera.core.ChunkSpec;
@@ -63,7 +64,7 @@ public final class BlockBaker {
     private final Path pngDir;
     private final Executor executor;
 
-    private final Map<BlockKey, CompletableFuture<Boolean>> inflight = new ConcurrentHashMap<>();
+    private final Map<BakeKey, CompletableFuture<Boolean>> inflight = new ConcurrentHashMap<>();
 
     public BlockBaker(Logger logger,
                       McAssetClient assets,
@@ -85,11 +86,16 @@ public final class BlockBaker {
         this.executor = executor;
     }
 
+    /** Untinted convenience overload — equivalent to {@code bake(BakeKey.untinted(key))}. */
     public CompletableFuture<Boolean> bake(BlockKey key) {
+        return bake(BakeKey.untinted(key));
+    }
+
+    public CompletableFuture<Boolean> bake(BakeKey key) {
         return inflight.computeIfAbsent(key, this::startBake);
     }
 
-    private CompletableFuture<Boolean> startBake(BlockKey key) {
+    private CompletableFuture<Boolean> startBake(BakeKey key) {
         boolean bypassCache = TileRotations.consumeStale();
         CompletableFuture<Boolean> f = CompletableFuture.supplyAsync(() -> {
             try {
@@ -103,7 +109,7 @@ public final class BlockBaker {
         return f;
     }
 
-    private boolean doBake(BlockKey key, boolean bypassCache)
+    private boolean doBake(BakeKey key, boolean bypassCache)
             throws IOException, ExecutionException, InterruptedException, TimeoutException {
 
         if (uploader == null || !uploader.isReady()) {
@@ -111,15 +117,25 @@ public final class BlockBaker {
             return false;
         }
 
-        Optional<BlockModel> modelOpt = resolver.resolve(key);
+        Optional<BlockModel> modelOpt = resolver.resolve(key.block());
         if (modelOpt.isEmpty()) {
             logger.fine("[runtime-bake] " + key + " unsupported (non-cube or asset missing)");
             return false;
         }
         BlockModel model = modelOpt.get();
         if (model.tinted()) {
-            logger.fine("[runtime-bake] " + key + " skipped (tinted)");
-            return false;
+            if (key.tintArgb() == 0) {
+                // Tinted block requested without a tint — caller (e.g.
+                // build-time) didn't resolve a biome color. Skip; the
+                // runtime listener will provide a tint when available.
+                logger.fine("[runtime-bake] " + key + " skipped (tinted block, no tint provided)");
+                return false;
+            }
+            // Multiply all six face PNGs by the resolved tint. Downstream
+            // hashes (chunk content + post-paint PNG) diverge naturally per
+            // tint, so SkinDiskCache dedupes uploads across breaks of the
+            // same block in the same biome but distinguishes biomes.
+            model = model.withTint(key.tintArgb());
         }
 
         int gridN = registry.gridN();
@@ -208,6 +224,7 @@ public final class BlockBaker {
         }
 
         registry.register(key, chunkMap, model.variantRotations());
+
         Files.createDirectories(pngDir);
         return true;
     }

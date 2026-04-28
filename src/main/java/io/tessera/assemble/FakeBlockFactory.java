@@ -74,7 +74,7 @@ public final class FakeBlockFactory {
      * @param blockKey      the namespaced ID of the block being replaced
      */
     public FakeBlock create(Location blockLocation, BlockKey blockKey) {
-        return create(blockLocation, blockKey, new Quaternionf());
+        return create(blockLocation, BakeKey.untinted(blockKey), new Quaternionf());
     }
 
     /**
@@ -87,6 +87,15 @@ public final class FakeBlockFactory {
      * outward faces continue to render their correct slot tile.
      */
     public FakeBlock create(Location blockLocation, BlockKey blockKey, Quaternionf blockRotation) {
+        return create(blockLocation, BakeKey.untinted(blockKey), blockRotation);
+    }
+
+    /**
+     * Tint-aware overload: looks up chunks via {@link BakeKey} so per-tint
+     * runtime variants (grass/leaves baked against a specific biome color)
+     * resolve to their own chunk map rather than the canonical untinted one.
+     */
+    public FakeBlock create(Location blockLocation, BakeKey bakeKey, Quaternionf blockRotation) {
         World world = blockLocation.getWorld();
         if (world == null) throw new IllegalArgumentException("Location has no world");
 
@@ -99,7 +108,7 @@ public final class FakeBlockFactory {
                 Math.floor(blockLocation.getY()),
                 Math.floor(blockLocation.getZ()));
 
-        Map<ChunkCoord, HeadsRegistry.Entry> chunks = registry.chunksFor(blockKey);
+        Map<ChunkCoord, HeadsRegistry.Entry> chunks = registry.chunksFor(bakeKey);
         List<ChunkRef> refs = new ArrayList<>(chunks.size());
 
         // Same rotation for every chunk — see class doc. FRONT's FaceRotations
@@ -149,7 +158,7 @@ public final class FakeBlockFactory {
                     outwardFacesAt(coord, gridN)));
         }
 
-        return new FakeBlock(origin, blockKey, gridN, refs, blockRotation);
+        return new FakeBlock(origin, bakeKey.block(), gridN, refs, blockRotation);
     }
 
     private static EnumSet<FaceDir> outwardFacesAt(ChunkCoord c, int gridN) {

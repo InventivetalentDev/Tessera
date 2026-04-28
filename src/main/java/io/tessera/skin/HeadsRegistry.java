@@ -4,6 +4,7 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import io.tessera.assets.model.ModelResolver;
+import io.tessera.core.BakeKey;
 import io.tessera.core.BlockKey;
 import io.tessera.core.ChunkCoord;
 import org.joml.Quaternionf;
@@ -72,12 +73,18 @@ public final class HeadsRegistry {
     private final Logger logger;
     private final int gridN;
     private final String version;
-    private final Map<BlockKey, Map<ChunkCoord, Entry>> blocks;
+    // Keyed by BakeKey so tinted runtime variants (different tintArgb of the
+    // same block) get separate chunk maps. heads.json on disk only ever
+    // contains untinted entries — they're loaded as BakeKey.untinted(...)
+    // so the schema is unchanged.
+    private final Map<BakeKey, Map<ChunkCoord, Entry>> blocks;
+    // Variants are tint-independent (rotation depends on blockstate, not
+    // biome), so this map stays keyed by BlockKey.
     private final Map<BlockKey, Map<String, ModelResolver.VariantRotation>> variantRotations;
     private final Map<String, Entry> hashIndex;
 
     private HeadsRegistry(Logger logger, int gridN, String version,
-                          Map<BlockKey, Map<ChunkCoord, Entry>> blocks,
+                          Map<BakeKey, Map<ChunkCoord, Entry>> blocks,
                           Map<BlockKey, Map<String, ModelResolver.VariantRotation>> variantRotations) {
         this.logger = logger;
         this.gridN = gridN;
@@ -142,13 +149,13 @@ public final class HeadsRegistry {
             }
         }
 
-        Map<BlockKey, Map<ChunkCoord, Entry>> blocks = new HashMap<>();
+        Map<BakeKey, Map<ChunkCoord, Entry>> blocks = new HashMap<>();
         Map<BlockKey, Map<String, ModelResolver.VariantRotation>> variantRotations = new HashMap<>();
         if (root.has("blocks")) {
             for (Map.Entry<String, JsonElement> blockEntry : root.getAsJsonObject("blocks").entrySet()) {
                 BlockKey key = BlockKey.of(blockEntry.getKey());
                 ParsedBlock parsed = parseBlock(logger, key, blockEntry.getValue().getAsJsonObject(), skinByHash);
-                blocks.put(key, parsed.chunks);
+                blocks.put(BakeKey.untinted(key), parsed.chunks);
                 if (!parsed.variants.isEmpty()) variantRotations.put(key, parsed.variants);
             }
         }
@@ -204,19 +211,29 @@ public final class HeadsRegistry {
     public int gridN() { return gridN; }
     public String version() { return version; }
 
-    public boolean has(BlockKey key) {
+    public boolean has(BakeKey key) {
         Map<ChunkCoord, Entry> per = blocks.get(key);
         return per != null && !per.isEmpty();
     }
 
-    public Optional<Entry> get(BlockKey key, ChunkCoord coord) {
+    /** Untinted convenience overload — equivalent to {@code has(BakeKey.untinted(key))}. */
+    public boolean has(BlockKey key) {
+        return has(BakeKey.untinted(key));
+    }
+
+    public Optional<Entry> get(BakeKey key, ChunkCoord coord) {
         Map<ChunkCoord, Entry> per = blocks.get(key);
         return per == null ? Optional.empty() : Optional.ofNullable(per.get(coord));
     }
 
-    public Map<ChunkCoord, Entry> chunksFor(BlockKey key) {
+    public Map<ChunkCoord, Entry> chunksFor(BakeKey key) {
         Map<ChunkCoord, Entry> per = blocks.get(key);
         return per == null ? Collections.emptyMap() : per;
+    }
+
+    /** Untinted convenience overload. */
+    public Map<ChunkCoord, Entry> chunksFor(BlockKey key) {
+        return chunksFor(BakeKey.untinted(key));
     }
 
     /** Look up a previously-registered skin by its content hash, or null. */
@@ -227,17 +244,19 @@ public final class HeadsRegistry {
     /**
      * Register chunks for {@code key} discovered at runtime by
      * {@link io.tessera.skin.bake.BlockBaker}. Replaces any existing
-     * entry for the same key.
+     * entry for the same key. {@code variants} is keyed by {@link BlockKey}
+     * (rotation is tint-independent) so the same variant map is shared by
+     * all tinted bakes of the same block.
      */
-    public void register(BlockKey key, Map<ChunkCoord, Entry> chunks) {
+    public void register(BakeKey key, Map<ChunkCoord, Entry> chunks) {
         register(key, chunks, Collections.emptyMap());
     }
 
-    public void register(BlockKey key, Map<ChunkCoord, Entry> chunks,
+    public void register(BakeKey key, Map<ChunkCoord, Entry> chunks,
                          Map<String, ModelResolver.VariantRotation> variants) {
         blocks.put(key, Map.copyOf(chunks));
         if (variants != null && !variants.isEmpty()) {
-            variantRotations.put(key, Map.copyOf(variants));
+            variantRotations.put(key.block(), Map.copyOf(variants));
         }
         for (Entry e : chunks.values()) hashIndex.putIfAbsent(e.skinHash(), e);
     }
@@ -264,13 +283,15 @@ public final class HeadsRegistry {
     }
 
     /**
-     * Forget runtime registration for {@code key} so the next request
-     * re-runs the bake. Bundled heads.json entries are also cleared by
-     * this — re-launching the plugin will reload them from disk.
+     * Forget every runtime registration for {@code block} (untinted plus
+     * every tinted variant) so the next request re-runs the bake. Bundled
+     * heads.json entries are also cleared by this — re-launching the plugin
+     * will reload them from disk.
      */
-    public boolean invalidate(BlockKey key) {
-        variantRotations.remove(key);
-        return blocks.remove(key) != null;
+    public boolean invalidate(BlockKey block) {
+        variantRotations.remove(block);
+        boolean removed = blocks.keySet().removeIf(k -> k.block().equals(block));
+        return removed;
     }
 
     /**

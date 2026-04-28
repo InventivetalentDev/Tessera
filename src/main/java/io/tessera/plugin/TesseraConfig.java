@@ -23,6 +23,7 @@ public record TesseraConfig(
         boolean clientHideRealBlock,
         double waveWindow,
         double progressMinDelta,
+        boolean enableTintedBlocks,
         boolean debug
 ) {
 
@@ -52,6 +53,7 @@ public record TesseraConfig(
                 cfg.getBoolean("clientHideRealBlock", true),
                 cfg.getDouble("waveWindow", 0.25d),
                 cfg.getDouble("progressMinDelta", 0.02d),
+                cfg.getBoolean("enableTintedBlocks", true),
                 cfg.getBoolean("debug", false)
         );
     }

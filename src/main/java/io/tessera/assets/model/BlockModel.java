@@ -66,4 +66,20 @@ public final class BlockModel {
     public Map<String, ModelResolver.VariantRotation> variantRotations() {
         return variantRotations;
     }
+
+    /**
+     * Return a copy of this model with every face PNG pixel-multiplied by
+     * {@code tintArgb} (alpha preserved). Used at runtime for biome-tinted
+     * blocks: {@code BlockBaker} resolves the canonical untinted model, then
+     * substitutes {@code withTint(...)} before splitting so all downstream
+     * content hashes naturally diverge per tint.
+     */
+    public BlockModel withTint(int tintArgb) {
+        if (tintArgb == 0) return this;
+        EnumMap<FaceDir, BufferedImage> tintedFaces = new EnumMap<>(FaceDir.class);
+        for (Map.Entry<FaceDir, BufferedImage> e : faces.entrySet()) {
+            tintedFaces.put(e.getKey(), TintApplier.multiply(e.getValue(), tintArgb));
+        }
+        return new BlockModel(key, tintedFaces, this.tinted, parentChain, variantRotations);
+    }
 }
