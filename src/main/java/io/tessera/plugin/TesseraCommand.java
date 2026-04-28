@@ -57,6 +57,9 @@ import java.util.Locale;
  *   /tessera debug permutations &lt;head|tile|source|all&gt; &lt;facedir&gt; [material]
  *                                       sweep through configurations; spawns a static
  *                                       FakeBlock per combo with vanilla compare below
+ *   /tessera debug dumppng &lt;material&gt;    split+paint locally and write one PNG per
+ *                                       chunk named &lt;x&gt;-&lt;y&gt;-&lt;z&gt;.png to
+ *                                       plugins/Tessera/dump-&lt;material&gt;/
  * </pre>
  *
  * <p>The three rotation knobs operate at different scales:
@@ -210,6 +213,7 @@ public final class TesseraCommand implements CommandExecutor {
             case "status"       -> handleDebugStatus(sender, args);
             case "debugtex"     -> handleDebugTex(sender, args);
             case "permutations" -> handleDebugPermutations(sender, args);
+            case "dumppng"      -> handleDebugDumpPng(sender, args);
             default -> {
                 sender.sendMessage("§cUnknown debug target: " + args[1]);
                 yield true;
@@ -545,6 +549,31 @@ public final class TesseraCommand implements CommandExecutor {
         sender.sendMessage(removed
                 ? "§aCleared " + key + " from registry; next /tessera test will re-bake."
                 : "§7" + key + " was not in the registry.");
+        return true;
+    }
+
+    private boolean handleDebugDumpPng(CommandSender sender, String[] args) {
+        // /tessera debug dumppng <material>
+        // Splits + paints the block locally and writes one PNG per chunk
+        // named <x>-<y>-<z>.png so a developer can inspect what's actually
+        // being painted into each slot without going through MineSkin.
+        if (args.length < 3) {
+            sender.sendMessage("§c/tessera debug dumppng <material>");
+            return true;
+        }
+        Material mat = Material.matchMaterial(args[2]);
+        if (mat == null) { sender.sendMessage("§cUnknown material: " + args[2]); return true; }
+        BlockKey key = BlockKey.of(mat.getKey().getNamespace() + ":" + mat.getKey().getKey());
+        java.nio.file.Path outDir = plugin.getDataFolder().toPath()
+                .resolve("dump-" + mat.getKey().getKey());
+        try {
+            int n = baker.dumpPng(key, outDir);
+            sender.sendMessage(n == 0
+                    ? "§7No chunks dumped — block unsupported (non-cube/tinted/asset missing)."
+                    : "§aWrote " + n + " chunk PNGs to " + outDir);
+        } catch (java.io.IOException e) {
+            sender.sendMessage("§cDump failed: " + e.getMessage());
+        }
         return true;
     }
 

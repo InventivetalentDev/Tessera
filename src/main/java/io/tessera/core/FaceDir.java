@@ -40,6 +40,22 @@ public enum FaceDir {
         };
     }
 
+    /**
+     * Vanilla block-face directional shading factor, sourced from
+     * {@code ClientLevel.getShade()} in the decompiled 1.21.4 client.
+     * Applied to quads whose {@code BakedQuad.isShade()} is true (all
+     * standard cube blocks). Nether values (all faces 0.9) are omitted;
+     * Tessera targets Overworld only in v1.
+     */
+    public float shade() {
+        return switch (this) {
+            case DOWN          -> 0.5f;
+            case UP            -> 1.0f;
+            case NORTH, SOUTH  -> 0.8f;
+            case WEST, EAST    -> 0.6f;
+        };
+    }
+
     /** Lower-case JSON name as used in vanilla block model {@code "faces"} maps. */
     public String jsonName() {
         return name().toLowerCase();
