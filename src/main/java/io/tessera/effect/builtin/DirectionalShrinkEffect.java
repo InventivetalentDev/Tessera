@@ -44,12 +44,18 @@ public final class DirectionalShrinkEffect implements ChunkEffect {
 
         // Project each chunk's local center onto the breaker's view direction.
         // Smaller projection = closer to camera = shrink earlier in the wave.
+        // localCenter() is in the unrotated grid; for variant-rotated blocks
+        // (axis=x logs, facing=east furnaces) we rotate `rel` by the block's
+        // L matrix so the wave follows the visible cube, not the underlying
+        // grid. Identity rotation makes transform a no-op.
+        Quaternionf blockRot = fakeBlock.blockRotation();
         Vector3f blockCenter = new Vector3f(0.5f, 0.5f, 0.5f);
         double[] projections = new double[chunks.size()];
         double minProj = Double.POSITIVE_INFINITY;
         double maxProj = Double.NEGATIVE_INFINITY;
         for (int i = 0; i < chunks.size(); i++) {
             Vector3f rel = chunks.get(i).localCenter().sub(blockCenter);
+            blockRot.transform(rel);
             double p = rel.dot(dirJoml);
             projections[i] = p;
             if (p < minProj) minProj = p;

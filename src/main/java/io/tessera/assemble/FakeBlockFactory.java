@@ -146,7 +146,7 @@ public final class FakeBlockFactory {
                     outwardFacesAt(coord, gridN)));
         }
 
-        return new FakeBlock(origin, blockKey, gridN, refs);
+        return new FakeBlock(origin, blockKey, gridN, refs, blockRotation);
     }
 
     private static EnumSet<FaceDir> outwardFacesAt(ChunkCoord c, int gridN) {

@@ -1,6 +1,7 @@
 package io.tessera.core;
 
 import org.bukkit.Location;
+import org.joml.Quaternionf;
 
 import java.util.List;
 
@@ -16,13 +17,15 @@ public final class FakeBlock {
     private final BlockKey blockKey;
     private final int gridN;
     private final List<ChunkRef> chunks;
+    private final Quaternionf blockRotation;
     private boolean despawned = false;
 
-    public FakeBlock(Location origin, BlockKey blockKey, int gridN, List<ChunkRef> chunks) {
+    public FakeBlock(Location origin, BlockKey blockKey, int gridN, List<ChunkRef> chunks, Quaternionf blockRotation) {
         this.origin = origin.clone();
         this.blockKey = blockKey;
         this.gridN = gridN;
         this.chunks = List.copyOf(chunks);
+        this.blockRotation = new Quaternionf(blockRotation);
     }
 
     public Location origin() { return origin.clone(); }
@@ -30,6 +33,15 @@ public final class FakeBlock {
     public int gridN() { return gridN; }
     public List<ChunkRef> chunks() { return chunks; }
     public boolean despawned() { return despawned; }
+
+    /**
+     * The blockstate-variant rotation applied to the cube as a whole (the
+     * {@code L} matrix in {@code BlockGeometry}). Identity for blocks that
+     * use only the canonical variant. Effects that reason about chunk
+     * positions in world space must pre-multiply per-chunk local centers
+     * by this to recover the post-rotation arrangement.
+     */
+    public Quaternionf blockRotation() { return new Quaternionf(blockRotation); }
 
     /** Removes every spawned ItemDisplay. Idempotent. Must be called on the main thread. */
     public void despawn() {
