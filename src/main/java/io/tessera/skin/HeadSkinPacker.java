@@ -76,6 +76,53 @@ public final class HeadSkinPacker {
         return out;
     }
 
+    /**
+     * Multiplies a tile's RGB channels by {@code factor}, leaving alpha intact.
+     *
+     * <p><b>Not currently used.</b> The intent was to bake vanilla block face
+     * shading (UP=1.0, N/S=0.8, E/W=0.6, DOWN=0.5, per {@link FaceDir#shade()})
+     * into the painted skin so that ItemDisplay rendering matches placed blocks.
+     * This turns out to be wrong: the entity shader used for player-head items
+     * ({@code ENTITY_CUTOUT_NO_CULL_Z_OFFSET} / {@code ENTITY_TRANSLUCENT},
+     * both with {@code PER_FACE_LIGHTING}) already applies its own directional
+     * lighting via {@code minecraft_mix_light} in {@code entity.vsh}:
+     *
+     * <pre>
+     *   lightAccum = min(1.0, (max(0,dot(L0,n)) + max(0,dot(L1,n))) * 0.6 + 0.4)
+     * </pre>
+     *
+     * With the LEVEL light vectors (L0=(0.2,1.0,-0.7) norm, L1=(-0.2,1.0,0.7) norm)
+     * this gives per-face values of UP=1.0, DOWN=0.40, N/S≈0.74, E/W≈0.497 —
+     * close to but not identical to vanilla block shading. Baking our own
+     * multipliers on top produced a double-shaded result that was too dark.
+     *
+     * <p>The remaining visible discrepancy between fake and real blocks is
+     * <b>ambient occlusion</b>: vanilla's {@code ModelBlockRenderer} darkens
+     * each face vertex by a factor computed from the three neighbouring blocks
+     * around it (typically 0.5–1.0). Entity rendering skips AO entirely.
+     * Fixing this requires sampling neighbour opacity at break time and baking
+     * a per-chunk AO approximation — at that point, calling this method with
+     * a combined {@code (vanilla_shade / entity_shade) * AO} correction factor
+     * would be the right approach.
+     */
+    @SuppressWarnings("unused")
+    private static BufferedImage applyShade(BufferedImage src, float factor) {
+        if (factor == 1.0f) return src;
+        int w = src.getWidth(), h = src.getHeight();
+        BufferedImage out = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB);
+        for (int y = 0; y < h; y++) {
+            for (int x = 0; x < w; x++) {
+                int argb = src.getRGB(x, y);
+                int a =  (argb >> 24) & 0xFF;
+                int r = (int)(((argb >> 16) & 0xFF) * factor);
+                int g = (int)(((argb >>  8) & 0xFF) * factor);
+                int b = (int)(( argb        & 0xFF) * factor);
+                out.setRGB(x, y, (a << 24) | (r << 16) | (g << 8) | b);
+            }
+        }
+        return out;
+    }
+
     private static String hashFaceTiles(Map<HeadFace, BufferedImage> tiles) {
         List<String> parts = new ArrayList<>(6);
         for (HeadFace hf : HeadFace.PACK_ORDER) {

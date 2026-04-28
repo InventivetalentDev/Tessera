@@ -68,6 +68,15 @@ Pipeline stages (`io.tessera.skin.bake.BlockBaker.doBake` / `BakeMain.bakeOne`):
    `mcasset.cloud` for the requested MC version, caches under `assets/`.
 2. `assets.model.ModelResolver` resolves a `BlockModel` (texture refs +
    "tinted" flag). Tinted blocks (grass, leaves) are unsupported in v1.
+   **Colour-space trap:** some vanilla textures are grayscale PNGs
+   (`color_type=0`, e.g. `stone.png`, `smooth_stone.png`). Java's
+   `ImageIO.read()` decodes these to `TYPE_BYTE_GRAY` whose `ColorModel`
+   uses `CS_GRAY` (linear γ=1.0). Calling `getRGB()` on that image
+   converts linear→sRGB, brightening mid-range grey 126 → ~182 — the
+   baked skin then renders ~46% too bright. `ModelResolver.normalizeToArgb()`
+   fixes this by reading raw raster samples for grayscale images, bypassing
+   colour management. RGBA and indexed textures (`light_gray_concrete`,
+   planks, etc.) are unaffected.
 3. `split.TextureSplitter` cuts each block face's texture into
    `gridN × gridN` 8×8 tiles, applying any per-`FaceDir` `SourceRotations` /
    `SourceFlips` debug overrides first.

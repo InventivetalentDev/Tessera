@@ -10,9 +10,14 @@ import io.tessera.core.FaceDir;
 import org.joml.Quaternionf;
 
 import javax.imageio.ImageIO;
+import java.awt.Graphics2D;
+import java.awt.color.ColorSpace;
 import java.awt.image.BufferedImage;
+import java.awt.image.Raster;
 import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.Collections;
 import java.util.EnumMap;
 import java.util.HashMap;
@@ -335,13 +340,87 @@ public final class ModelResolver {
         // Block textures live under textures/<path>.png with leading "block/"
         // already part of the path (e.g. "block/stone").
         byte[] png = client.fetch(version, "textures/" + path + ".png");
-        BufferedImage full = ImageIO.read(new ByteArrayInputStream(png));
+        BufferedImage full = normalizeToArgb(ImageIO.read(new ByteArrayInputStream(stripColorChunks(png))));
         if (full == null) throw new IOException("failed to decode " + ref);
         // Animated textures are tall (e.g. 16×64 for 4 frames). Take frame 0.
         if (full.getHeight() > full.getWidth()) {
             return full.getSubimage(0, 0, full.getWidth(), full.getWidth());
         }
         return full;
+    }
+
+    /**
+     * Strips {@code gAMA}, {@code sRGB}, {@code iCCP}, and {@code cHRM} chunks
+     * from a PNG byte array before passing it to {@link ImageIO#read}.
+     *
+     * <p>Java's ImageIO honours these chunks and applies gamma / colour-profile
+     * corrections when decoding. Vanilla Minecraft block textures (e.g.
+     * {@code stone.png}) ship with a {@code gAMA=100000} chunk that marks the
+     * data as linear-light; ImageIO responds by encoding it to sRGB display
+     * space, boosting mid-range grey 126 → ~182 in the resulting
+     * {@link BufferedImage}. That inflated value is then baked into our player-
+     * head skin and rendered ~46 % too bright in-game. Stripping the metadata
+     * tells ImageIO to treat the bytes as plain sRGB (the same assumption the
+     * Minecraft block-texture atlas loader uses), preserving exact pixel values.
+     */
+    private static byte[] stripColorChunks(byte[] png) {
+        if (png.length < 8) return png;
+        try {
+            ByteArrayOutputStream out = new ByteArrayOutputStream(png.length);
+            out.write(png, 0, 8); // PNG signature
+            int pos = 8;
+            while (pos + 12 <= png.length) {
+                int len = ((png[pos]   & 0xFF) << 24) | ((png[pos+1] & 0xFF) << 16)
+                        | ((png[pos+2] & 0xFF) <<  8) |  (png[pos+3] & 0xFF);
+                if (len < 0 || pos + 12 + len > png.length) break; // malformed
+                String type = new String(png, pos + 4, 4, StandardCharsets.US_ASCII);
+                boolean strip = type.equals("gAMA") || type.equals("sRGB")
+                             || type.equals("iCCP") || type.equals("cHRM");
+                if (!strip) out.write(png, pos, 12 + len);
+                pos += 12 + len;
+            }
+            return out.toByteArray();
+        } catch (Exception e) {
+            return png; // ByteArrayOutputStream never throws; satisfy javac
+        }
+    }
+
+    /**
+     * Ensures the decoded image is {@link BufferedImage#TYPE_INT_ARGB} with raw
+     * pixel values unchanged. This is necessary for grayscale PNGs: Java's
+     * {@code TYPE_BYTE_GRAY} uses {@code CS_GRAY} (linear, gamma=1.0). Any call
+     * to {@link BufferedImage#getRGB} on such an image converts linear-gray →
+     * sRGB by applying the gamma-2.2 encode, brightening mid-range values
+     * (e.g. stone gray 126 → ~182). Vanilla stone.png is a grayscale PNG, which
+     * is why the baked skin appeared ~46% too bright while RGBA textures like
+     * light_gray_concrete were unaffected.
+     *
+     * <p>For grayscale images the raster is read directly — {@code getSample()}
+     * returns the raw stored byte without colour-space conversion — and the grey
+     * value is mapped to R=G=B in the ARGB output. For all other types the image
+     * is already in an sRGB-compatible space and a plain {@link Graphics2D} copy
+     * (no colour conversion) suffices.
+     */
+    private static BufferedImage normalizeToArgb(BufferedImage src) {
+        if (src.getType() == BufferedImage.TYPE_INT_ARGB) return src;
+        int w = src.getWidth(), h = src.getHeight();
+        BufferedImage dst = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB);
+        if (src.getColorModel().getColorSpace().getType() == ColorSpace.TYPE_GRAY) {
+            Raster raster = src.getRaster();
+            boolean hasAlpha = src.getColorModel().hasAlpha();
+            for (int y = 0; y < h; y++) {
+                for (int x = 0; x < w; x++) {
+                    int v = raster.getSample(x, y, 0);
+                    int a = hasAlpha ? raster.getSample(x, y, 1) : 255;
+                    dst.setRGB(x, y, (a << 24) | (v << 16) | (v << 8) | v);
+                }
+            }
+        } else {
+            Graphics2D g = dst.createGraphics();
+            g.drawImage(src, 0, 0, null);
+            g.dispose();
+        }
+        return dst;
     }
 
     private static String withDefaultNamespace(String s) {
