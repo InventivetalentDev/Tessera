@@ -6,13 +6,13 @@ import io.tessera.core.FakeBlock;
 import io.tessera.core.VariantKey;
 import io.tessera.effect.EffectContext;
 import io.tessera.effect.builtin.DirectionalShrinkEffect;
+import io.tessera.plugin.ProgressTracker.BlockPosKey;
 import io.tessera.skin.HeadsRegistry;
 import io.tessera.skin.bake.BlockBaker;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.block.data.BlockData;
-import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
@@ -30,14 +30,21 @@ public final class BlockBreakListener implements Listener {
     private final HeadsRegistry registry;
     private final BlockBaker baker;
     private final DirectionalShrinkEffect effect = new DirectionalShrinkEffect();
-    private final AtomicInteger active = new AtomicInteger();
+    private final AtomicInteger active;
+    private final ProgressTracker tracker;
+    private final BlockBreakProgressListener progressListener;
 
     public BlockBreakListener(TesseraPlugin plugin, FakeBlockFactory factory,
-                              HeadsRegistry registry, BlockBaker baker) {
+                              HeadsRegistry registry, BlockBaker baker,
+                              AtomicInteger active, ProgressTracker tracker,
+                              BlockBreakProgressListener progressListener) {
         this.plugin = plugin;
         this.factory = factory;
         this.registry = registry;
         this.baker = baker;
+        this.active = active;
+        this.tracker = tracker;
+        this.progressListener = progressListener;
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
@@ -45,6 +52,16 @@ public final class BlockBreakListener implements Listener {
         TesseraConfig cfg = plugin.tesseraConfig();
         Material mat = event.getBlock().getType();
         BlockKey key = BlockKey.of(mat.getKey().getNamespace() + ":" + mat.getKey().getKey());
+        Location breakLoc = event.getBlock().getLocation();
+        BlockPosKey posKey = BlockPosKey.of(breakLoc);
+
+        // Progress-driven path already spawned & animated the FakeBlock;
+        // vanilla just removed the real block. Tear down the tracker and
+        // skip the post-break wave entirely.
+        if (progressListener.isTracked(posKey)) {
+            progressListener.onRealBreak(posKey);
+            return;
+        }
 
         if (!cfg.enables(key.asString())) {
             if (cfg.debug()) plugin.getLogger().info("[debug] skip " + key + " (not enabled)");
@@ -55,7 +72,6 @@ public final class BlockBreakListener implements Listener {
             return;
         }
 
-        Location breakLoc = event.getBlock().getLocation();
         // BlockData captures the full state (axis, facing, lit, ...) — needed
         // so non-default variants render with the correct rotation.
         BlockData blockData = event.getBlock().getBlockData();
@@ -105,7 +121,7 @@ public final class BlockBreakListener implements Listener {
         }
 
         EffectContext ctx = new EffectContext(eyeDir, System.currentTimeMillis(), cfg.effectDurationMs(), plugin);
-        effect.apply(fb, ctx);
+        effect.applyTimed(fb, ctx);
 
         long despawnTicks = (cfg.effectDurationMs() / 50L) + 5L;
         plugin.getServer().getScheduler().runTaskLater(plugin, active::decrementAndGet, despawnTicks);

@@ -20,11 +20,44 @@ disabledMaterials:
   - "minecraft:soul_fire"
 
 # Total duration of the directional-shrink break animation in milliseconds.
+# Only used in 'post-break' animation mode (and as the instamine fallback).
 effectDurationMs: 600
 
 # Hard cap on concurrent FakeBlocks (sub-block effect entities).
 # Excess block-break events fall back to the vanilla animation.
 maxConcurrentFakeBlocks: 8
 
-# Verbose logging for asset resolution and skin packing.
+# When the chunked-shrink animation plays.
+#   progress   - drive the wave by live mining progress; chunks shrink as
+#                the player mines and the block is gone exactly when the
+#                wave finishes.
+#   post-break - legacy behavior: wait for BlockBreakEvent, then play the
+#                wave on the empty cell over effectDurationMs.
+animationMode: progress
+
+# Progress-mode only. Send sendBlockChange(BARRIER) to the breaker so the
+# real block doesn't z-fight with (or hide behind) the shrinking FakeBlock
+# chunks. The real block stays on the server.
+#
+# Survival caveat: a client mining a BARRIER refuses to send the final
+# "destroy completed" packet, so vanilla on its own never fires
+# BlockBreakEvent. The plugin compensates by force-breaking the real
+# block via Player.breakBlock(...) once the progress wave reaches 1.0 —
+# that fires BlockBreakEvent synchronously, runs enchantments, and
+# produces tool-correct drops just like a normal break.
+clientHideRealBlock: true
+
+# Progress-mode only. Width of the shrink wave along the breaker's eye
+# direction (0..1). Smaller = sharper wave front; larger = more chunks
+# collapsing in parallel. 0.25 means roughly a quarter of the chunks are
+# mid-shrink at any given moment.
+waveWindow: 0.25
+
+# Progress-mode only. Minimum change in progress before we re-apply the
+# transformation. Avoids redundant interpolation packets when progress
+# barely moved between ticks.
+progressMinDelta: 0.02
+
+# Verbose logging for asset resolution, skin packing, and progress-mode
+# state transitions (spawn / transfer / reverse / break / watchdog).
 debug: false

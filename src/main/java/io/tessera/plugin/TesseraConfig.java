@@ -19,8 +19,14 @@ public record TesseraConfig(
         Set<String> disabledMaterials,
         int effectDurationMs,
         int maxConcurrentFakeBlocks,
+        AnimationMode animationMode,
+        boolean clientHideRealBlock,
+        double waveWindow,
+        double progressMinDelta,
         boolean debug
 ) {
+
+    public enum AnimationMode { PROGRESS, POST_BREAK }
 
     public static TesseraConfig from(FileConfiguration cfg) {
         int grid = cfg.getInt("chunkGridSize", 4);
@@ -28,6 +34,13 @@ public record TesseraConfig(
             throw new IllegalArgumentException(
                     "chunkGridSize must divide 16; got " + grid);
         }
+        String modeRaw = cfg.getString("animationMode", "progress");
+        AnimationMode mode = switch (modeRaw.toLowerCase(Locale.ROOT)) {
+            case "post-break", "post_break", "postbreak" -> AnimationMode.POST_BREAK;
+            case "progress" -> AnimationMode.PROGRESS;
+            default -> throw new IllegalArgumentException(
+                    "animationMode must be 'progress' or 'post-break'; got " + modeRaw);
+        };
         return new TesseraConfig(
                 cfg.getString("mineskinApiKey", ""),
                 grid,
@@ -35,6 +48,10 @@ public record TesseraConfig(
                 normalize(cfg.getStringList("disabledMaterials")),
                 cfg.getInt("effectDurationMs", 600),
                 cfg.getInt("maxConcurrentFakeBlocks", 8),
+                mode,
+                cfg.getBoolean("clientHideRealBlock", true),
+                cfg.getDouble("waveWindow", 0.25d),
+                cfg.getDouble("progressMinDelta", 0.02d),
                 cfg.getBoolean("debug", false)
         );
     }
