@@ -22,11 +22,16 @@ import java.util.Map;
  * sample the (sx,sy) tile of each outward face such that the image lines up
  * across adjacent chunks — i.e. neighbouring chunks' tiles are pixel-adjacent.
  *
- * <p>Per-face source-tile mapping, matched to vanilla
- * {@code BlockElementFace.defaultFaceUV}:
+ * <p>Per-face source-tile mapping. Sides match vanilla
+ * {@code BlockElementFace.defaultFaceUV} verbatim. UP and DOWN match
+ * each other rather than vanilla's mismatched cube up/down convention,
+ * because the player-head model used by ItemDisplay rendering shares
+ * the skin layout's image-Y = +Z direction on both TOP and BOTTOM
+ * (verified empirically — vanilla's cube {@code image-Y = -Z} on DOWN
+ * does not apply to the skull model).
  * <ul>
  *   <li>UP    (+Y) — tileX = cx,             tileY = cz             (image-X = +X, image-Y = +Z)</li>
- *   <li>DOWN  (-Y) — tileX = cx,             tileY = (N-1) − cz     (image-X = +X, image-Y = -Z)</li>
+ *   <li>DOWN  (-Y) — tileX = cx,             tileY = cz             (image-X = +X, image-Y = +Z, head-model convention)</li>
  *   <li>NORTH (-Z) — tileX = (N-1) − cx,     tileY = (N-1) − cy     (image-X = -X, image-Y = -Y)</li>
  *   <li>SOUTH (+Z) — tileX = cx,             tileY = (N-1) − cy     (image-X = +X, image-Y = -Y)</li>
  *   <li>EAST  (+X) — tileX = (N-1) − cz,     tileY = (N-1) − cy     (image-X = -Z, image-Y = -Y)</li>
@@ -144,16 +149,21 @@ public final class TextureSplitter {
     private static int[] sourceTile(FaceDir d, int cx, int cy, int cz, int n) {
         int last = n - 1;
         return switch (d) {
-            // Per vanilla `defaultFaceUV` (BlockElementFace), the cube
-            // up- and down-face UVs differ on the v axis: UP has image-Y =
-            // world +Z, DOWN has image-Y = world -Z. So they need different
-            // tileY formulas. Sides match the same source verbatim.
-            // Earlier `(cx, last - cz)` for UP and `(cx, cz)` for DOWN had
-            // the swap inverted — invisible on V-symmetric textures
+            // UP and DOWN both use (cx, cz). Vanilla `defaultFaceUV`
+            // (BlockElementFace) has DOWN at image-Y = -Z, but the
+            // player-head model used by ItemDisplay rendering doesn't
+            // follow that — its BOTTOM UV shares image-Y = +Z with TOP,
+            // matching the standard player skin layout convention. Sides
+            // match the cube convention verbatim.
+            //
+            // The earlier `(cx, last - cz)` on UP V-flipped at the
+            // chunk-grid level: invisible on V-symmetric textures
             // (oak_planks, stone) but visibly mirrored on V-asymmetric
-            // ones (oak_log_top rings, pumpkin_top stem).
+            // ones (oak_log_top rings, pumpkin_top stem). Likewise an
+            // attempt to set DOWN to `(cx, last - cz)` to mirror the
+            // cube convention introduced an inverse V-flip there.
             case UP    -> new int[] { cx,        cz };
-            case DOWN  -> new int[] { cx,        last - cz };
+            case DOWN  -> new int[] { cx,        cz };
             case NORTH -> new int[] { last - cx, last - cy };
             case SOUTH -> new int[] { cx,        last - cy };
             case EAST  -> new int[] { last - cz, last - cy };
