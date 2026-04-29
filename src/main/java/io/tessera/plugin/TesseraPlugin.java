@@ -54,6 +54,14 @@ public final class TesseraPlugin extends JavaPlugin {
         this.bakerExecutor = Executors.newFixedThreadPool(2, named("Tessera-Baker"));
         this.baker = new BlockBaker(getLogger(), assets, mcVersion, registry, uploader, diskCache, pngDir, bakerExecutor);
 
+        // Inject the vanilla grass/foliage colormaps into NMS so server-side
+        // Biome.getGrassColor() / getFoliageColor() return real per-biome
+        // values. Without this, tinted-block bakes get tint=0 and skip
+        // (server has the colormap-PNG-loading code under client-only paths).
+        if (config.enableTintedBlocks()) {
+            io.tessera.nms.BlockTintReader.prepareColormaps(assets, mcVersion, getLogger());
+        }
+
         AtomicInteger active = new AtomicInteger();
         ProgressTracker tracker = new ProgressTracker();
         this.progressListener = new BlockBreakProgressListener(this, blockFactory, registry, active, tracker);
