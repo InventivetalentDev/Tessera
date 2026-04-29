@@ -30,9 +30,13 @@ public record TesseraConfig(
 
     public static TesseraConfig from(FileConfiguration cfg) {
         int grid = cfg.getInt("chunkGridSize", 4);
-        if (16 % grid != 0) {
+        if (grid < 1 || grid > 16 || 16 % grid != 0) {
             throw new IllegalArgumentException(
-                    "chunkGridSize must divide 16; got " + grid);
+                    "chunkGridSize must be one of 1, 2, 4, 8, 16; got " + grid
+                            + ". Note: changing chunkGridSize invalidates every"
+                            + " previously baked block — bundled heads.json"
+                            + " entries are dropped and each block has to be"
+                            + " re-uploaded to MineSkin at the new size.");
         }
         String modeRaw = cfg.getString("animationMode", "progress");
         AnimationMode mode = switch (modeRaw.toLowerCase(Locale.ROOT)) {

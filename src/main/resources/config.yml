@@ -4,9 +4,21 @@
 # and falls back to vanilla particles for anything else.
 mineskinApiKey: ""
 
-# How many chunks per axis each block is split into.
-# 4 means 4x4 tiles per face, 4x4x4 = 64 chunk volumes per block (56 visible).
-# Default texture resolution is 16x16 px; chunkGridSize must divide 16.
+# How many chunks per axis each block is split into. Must divide 16
+# (block textures are 16×16 px) — permitted values: 1, 2, 4, 8, 16.
+#   gridN=4   →  4×4 tiles per face, 64 chunks/block (56 visible);
+#                each chunk samples a 4×4 px region.
+#   gridN=16  → 16×16 tiles per face, 4096 chunks/block (1352 visible);
+#                each chunk is one source pixel. Many more entities per
+#                broken block and many more unique skin uploads for
+#                non-uniform textures — set maxConcurrentFakeBlocks
+#                accordingly.
+#
+# WARNING: changing this invalidates every previously baked block.
+# Bundled heads.json entries baked at the old gridN are dropped on
+# startup, and every block has to be re-uploaded to MineSkin at the new
+# size on demand as players break blocks — set mineskinApiKey above so
+# runtime baking can run.
 chunkGridSize: 4
 
 # Materials this plugin should animate. Use ["*"] for all full-cube blocks.

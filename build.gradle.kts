@@ -83,13 +83,15 @@ tasks.assemble {
 
 val tesseraBake by tasks.registering(JavaExec::class) {
     group = "tessera"
-    description = "Pre-bake MineSkin player-head textures for blocks listed in bake-blocks.txt."
+    description = "Pre-bake MineSkin player-head textures for blocks listed in bake-blocks.txt. Override chunk size with -PgridN=<N>."
     mainClass.set("io.tessera.skin.bake.BakeMain")
     classpath = sourceSets["main"].runtimeClasspath
-    args = listOf(
+    val baseArgs = mutableListOf(
         "--input", "bake-blocks.txt",
         "--out",   "src/main/resources/heads.json",
         "--cache", "build/tessera-cache"
     )
+    (project.findProperty("gridN") as? String)?.let { baseArgs += listOf("--gridN", it) }
+    args = baseArgs
     environment("MINESKIN_API_KEY", System.getenv("MINESKIN_API_KEY") ?: "")
 }

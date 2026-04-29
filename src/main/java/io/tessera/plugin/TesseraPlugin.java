@@ -37,6 +37,18 @@ public final class TesseraPlugin extends JavaPlugin {
         String mcVersion = Bukkit.getMinecraftVersion();
         this.registry = HeadsRegistry.loadFromClasspath(
                 getLogger(), "/heads.json", config.chunkGridSize(), mcVersion);
+        if (registry.gridN() != config.chunkGridSize()) {
+            // Bundled heads.json was baked at a different chunk size than
+            // the current config — its chunk coordinates are at the wrong
+            // resolution to render. Drop the bundled entries; runtime
+            // baking will repopulate them at the configured size (each
+            // block gets re-uploaded to MineSkin on first use).
+            getLogger().warning("config.chunkGridSize=" + config.chunkGridSize()
+                    + " but bundled heads.json was baked at gridN=" + registry.gridN()
+                    + ". Discarding bundled entries; every block will be re-baked"
+                    + " at runtime via MineSkin (requires mineskinApiKey).");
+            this.registry = HeadsRegistry.empty(getLogger(), config.chunkGridSize(), mcVersion);
+        }
         this.itemFactory = new HeadItemFactory();
         this.blockFactory = new FakeBlockFactory(itemFactory, registry);
 
