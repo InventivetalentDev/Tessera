@@ -139,21 +139,27 @@ public final class DirectionalShrinkEffect implements ChunkEffect {
     }
 
     /**
-     * Reverse the {@code INITIAL_SHELL_COMPRESSION} applied at spawn so the
-     * lattice grows from "fits inside the real block" to "fills the block
-     * volume" exactly when the BARRIER block change is sent. {@code factor}
-     * is the inverse compression (e.g. {@code 1f / 0.99f} ≈ 1.0101 to undo
-     * a 1% contraction). Multiplies {@code baseScales} and {@code prevScales}
-     * in place so subsequent {@link #applyAtProgress} calls compute targets
-     * off the new (uncompressed) baseline. {@code interpTicks} controls
-     * how the client lerps to the new size; pass 0 for an instant snap that
-     * lines up with the barrier swap.
+     * Multiply every chunk's scale (and the per-chunk {@code baseScales} /
+     * {@code prevScales} that drive {@link #applyAtProgress}) by
+     * {@code factor}. Used in two directions, both timed to a simultaneous
+     * sendBlockChange so the snap is masked by the block-vs-BARRIER swap:
+     * <ul>
+     *   <li>{@code factor = 1 / INITIAL_SHELL_COMPRESSION ≈ 1.0101} when the
+     *       BARRIER hides the real block — grows the lattice from "fits
+     *       inside" to "fills the block volume".</li>
+     *   <li>{@code factor = INITIAL_SHELL_COMPRESSION ≈ 0.99} when the real
+     *       block is restored at the start of a reverse — shrinks the
+     *       lattice back inside the now-visible block so it doesn't
+     *       z-fight or expose see-through gaps.</li>
+     * </ul>
+     * {@code interpTicks = 0} produces an instant snap that lines up with
+     * the accompanying block change; non-zero lerps over that many ticks.
      */
-    public static void expandShellToFullScale(FakeBlock fakeBlock,
-                                              float[] baseScales,
-                                              float[] prevScales,
-                                              float factor,
-                                              int interpTicks) {
+    public static void rescaleShell(FakeBlock fakeBlock,
+                                    float[] baseScales,
+                                    float[] prevScales,
+                                    float factor,
+                                    int interpTicks) {
         List<ChunkRef> chunks = fakeBlock.chunks();
         int n = chunks.size();
         int interp = Math.max(0, interpTicks);

@@ -173,6 +173,27 @@ public final class BlockBreakProgressListener implements Listener {
             // Player resumed; cancel the in-flight reverse and continue forward.
             cancelReverseTask(tb);
             tb.state = State.FORWARD;
+            // beginReverse restored the real block client-side and re-
+            // compressed the lattice so it'd fit inside it. Undo both now
+            // that we're committing to forward again. The entity is already
+            // rendered (it's been visible throughout the reverse), so no
+            // render-lag delay is needed — expand and re-hide in the same
+            // tick.
+            if (cfg.clientHideRealBlock() && !tb.barrierSent) {
+                if (!tb.shellExpanded) {
+                    DirectionalShrinkEffect.rescaleShell(
+                            tb.fakeBlock, tb.baseScales, tb.currentScales,
+                            1f / FakeBlockFactory.INITIAL_SHELL_COMPRESSION,
+                            /*interpTicks=*/ 0);
+                    tb.shellExpanded = true;
+                }
+                try {
+                    player.sendBlockChange(breakLoc, Material.BARRIER.createBlockData());
+                    tb.barrierSent = true;
+                } catch (RuntimeException re) {
+                    plugin.getLogger().warning("sendBlockChange(BARRIER) on resume failed: " + re.getMessage());
+                }
+            }
         }
 
         // First real progress event for a speculative spawn confirms the
@@ -473,6 +494,30 @@ public final class BlockBreakProgressListener implements Listener {
         final long startMs = System.currentTimeMillis();
         final int durationMs = (int) Math.max(50L, Math.min(300L, Math.round(startProgress * 300d)));
 
+        // Mirror the spawn flow: restore the real block client-side and
+        // compress the lattice back inside it in the same tick. Without
+        // this, partially-shrunk chunks (some at scale 0) leave see-through
+        // gaps over the still-hidden BARRIER until the reverse animation
+        // grows them back. Cancel any pending barrier-swap task so it can't
+        // re-hide the block after we've restored it.
+        cancelBarrierSwapTask(tb);
+        if (tb.barrierSent) {
+            Player p = Bukkit.getPlayer(tb.currentPlayerId);
+            if (p != null) {
+                try {
+                    p.sendBlockChange(tb.origin, tb.originalBlockData);
+                } catch (RuntimeException ignored) { /* player may have unloaded chunk */ }
+            }
+            tb.barrierSent = false;
+        }
+        if (tb.shellExpanded) {
+            DirectionalShrinkEffect.rescaleShell(
+                    tb.fakeBlock, tb.baseScales, tb.currentScales,
+                    FakeBlockFactory.INITIAL_SHELL_COMPRESSION,
+                    /*interpTicks=*/ 0);
+            tb.shellExpanded = false;
+        }
+
         if (cfg.debug()) plugin.getLogger().info(
                 "[debug-progress] reverse-start " + tb.key + " at " + posKey
                         + " from=" + fmt(startProgress) + " durationMs=" + durationMs);
@@ -618,7 +663,7 @@ public final class BlockBreakProgressListener implements Listener {
             // and chunk-scale snap mask each other, so neither the
             // compression nor its undo is individually visible.
             if (!live.shellExpanded) {
-                DirectionalShrinkEffect.expandShellToFullScale(
+                DirectionalShrinkEffect.rescaleShell(
                         live.fakeBlock, live.baseScales, live.currentScales,
                         1f / FakeBlockFactory.INITIAL_SHELL_COMPRESSION,
                         /*interpTicks=*/ 0);

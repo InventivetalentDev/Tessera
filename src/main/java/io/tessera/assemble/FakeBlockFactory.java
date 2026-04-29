@@ -66,7 +66,7 @@ public final class FakeBlockFactory {
      * would otherwise be visible on the block's surfaces. The
      * 1% contraction translates to sub-pixel gaps between chunks
      * (0.0025 block units at gridN=4), well below the rendering threshold.
-     * {@link io.tessera.effect.builtin.DirectionalShrinkEffect#expandShellToFullScale}
+     * {@link io.tessera.effect.builtin.DirectionalShrinkEffect#rescaleShell}
      * undoes the contraction in lockstep with the barrier swap.
      */
     public static final float INITIAL_SHELL_COMPRESSION = 0.99f;
@@ -149,7 +149,7 @@ public final class FakeBlockFactory {
      * progress-driven break path so the lattice fits inside the still-
      * visible real block during the deferred-barrier-swap window. Callers
      * are responsible for undoing the compression when appropriate via
-     * {@link io.tessera.effect.builtin.DirectionalShrinkEffect#expandShellToFullScale}.
+     * {@link io.tessera.effect.builtin.DirectionalShrinkEffect#rescaleShell}.
      */
     public FakeBlock create(Location blockLocation, BakeKey bakeKey,
                             Quaternionf blockRotation, boolean fillInterior, Vector eyeDir,
