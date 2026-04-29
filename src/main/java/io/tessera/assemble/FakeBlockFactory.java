@@ -185,8 +185,13 @@ public final class FakeBlockFactory {
 
             Quaternionf faceRot = canonicalRotation;
 
-            Vector3f translation = geom.translationFor(coord, faceRot);
             float scale = geom.chunkScale() * shellFactor;
+            // Pass the actual rendered scale so the head's CUBE_CENTER_PRE
+            // compensation matches — otherwise the residual shifts every
+            // chunk up by (1−shellFactor) * chunkScale * |CUBE_CENTER_PRE_Y|,
+            // which makes the top-row chunks clip through the real block's
+            // top face.
+            Vector3f translation = geom.translationFor(coord, faceRot, scale);
 
             Transformation tx = new Transformation(
                     translation,
@@ -269,8 +274,8 @@ public final class FakeBlockFactory {
                         if (rel.dot(dir) > 0f) continue;
                     }
 
-                    Vector3f translation = geom.translationFor(coord, canonicalRotation);
                     float scale = geom.chunkScale() * shellFactor;
+                    Vector3f translation = geom.translationFor(coord, canonicalRotation, scale);
                     Transformation tx = new Transformation(
                             translation,
                             new Quaternionf(blockRotation),
