@@ -270,7 +270,7 @@ public final class FakeBlockFactory {
      * to the first available chunk if no face-center is found (e.g. some
      * weird gridN=2 case).
      */
-    private static HeadsRegistry.Entry pickInteriorDonor(Map<ChunkCoord, HeadsRegistry.Entry> chunks, int gridN) {
+    static HeadsRegistry.Entry pickInteriorDonor(Map<ChunkCoord, HeadsRegistry.Entry> chunks, int gridN) {
         HeadsRegistry.Entry fallback = null;
         for (Map.Entry<ChunkCoord, HeadsRegistry.Entry> e : chunks.entrySet()) {
             if (fallback == null) fallback = e.getValue();
