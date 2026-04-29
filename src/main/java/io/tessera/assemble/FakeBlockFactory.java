@@ -58,6 +58,19 @@ import java.util.Map;
  */
 public final class FakeBlockFactory {
 
+    /**
+     * Initial size of the chunk lattice expressed as a fraction of the
+     * block volume. Spawning at slightly less than 1.0 keeps the FakeBlock
+     * geometrically inside the still-visible real block until the deferred
+     * sendBlockChange(BARRIER) fires, eliminating the brief z-fight that
+     * would otherwise be visible on the block's surfaces. The
+     * 1% contraction translates to sub-pixel gaps between chunks
+     * (0.0025 block units at gridN=4), well below the rendering threshold.
+     * {@link io.tessera.effect.builtin.DirectionalShrinkEffect#expandShellToFullScale}
+     * undoes the contraction in lockstep with the barrier swap.
+     */
+    public static final float INITIAL_SHELL_COMPRESSION = 0.99f;
+
     private final HeadItemFactory itemFactory;
     private final HeadsRegistry registry;
 
@@ -75,30 +88,42 @@ public final class FakeBlockFactory {
      * @param blockKey      the namespaced ID of the block being replaced
      */
     public FakeBlock create(Location blockLocation, BlockKey blockKey) {
-        return create(blockLocation, BakeKey.untinted(blockKey), new Quaternionf(), false, null);
+        return create(blockLocation, BakeKey.untinted(blockKey), new Quaternionf(), false, null, false);
     }
 
     public FakeBlock create(Location blockLocation, BlockKey blockKey, Quaternionf blockRotation) {
-        return create(blockLocation, BakeKey.untinted(blockKey), blockRotation, false, null);
+        return create(blockLocation, BakeKey.untinted(blockKey), blockRotation, false, null, false);
     }
 
     /**
-     * Tint-aware overload: looks up chunks via {@link BakeKey} so per-tint
-     * runtime variants (grass/leaves baked against a specific biome color)
-     * resolve to their own chunk map rather than the canonical untinted one.
+     * Tint-aware 3-arg overload: looks up chunks via {@link BakeKey} so
+     * per-tint runtime variants (grass/leaves baked against a specific
+     * biome color) resolve to their own chunk map rather than the canonical
+     * untinted one.
      */
     public FakeBlock create(Location blockLocation, BakeKey bakeKey, Quaternionf blockRotation) {
-        return create(blockLocation, bakeKey, blockRotation, false, null);
+        return create(blockLocation, bakeKey, blockRotation, false, null, false);
     }
 
     /**
-     * Untinted convenience for callers that don't need biome-tint awareness.
-     * Wraps the {@code blockKey} as {@link BakeKey#untinted(BlockKey)} and
-     * delegates to the {@link BakeKey}-keyed implementation.
+     * Untinted convenience for callers that don't need biome-tint awareness
+     * (e.g. {@code /tessera test}). Wraps {@code blockKey} as
+     * {@link BakeKey#untinted(BlockKey)} and delegates to the canonical
+     * {@link BakeKey}-keyed implementation.
      */
     public FakeBlock create(Location blockLocation, BlockKey blockKey,
                             Quaternionf blockRotation, boolean fillInterior, Vector eyeDir) {
-        return create(blockLocation, BakeKey.untinted(blockKey), blockRotation, fillInterior, eyeDir);
+        return create(blockLocation, BakeKey.untinted(blockKey), blockRotation, fillInterior, eyeDir, false);
+    }
+
+    /**
+     * Tint-aware 5-arg overload: post-break path uses this since the real
+     * block is already gone by then and there's no surface to z-fight with,
+     * so {@code compressShell} stays false.
+     */
+    public FakeBlock create(Location blockLocation, BakeKey bakeKey,
+                            Quaternionf blockRotation, boolean fillInterior, Vector eyeDir) {
+        return create(blockLocation, bakeKey, blockRotation, fillInterior, eyeDir, false);
     }
 
     /**
@@ -118,9 +143,17 @@ public final class FakeBlockFactory {
      * borrow the skin of an outer face-center chunk — close enough for the
      * brief moment they're visible during the wave passage. {@code eyeDir}
      * is required when {@code fillInterior} is true; it's ignored otherwise.
+     *
+     * <p>If {@code compressShell} is {@code true}, every chunk is spawned at
+     * {@link #INITIAL_SHELL_COMPRESSION} of its full size — used by the
+     * progress-driven break path so the lattice fits inside the still-
+     * visible real block during the deferred-barrier-swap window. Callers
+     * are responsible for undoing the compression when appropriate via
+     * {@link io.tessera.effect.builtin.DirectionalShrinkEffect#expandShellToFullScale}.
      */
     public FakeBlock create(Location blockLocation, BakeKey bakeKey,
-                            Quaternionf blockRotation, boolean fillInterior, Vector eyeDir) {
+                            Quaternionf blockRotation, boolean fillInterior, Vector eyeDir,
+                            boolean compressShell) {
         World world = blockLocation.getWorld();
         if (world == null) throw new IllegalArgumentException("Location has no world");
 
@@ -143,6 +176,8 @@ public final class FakeBlockFactory {
         Quaternionf canonicalRotation = HeadRotations.compose(
                 HeadFace.FRONT, FaceDir.SOUTH, FaceRotations.of(HeadFace.FRONT));
 
+        float shellFactor = compressShell ? INITIAL_SHELL_COMPRESSION : 1f;
+
         for (Map.Entry<ChunkCoord, HeadsRegistry.Entry> entry : chunks.entrySet()) {
             ChunkCoord coord = entry.getKey();
             HeadSkin head = HeadsRegistry.toHeadSkin(entry.getValue());
@@ -151,7 +186,7 @@ public final class FakeBlockFactory {
             Quaternionf faceRot = canonicalRotation;
 
             Vector3f translation = geom.translationFor(coord, faceRot);
-            float scale = geom.chunkScale();
+            float scale = geom.chunkScale() * shellFactor;
 
             Transformation tx = new Transformation(
                     translation,
@@ -185,7 +220,7 @@ public final class FakeBlockFactory {
 
         if (fillInterior && gridN >= 3 && !chunks.isEmpty()) {
             spawnInteriorChunks(world, origin, geom, chunks, blockRotation,
-                    canonicalRotation, gridN, eyeDir, refs);
+                    canonicalRotation, gridN, eyeDir, refs, shellFactor);
         }
 
         return new FakeBlock(origin, bakeKey.block(), gridN, refs, blockRotation);
@@ -203,7 +238,7 @@ public final class FakeBlockFactory {
                                      Map<ChunkCoord, HeadsRegistry.Entry> chunks,
                                      Quaternionf blockRotation, Quaternionf canonicalRotation,
                                      int gridN, Vector eyeDir,
-                                     List<ChunkRef> refs) {
+                                     List<ChunkRef> refs, float shellFactor) {
         HeadsRegistry.Entry donorEntry = pickInteriorDonor(chunks, gridN);
         if (donorEntry == null) return;
         HeadSkin donorSkin = HeadsRegistry.toHeadSkin(donorEntry);
@@ -235,7 +270,7 @@ public final class FakeBlockFactory {
                     }
 
                     Vector3f translation = geom.translationFor(coord, canonicalRotation);
-                    float scale = geom.chunkScale();
+                    float scale = geom.chunkScale() * shellFactor;
                     Transformation tx = new Transformation(
                             translation,
                             new Quaternionf(blockRotation),

@@ -56,6 +56,7 @@ public final class ProgressTracker {
         public boolean barrierSent;
         public boolean autoBreakTriggered;     // we already called player.breakBlock; don't re-fire
         public boolean speculative;            // spawned from PlayerInteractEvent; awaiting first real progress
+        public boolean shellExpanded;          // true once the spawn-time INITIAL_SHELL_COMPRESSION has been undone
         public BukkitTask reverseTask;         // non-null only while REVERSING
         public BukkitTask barrierSwapTask;     // non-null between spawn and the deferred sendBlockChange(BARRIER)
 
@@ -80,6 +81,7 @@ public final class ProgressTracker {
             this.barrierSent = false;
             this.autoBreakTriggered = false;
             this.speculative = false;
+            this.shellExpanded = false;
             this.reverseTask = null;
             this.barrierSwapTask = null;
         }

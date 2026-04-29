@@ -138,6 +138,43 @@ public final class DirectionalShrinkEffect implements ChunkEffect {
         }
     }
 
+    /**
+     * Reverse the {@code INITIAL_SHELL_COMPRESSION} applied at spawn so the
+     * lattice grows from "fits inside the real block" to "fills the block
+     * volume" exactly when the BARRIER block change is sent. {@code factor}
+     * is the inverse compression (e.g. {@code 1f / 0.99f} ≈ 1.0101 to undo
+     * a 1% contraction). Multiplies {@code baseScales} and {@code prevScales}
+     * in place so subsequent {@link #applyAtProgress} calls compute targets
+     * off the new (uncompressed) baseline. {@code interpTicks} controls
+     * how the client lerps to the new size; pass 0 for an instant snap that
+     * lines up with the barrier swap.
+     */
+    public static void expandShellToFullScale(FakeBlock fakeBlock,
+                                              float[] baseScales,
+                                              float[] prevScales,
+                                              float factor,
+                                              int interpTicks) {
+        List<ChunkRef> chunks = fakeBlock.chunks();
+        int n = chunks.size();
+        int interp = Math.max(0, interpTicks);
+        for (int i = 0; i < n; i++) {
+            ChunkRef chunk = chunks.get(i);
+            baseScales[i] *= factor;
+            float newScale = prevScales[i] * factor;
+            prevScales[i] = newScale;
+            if (chunk.display().isDead()) continue;
+            Transformation cur = chunk.display().getTransformation();
+            Transformation next = new Transformation(
+                    cur.getTranslation(),
+                    cur.getLeftRotation(),
+                    new Vector3f(newScale, newScale, newScale),
+                    cur.getRightRotation());
+            chunk.display().setInterpolationDelay(0);
+            chunk.display().setInterpolationDuration(interp);
+            chunk.display().setTransformation(next);
+        }
+    }
+
     /** Capture the per-chunk uniform spawn scales (the X component, since spawns are uniform). */
     public static float[] captureBaseScales(FakeBlock fakeBlock) {
         List<ChunkRef> chunks = fakeBlock.chunks();

@@ -348,7 +348,8 @@ public final class BlockBreakProgressListener implements Listener {
         active.incrementAndGet();
         FakeBlock fb;
         try {
-            fb = factory.create(breakLoc, bakeKey, blockRotation, cfg.fillInterior(), eyeDir);
+            fb = factory.create(breakLoc, bakeKey, blockRotation, cfg.fillInterior(), eyeDir,
+                    /*compressShell=*/ true);
         } catch (RuntimeException re) {
             active.decrementAndGet();
             plugin.getLogger().warning("Failed to spawn FakeBlock for " + bakeKey + ": " + re.getMessage());
@@ -612,6 +613,17 @@ public final class BlockBreakProgressListener implements Listener {
             if (!live.currentPlayerId.equals(expectedPlayerId)) return;
             Player p = Bukkit.getPlayer(expectedPlayerId);
             if (p == null || !p.isOnline()) return;
+            // Expand the spawn-time shell compression in the same tick we
+            // hide the real block — the simultaneous block→BARRIER swap
+            // and chunk-scale snap mask each other, so neither the
+            // compression nor its undo is individually visible.
+            if (!live.shellExpanded) {
+                DirectionalShrinkEffect.expandShellToFullScale(
+                        live.fakeBlock, live.baseScales, live.currentScales,
+                        1f / FakeBlockFactory.INITIAL_SHELL_COMPRESSION,
+                        /*interpTicks=*/ 0);
+                live.shellExpanded = true;
+            }
             try {
                 p.sendBlockChange(loc, Material.BARRIER.createBlockData());
                 live.barrierSent = true;
