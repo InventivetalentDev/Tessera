@@ -73,6 +73,15 @@ public final class BlockBreakProgressListener implements Listener {
     // multi-second gaps and we don't want a single event to stretch a smooth
     // interpolation that long if mining stops.
     private static final long MAX_INTERP_MS = 800L;
+    // Display-entity spawn packets have an initial render lag client-side
+    // (~1-2 ticks before the transformation actually paints), while
+    // sendBlockChange takes effect on the very next frame. If we send the
+    // BARRIER immediately after spawning the FakeBlock the player sees a
+    // brief see-through window: barrier (transparent) is rendered before
+    // the heads are. Defer the swap by a few ticks so the entity is fully
+    // visible when the real block is hidden. Empirically 1 tick is too
+    // short on typical connections.
+    private static final long BARRIER_SWAP_DELAY_TICKS = 3L;
 
     private final TesseraPlugin plugin;
     private final FakeBlockFactory factory;
@@ -344,18 +353,13 @@ public final class BlockBreakProgressListener implements Listener {
         tracker.put(posKey, tb);
 
         if (cfg.clientHideRealBlock()) {
-            try {
-                player.sendBlockChange(breakLoc, Material.BARRIER.createBlockData());
-                tb.barrierSent = true;
-            } catch (RuntimeException re) {
-                plugin.getLogger().warning("sendBlockChange(BARRIER) failed: " + re.getMessage());
-            }
+            scheduleBarrierSwap(tb, posKey, player, breakLoc);
         }
 
         if (cfg.debug()) plugin.getLogger().info(
                 "[debug-progress] spawn " + key + " at " + posKey
                         + " player=" + player.getName() + " progress=" + fmt(progress)
-                        + " barrier=" + tb.barrierSent);
+                        + " barrierDeferredTicks=" + BARRIER_SWAP_DELAY_TICKS);
 
         applyForward(tb, progress, cfg);
     }
@@ -420,6 +424,10 @@ public final class BlockBreakProgressListener implements Listener {
                 oldPlayer.sendBlockChange(tb.origin, tb.originalBlockData);
             } catch (RuntimeException ignored) { /* old player may have left chunk */ }
         }
+        // Pending barrier swap (if any) was scoped to the old player's view
+        // and would no-op for them after the restore above; cancel it before
+        // we reschedule one for the new player.
+        cancelBarrierSwapTask(tb);
 
         tb.currentPlayerId = newPlayer.getUniqueId();
         tb.eyeDir = newPlayer.getEyeLocation().getDirection();
@@ -427,12 +435,11 @@ public final class BlockBreakProgressListener implements Listener {
         tracker.transferOwner(posKey, oldId, newPlayer.getUniqueId());
 
         if (cfg.clientHideRealBlock()) {
-            try {
-                newPlayer.sendBlockChange(tb.origin, Material.BARRIER.createBlockData());
-                tb.barrierSent = true;
-            } catch (RuntimeException re) {
-                plugin.getLogger().warning("sendBlockChange(BARRIER) on transfer failed: " + re.getMessage());
-            }
+            // The FakeBlock entity is already in the world and visible to the
+            // new player from spawn-time; no extra render-lag delay needed,
+            // but route through the same helper for symmetry and so a
+            // teardown before the swap still cancels it cleanly.
+            scheduleBarrierSwap(tb, posKey, newPlayer, tb.origin);
         }
 
         if (cfg.debug()) plugin.getLogger().info(
@@ -541,6 +548,7 @@ public final class BlockBreakProgressListener implements Listener {
     }
 
     private void disposeImmediate(TrackedBreak tb, boolean restoreBlock) {
+        cancelBarrierSwapTask(tb);
         if (restoreBlock && tb.barrierSent) {
             Player p = Bukkit.getPlayer(tb.currentPlayerId);
             if (p != null) {
@@ -562,6 +570,44 @@ public final class BlockBreakProgressListener implements Listener {
             try { tb.reverseTask.cancel(); } catch (RuntimeException ignored) {}
             tb.reverseTask = null;
         }
+    }
+
+    private static void cancelBarrierSwapTask(TrackedBreak tb) {
+        if (tb.barrierSwapTask != null) {
+            try { tb.barrierSwapTask.cancel(); } catch (RuntimeException ignored) {}
+            tb.barrierSwapTask = null;
+        }
+    }
+
+    /**
+     * Schedule the {@code sendBlockChange(BARRIER)} on the given player a
+     * few ticks after the FakeBlock has been spawned, so the entity is
+     * fully rendered client-side by the time the real block is hidden.
+     * The lambda re-fetches the tracker on fire so a teardown between now
+     * and then leaves no stuck barrier behind.
+     */
+    private void scheduleBarrierSwap(TrackedBreak tb, BlockPosKey posKey,
+                                     Player player, Location loc) {
+        cancelBarrierSwapTask(tb);
+        UUID expectedPlayerId = player.getUniqueId();
+        tb.barrierSwapTask = Bukkit.getScheduler().runTaskLater(plugin, () -> {
+            TrackedBreak live = tracker.get(posKey);
+            if (live != tb) return;                        // disposed already
+            live.barrierSwapTask = null;
+            if (live.barrierSent) return;                  // shouldn't happen, defensive
+            // If ownership transferred between scheduling and firing, drop
+            // this swap — transferOwnership cancels us anyway, but check
+            // again to be safe against any race.
+            if (!live.currentPlayerId.equals(expectedPlayerId)) return;
+            Player p = Bukkit.getPlayer(expectedPlayerId);
+            if (p == null || !p.isOnline()) return;
+            try {
+                p.sendBlockChange(loc, Material.BARRIER.createBlockData());
+                live.barrierSent = true;
+            } catch (RuntimeException re) {
+                plugin.getLogger().warning("sendBlockChange(BARRIER) failed: " + re.getMessage());
+            }
+        }, BARRIER_SWAP_DELAY_TICKS);
     }
 
     private static String fmt(double d) { return String.format("%.3f", d); }

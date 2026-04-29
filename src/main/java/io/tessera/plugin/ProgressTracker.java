@@ -57,6 +57,7 @@ public final class ProgressTracker {
         public boolean autoBreakTriggered;     // we already called player.breakBlock; don't re-fire
         public boolean speculative;            // spawned from PlayerInteractEvent; awaiting first real progress
         public BukkitTask reverseTask;         // non-null only while REVERSING
+        public BukkitTask barrierSwapTask;     // non-null between spawn and the deferred sendBlockChange(BARRIER)
 
         public TrackedBreak(UUID playerId, BlockKey key, Location origin,
                             BlockData originalBlockData, Vector eyeDir,
@@ -80,6 +81,7 @@ public final class ProgressTracker {
             this.autoBreakTriggered = false;
             this.speculative = false;
             this.reverseTask = null;
+            this.barrierSwapTask = null;
         }
     }
 
