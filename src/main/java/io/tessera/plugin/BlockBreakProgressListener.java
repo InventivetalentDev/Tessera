@@ -144,7 +144,18 @@ public final class BlockBreakProgressListener implements Listener {
 
         // Same player.
         if (progress <= 0d) {
-            // Treat as cancel: drop into reverse if not already reversing.
+            // Vanilla emits a progress=0 event both when the player STOPS
+            // mining (genuine cancel) and when they START mining (the
+            // stage=-1 transition that arrives right after PlayerInteract-
+            // Event LEFT_CLICK_BLOCK). After a speculative pre-spawn we'd
+            // otherwise treat the start as a cancel and reverse immediately —
+            // visible as a short shrink-then-respawn jump at the beginning
+            // of every break. Only reverse if we've already observed
+            // positive progress, i.e. there's something to roll back.
+            if (tb.lastAppliedProgress <= 0d) {
+                tb.lastUpdateTickMs = System.currentTimeMillis();
+                return;
+            }
             beginReverse(tb, posKey, cfg);
             return;
         }
