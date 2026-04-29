@@ -53,8 +53,6 @@ public final class BlockTintReader {
     // does on the client; that class isn't on the server classpath so we
     // inline the equivalent server-side calls.
     private static final ColorResolver GRASS = (biome, x, z) -> biome.getGrassColor(x, z);
-    private static final ColorResolver FOLIAGE = (biome, x, z) -> biome.getFoliageColor();
-    private static final ColorResolver WATER = (biome, x, z) -> biome.getWaterColor();
 
     /**
      * Fetch the vanilla grass + foliage colormap PNGs (256×256 each) and
@@ -104,15 +102,15 @@ public final class BlockTintReader {
 
     private static ColorResolver pickResolver(String path) {
         return switch (path) {
+            // Only solid-texture tinted blocks. Transparent-texture blocks
+            // (leaves, water, vine) are excluded because player-head skins
+            // don't support transparency — the semi-transparent leaf pixels
+            // would render as holes in the ItemDisplay entity.
+            // Non-cube variants (short_grass, fern, etc.) already fail the
+            // full-cube element check in ModelResolver; listed here for
+            // documentation.
             case "grass_block", "short_grass", "tall_grass", "fern", "large_fern",
                  "sugar_cane", "potted_fern" -> GRASS;
-            case "oak_leaves", "jungle_leaves", "acacia_leaves", "dark_oak_leaves",
-                 "mangrove_leaves", "azalea_leaves", "flowering_azalea_leaves", "vine" -> FOLIAGE;
-            case "water", "bubble_column" -> WATER;
-            // Out of v1 scope:
-            //   spruce_leaves / birch_leaves / cherry_leaves — constant tints,
-            //     not biome-driven; trivial follow-up.
-            //   redstone_wire — power-level dependent, needs power in BakeKey.
             default -> null;
         };
     }
