@@ -34,16 +34,23 @@ import java.util.logging.Logger;
  * blockstate → model parent chain on mcasset.cloud and downloading the
  * referenced textures.
  *
- * <p><b>v1 cube-only:</b> only blocks whose model parent is one of
- * {@link #CUBE_PARENTS} produce a {@link BlockModel}. Anything else returns
- * {@link Optional#empty()} and a one-shot warn-log. Property variants are
- * ignored — we always pick the first variant. Tint blocks (grass_block,
- * oak_leaves, ...) are detected via {@link #TINTED_BLOCKS} and surfaced
- * via {@link BlockModel#tinted()} so the listener can skip them.
+ * <p><b>v1 cube-only:</b> a model is accepted iff it has a full-cube element
+ * (from=[0,0,0] to=[16,16,16]) with all 6 face textures resolvable. Anything
+ * else returns {@link Optional#empty()} and a one-shot fine-log. Property
+ * variants are ignored — we always pick the first variant. Tint blocks
+ * (grass_block, oak_leaves, ...) are detected via {@link #TINTED_BLOCKS} and
+ * surfaced via {@link BlockModel#tinted()} so the listener / baker can
+ * multiply face PNGs by a per-biome tint.
  */
 public final class ModelResolver {
 
-    /** Model parents that count as a full 1×1×1 cube with one texture per face. */
+    /**
+     * Model parents that {@link #resolveModelChain} prefers as the
+     * "terminal" name when walking up the inheritance chain. Used purely
+     * for diagnostic / display purposes ({@link BlockModel#parentChain()})
+     * since the actual cube-ness check now happens in
+     * {@link #pickFaceTextures} via {@link #findFullCubeElement}.
+     */
     private static final Set<String> CUBE_PARENTS = Set.of(
             "minecraft:block/cube",
             "minecraft:block/cube_all",
@@ -97,10 +104,15 @@ public final class ModelResolver {
             }
 
             ResolvedModel resolved = resolveModelChain(vs.canonicalModelName);
-            if (!CUBE_PARENTS.contains(resolved.terminalParent)) {
-                logger.fine("[" + key + "] non-cube parent " + resolved.terminalParent + "; skipping");
-                return Optional.empty();
-            }
+            // Cube-ness is determined by `pickFaceTextures` finding a
+            // full-cube element with all 6 face textures, not by parent
+            // name. The earlier `CUBE_PARENTS.contains(...)` gate excluded
+            // grass_block and leaves (whose `block/leaves` / `block/grass_block`
+            // parents define elements directly under `block/block` rather
+            // than via a named cube parent), even though they're full
+            // 1×1×1 cubes that bake fine. Slabs / stairs / fences fail
+            // downstream anyway: `findFullCubeElement` returns null, faces
+            // come back empty, and the 6-face check below kicks them out.
 
             EnumMap<FaceDir, BufferedImage> faces = pickFaceTextures(key, resolved);
             if (faces.size() != 6) {
@@ -297,8 +309,11 @@ public final class ModelResolver {
             logger.fine("[" + key + "] no elements in model chain; skipping");
             return out;
         }
-        // CUBE_PARENTS gating upstream guarantees the model is a single full
-        // 1×1×1 cube, so the first full-cube element wins.
+        // First element with from=[0,0,0] to=[16,16,16] wins — this is what
+        // gates cube-ness end-to-end. Blocks like grass_block list a
+        // full-cube dirt+top+sides element first and overlay panels after;
+        // we pick up the dirt cube and ignore the overlays. Slabs / stairs
+        // / fences have no full-cube element and bail out below.
         JsonObject cube = findFullCubeElement(m.elements);
         if (cube == null || !cube.has("faces")) {
             logger.fine("[" + key + "] no full-cube element with faces; skipping");
