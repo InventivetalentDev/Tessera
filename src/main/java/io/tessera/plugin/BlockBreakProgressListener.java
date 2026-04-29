@@ -30,6 +30,8 @@ import org.bukkit.scheduler.BukkitTask;
 import org.bukkit.util.Vector;
 import org.joml.Quaternionf;
 
+import java.time.LocalTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -202,8 +204,10 @@ public final class BlockBreakProgressListener implements Listener {
         if (tb.speculative) {
             tb.speculative = false;
             if (cfg.debug()) plugin.getLogger().info(
-                    "[debug-progress] speculative-confirmed " + tb.key + " at " + posKey
-                            + " progress=" + fmt(progress));
+                    "[" + ts() + "] [debug-progress] speculative-confirmed " + tb.key + " at " + posKey
+                            + " progress=" + fmt(progress)
+                            + " barrierSent=" + tb.barrierSent
+                            + " shellExpanded=" + tb.shellExpanded);
         }
 
         // Update the per-tracker inter-event EMA so the watchdog can scale
@@ -269,7 +273,7 @@ public final class BlockBreakProgressListener implements Listener {
         // so an idle swing rolls back quickly.
         tb.lastUpdateTickMs = System.currentTimeMillis();
         if (cfg.debug()) plugin.getLogger().info(
-                "[debug-progress] speculative-spawn at " + posKey
+                "[" + ts() + "] [debug-progress] speculative-spawn at " + posKey
                         + " player=" + player.getName()
                         + " initialGapMs=" + tb.initialGapEstimateMs);
     }
@@ -390,7 +394,7 @@ public final class BlockBreakProgressListener implements Listener {
         }
 
         if (cfg.debug()) plugin.getLogger().info(
-                "[debug-progress] spawn " + key + " at " + posKey
+                "[" + ts() + "] [debug-progress] spawn " + key + " at " + posKey
                         + " player=" + player.getName() + " progress=" + fmt(progress)
                         + " barrierDeferredTicks=" + BARRIER_SWAP_DELAY_TICKS);
 
@@ -414,10 +418,17 @@ public final class BlockBreakProgressListener implements Listener {
             targetProgress = progress;
             interpTicks = FORWARD_INTERP_TICKS_FALLBACK;
         }
+        boolean firstReal = tb.lastAppliedProgress <= 0d && progress > 0d;
         DirectionalShrinkEffect.applyAtProgress(tb.fakeBlock, tb.chunkT, tb.baseScales, tb.currentScales,
                 targetProgress, cfg.waveWindow(), interpTicks, cfg.progressMinDelta(), cfg.collapseStyle());
         tb.lastAppliedProgress = progress;
         tb.lastUpdateTickMs = System.currentTimeMillis();
+        if (firstReal && cfg.debug()) plugin.getLogger().info(
+                "[" + ts() + "] [debug-progress] first-real-progress " + tb.key
+                        + " progress=" + fmt(progress) + " target=" + fmt(targetProgress)
+                        + " interpTicks=" + interpTicks
+                        + " barrierSent=" + tb.barrierSent
+                        + " shellExpanded=" + tb.shellExpanded);
         maybeForceBreak(tb, progress, cfg);
     }
 
@@ -441,7 +452,7 @@ public final class BlockBreakProgressListener implements Listener {
                 tb.origin.getBlockX(), tb.origin.getBlockY(), tb.origin.getBlockZ());
         tb.autoBreakTriggered = true;
         if (cfg.debug()) plugin.getLogger().info(
-                "[debug-progress] force-break " + tb.key + " at " + worldBlock.getLocation()
+                "[" + ts() + "] [debug-progress] force-break " + tb.key + " at " + worldBlock.getLocation()
                         + " by=" + player.getName());
         // Fires BlockBreakEvent synchronously; our BlockBreakListener.onBreak
         // sees the active tracker and disposes it via onRealBreak.
@@ -476,7 +487,7 @@ public final class BlockBreakProgressListener implements Listener {
         }
 
         if (cfg.debug()) plugin.getLogger().info(
-                "[debug-progress] transfer " + tb.key + " at " + posKey
+                "[" + ts() + "] [debug-progress] transfer " + tb.key + " at " + posKey
                         + " from=" + oldId + " to=" + newPlayer.getName()
                         + " progress=" + fmt(progress));
 
@@ -519,7 +530,7 @@ public final class BlockBreakProgressListener implements Listener {
         }
 
         if (cfg.debug()) plugin.getLogger().info(
-                "[debug-progress] reverse-start " + tb.key + " at " + posKey
+                "[" + ts() + "] [debug-progress] reverse-start " + tb.key + " at " + posKey
                         + " from=" + fmt(startProgress) + " durationMs=" + durationMs);
 
         tb.reverseTask = Bukkit.getScheduler().runTaskTimer(plugin, () -> {
@@ -545,7 +556,7 @@ public final class BlockBreakProgressListener implements Listener {
                 cancelReverseTask(tb);
                 disposeImmediate(tb, /*restoreBlock=*/ true);
                 if (cfg.debug()) plugin.getLogger().info(
-                        "[debug-progress] reverse-done " + tb.key + " at " + posKey);
+                        "[" + ts() + "] [debug-progress] reverse-done " + tb.key + " at " + posKey);
             }
         }, 1L, 1L);
     }
@@ -561,7 +572,7 @@ public final class BlockBreakProgressListener implements Listener {
         cancelReverseTask(tb);
         disposeImmediate(tb, /*restoreBlock=*/ false);
         if (plugin.tesseraConfig().debug()) plugin.getLogger().info(
-                "[debug-progress] real-break " + tb.key + " at " + posKey);
+                "[" + ts() + "] [debug-progress] real-break " + tb.key + " at " + posKey);
     }
 
     /** Public so BlockBreakListener can ask whether a position is tracked. */
@@ -577,7 +588,7 @@ public final class BlockBreakProgressListener implements Listener {
         cancelReverseTask(tb);
         disposeImmediate(tb, restoreBlock);
         if (plugin.tesseraConfig().debug()) plugin.getLogger().info(
-                "[debug-progress] teardown player=" + playerId + " posKey=" + posKey);
+                "[" + ts() + "] [debug-progress] teardown player=" + playerId + " posKey=" + posKey);
     }
 
     private void watchdogTick() {
@@ -595,7 +606,7 @@ public final class BlockBreakProgressListener implements Listener {
             TrackedBreak tb = tracker.get(k);
             if (tb == null) continue;
             if (cfg.debug()) plugin.getLogger().info(
-                    "[debug-progress] watchdog-cancel " + tb.key + " at " + k
+                    "[" + ts() + "] [debug-progress] watchdog-cancel " + tb.key + " at " + k
                             + " stale=" + (now - tb.lastUpdateTickMs) + "ms"
                             + " threshold=" + staleThresholdFor(tb, cfg) + "ms"
                             + " avgGap=" + tb.avgEventGapMs + "ms"
@@ -629,10 +640,13 @@ public final class BlockBreakProgressListener implements Listener {
         }
     }
 
-    private static void cancelBarrierSwapTask(TrackedBreak tb) {
+    private void cancelBarrierSwapTask(TrackedBreak tb) {
         if (tb.barrierSwapTask != null) {
             try { tb.barrierSwapTask.cancel(); } catch (RuntimeException ignored) {}
             tb.barrierSwapTask = null;
+            if (plugin.tesseraConfig().debug()) plugin.getLogger().info(
+                    "[" + ts() + "] [debug-progress] barrier-swap-cancel " + tb.key
+                            + " barrierSent=" + tb.barrierSent);
         }
     }
 
@@ -647,17 +661,45 @@ public final class BlockBreakProgressListener implements Listener {
                                      Player player, Location loc) {
         cancelBarrierSwapTask(tb);
         UUID expectedPlayerId = player.getUniqueId();
+        long scheduledAt = System.currentTimeMillis();
+        TesseraConfig dbgCfg = plugin.tesseraConfig();
+        if (dbgCfg.debug()) plugin.getLogger().info(
+                "[" + ts() + "] [debug-progress] barrier-swap-schedule " + tb.key + " at " + posKey
+                        + " delayTicks=" + BARRIER_SWAP_DELAY_TICKS
+                        + " player=" + player.getName());
         tb.barrierSwapTask = Bukkit.getScheduler().runTaskLater(plugin, () -> {
+            TesseraConfig cfg = plugin.tesseraConfig();
+            long elapsed = System.currentTimeMillis() - scheduledAt;
             TrackedBreak live = tracker.get(posKey);
-            if (live != tb) return;                        // disposed already
+            if (live != tb) {
+                if (cfg.debug()) plugin.getLogger().info(
+                        "[" + ts() + "] [debug-progress] barrier-swap-skip " + tb.key + " reason=disposed"
+                                + " elapsedMs=" + elapsed);
+                return;
+            }
             live.barrierSwapTask = null;
-            if (live.barrierSent) return;                  // shouldn't happen, defensive
+            if (live.barrierSent) {
+                if (cfg.debug()) plugin.getLogger().info(
+                        "[" + ts() + "] [debug-progress] barrier-swap-skip " + tb.key
+                                + " reason=alreadySent elapsedMs=" + elapsed);
+                return;
+            }
             // If ownership transferred between scheduling and firing, drop
             // this swap — transferOwnership cancels us anyway, but check
             // again to be safe against any race.
-            if (!live.currentPlayerId.equals(expectedPlayerId)) return;
+            if (!live.currentPlayerId.equals(expectedPlayerId)) {
+                if (cfg.debug()) plugin.getLogger().info(
+                        "[" + ts() + "] [debug-progress] barrier-swap-skip " + tb.key
+                                + " reason=ownerChanged elapsedMs=" + elapsed);
+                return;
+            }
             Player p = Bukkit.getPlayer(expectedPlayerId);
-            if (p == null || !p.isOnline()) return;
+            if (p == null || !p.isOnline()) {
+                if (cfg.debug()) plugin.getLogger().info(
+                        "[" + ts() + "] [debug-progress] barrier-swap-skip " + tb.key
+                                + " reason=playerOffline elapsedMs=" + elapsed);
+                return;
+            }
             // Expand the spawn-time shell compression in the same tick we
             // hide the real block — the simultaneous block→BARRIER swap
             // and chunk-scale snap mask each other, so neither the
@@ -672,6 +714,10 @@ public final class BlockBreakProgressListener implements Listener {
             try {
                 p.sendBlockChange(loc, Material.BARRIER.createBlockData());
                 live.barrierSent = true;
+                if (cfg.debug()) plugin.getLogger().info(
+                        "[" + ts() + "] [debug-progress] barrier-swap-fire " + tb.key + " at " + posKey
+                                + " elapsedMs=" + elapsed
+                                + " progress=" + fmt(live.lastAppliedProgress));
             } catch (RuntimeException re) {
                 plugin.getLogger().warning("sendBlockChange(BARRIER) failed: " + re.getMessage());
             }
@@ -679,4 +725,7 @@ public final class BlockBreakProgressListener implements Listener {
     }
 
     private static String fmt(double d) { return String.format("%.3f", d); }
+
+    private static final DateTimeFormatter TS_FMT = DateTimeFormatter.ofPattern("HH:mm:ss.SSS");
+    private static String ts() { return LocalTime.now().format(TS_FMT); }
 }
