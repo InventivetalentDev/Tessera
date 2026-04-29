@@ -70,6 +70,13 @@ waveWindow: 0.25
 # barely moved between ticks.
 progressMinDelta: 0.02
 
+# Bake biome-tinted blocks (grass, leaves, water, vines) on demand. The
+# resolved per-biome tint is read at break time and multiplied into the
+# source texture, so each distinct biome tint produces a separate MineSkin
+# upload the first time it's encountered. Disable if upload cost is a
+# concern — tinted blocks then fall back to the vanilla particle animation.
+enableTintedBlocks: true
+
 # Verbose logging for asset resolution, skin packing, and progress-mode
 # state transitions (spawn / transfer / reverse / break / watchdog).
 debug: false

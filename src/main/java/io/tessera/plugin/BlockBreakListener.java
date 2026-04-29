@@ -1,11 +1,13 @@
 package io.tessera.plugin;
 
 import io.tessera.assemble.FakeBlockFactory;
+import io.tessera.core.BakeKey;
 import io.tessera.core.BlockKey;
 import io.tessera.core.FakeBlock;
 import io.tessera.core.VariantKey;
 import io.tessera.effect.EffectContext;
 import io.tessera.effect.builtin.DirectionalShrinkEffect;
+import io.tessera.nms.BlockTintReader;
 import io.tessera.plugin.ProgressTracker.BlockPosKey;
 import io.tessera.skin.HeadsRegistry;
 import io.tessera.skin.bake.BlockBaker;
@@ -78,8 +80,15 @@ public final class BlockBreakListener implements Listener {
         Vector eyeDir = event.getPlayer().getEyeLocation().getDirection();
         UUID world = event.getPlayer().getWorld().getUID();
 
-        if (registry.has(key)) {
-            spawn(key, blockData, breakLoc, eyeDir, cfg);
+        // Read biome tint synchronously on the main thread before any async
+        // hop — getBlockTint touches chunk biome storage which races with
+        // chunk unloads off-thread. Untinted blocks get tint=0 (sentinel),
+        // matching the historical untinted code path.
+        int tint = cfg.enableTintedBlocks() ? BlockTintReader.read(event.getBlock()) : 0;
+        BakeKey bakeKey = new BakeKey(key, tint);
+
+        if (registry.has(bakeKey)) {
+            spawn(bakeKey, blockData, breakLoc, eyeDir, cfg);
             return;
         }
 
@@ -87,36 +96,37 @@ public final class BlockBreakListener implements Listener {
         // gone (vanilla has run); when the bake completes (a few seconds
         // typically) we spawn the FakeBlock at the now-air cell. The
         // post-hoc effect is unusual but acceptable for v1.
-        if (cfg.debug()) plugin.getLogger().info("[debug] runtime-baking " + key);
-        baker.bake(key).whenComplete((ok, ex) -> {
+        if (cfg.debug()) plugin.getLogger().info("[debug] runtime-baking " + bakeKey);
+        baker.bake(bakeKey).whenComplete((ok, ex) -> {
             if (ex != null) {
-                plugin.getLogger().warning("[runtime-bake] " + key + " threw: " + ex.getMessage());
+                plugin.getLogger().warning("[runtime-bake] " + bakeKey + " threw: " + ex.getMessage());
                 return;
             }
             if (!ok) return;
             // Re-check world is still loaded; player may have logged off.
             if (Bukkit.getWorld(world) == null) return;
-            Bukkit.getScheduler().runTask(plugin, () -> spawn(key, blockData, breakLoc, eyeDir, cfg));
+            Bukkit.getScheduler().runTask(plugin, () -> spawn(bakeKey, blockData, breakLoc, eyeDir, cfg));
         });
     }
 
-    private void spawn(BlockKey key, BlockData blockData, Location breakLoc, Vector eyeDir, TesseraConfig cfg) {
+    private void spawn(BakeKey bakeKey, BlockData blockData, Location breakLoc, Vector eyeDir, TesseraConfig cfg) {
         if (active.get() >= cfg.maxConcurrentFakeBlocks()) return;
         active.incrementAndGet();
         // Resolve the blockstate variant rotation (identity if the block has
         // no per-state variants registered or the state doesn't match any
         // known key). Falling back to identity = render as canonical
         // variant, which is a reasonable default for unsupported states.
+        BlockKey key = bakeKey.block();
         String fullStateKey = VariantKey.fromBlockData(blockData);
         String matchedKey = VariantKey.pickMatching(fullStateKey, registry.variantsFor(key).keySet());
         Quaternionf blockRotation = registry.rotationFor(key, matchedKey);
 
         FakeBlock fb;
         try {
-            fb = factory.create(breakLoc, key, blockRotation);
+            fb = factory.create(breakLoc, bakeKey, blockRotation);
         } catch (RuntimeException re) {
             active.decrementAndGet();
-            plugin.getLogger().warning("Failed to spawn FakeBlock for " + key + ": " + re.getMessage());
+            plugin.getLogger().warning("Failed to spawn FakeBlock for " + bakeKey + ": " + re.getMessage());
             return;
         }
 

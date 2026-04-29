@@ -185,10 +185,14 @@ public final class BlockBreakProgressListener implements Listener {
         Material mat = block.getType();
         BlockKey key = BlockKey.of(mat.getKey().getNamespace() + ":" + mat.getKey().getKey());
         if (!cfg.enables(key.asString())) return;
-        if (!registry.has(key)) return; // Skip; post-break path will handle (possibly via runtime bake).
+        // Read biome tint synchronously here (we're on main); the resulting
+        // BakeKey identifies the registry entry for this (block, biome).
+        int tint = cfg.enableTintedBlocks() ? io.tessera.nms.BlockTintReader.read(block) : 0;
+        io.tessera.core.BakeKey bakeKey = new io.tessera.core.BakeKey(key, tint);
+        if (!registry.has(bakeKey)) return; // Skip; post-break path will handle (possibly via runtime bake).
         if (active.get() >= cfg.maxConcurrentFakeBlocks()) {
             if (cfg.debug()) plugin.getLogger().info(
-                    "[debug-progress] skip " + key + " at " + posKey + " (concurrency cap)");
+                    "[debug-progress] skip " + bakeKey + " at " + posKey + " (concurrency cap)");
             return;
         }
 
@@ -211,10 +215,10 @@ public final class BlockBreakProgressListener implements Listener {
         active.incrementAndGet();
         FakeBlock fb;
         try {
-            fb = factory.create(breakLoc, key, blockRotation);
+            fb = factory.create(breakLoc, bakeKey, blockRotation);
         } catch (RuntimeException re) {
             active.decrementAndGet();
-            plugin.getLogger().warning("Failed to spawn FakeBlock for " + key + ": " + re.getMessage());
+            plugin.getLogger().warning("Failed to spawn FakeBlock for " + bakeKey + ": " + re.getMessage());
             return;
         }
 
