@@ -108,6 +108,17 @@ public final class ModelResolver {
                 logger.fine("[" + key + "] failed to resolve all 6 faces, got " + fd.bases.keySet());
                 return Optional.empty();
             }
+            // Player-head skins don't support partial transparency — a
+            // transparent face texture (leaves, glass, ice, stained glass)
+            // would render as a hole in the ItemDisplay entity. Reject any
+            // block whose base textures have at least one non-opaque pixel.
+            // Overlay textures (e.g. grass_block side overlay) are composited
+            // onto their opaque base faces, so the final baked pixel is always
+            // fully opaque; overlays are not checked here.
+            if (hasTransparentPixels(fd.bases)) {
+                logger.fine("[" + key + "] skipping — base textures contain transparent pixels");
+                return Optional.empty();
+            }
             return Optional.of(new BlockModel(key, fd.bases, fd.tinted, fd.overlays,
                     resolved.terminalParent, vs.rotations()));
         } catch (McAssetClient.AssetNotFoundException missing) {
@@ -352,6 +363,19 @@ public final class ModelResolver {
             logger.fine("[" + key + "] no full-cube element with faces; skipping");
         }
         return new FaceData(bases, tinted, overlays);
+    }
+
+    private static boolean hasTransparentPixels(EnumMap<FaceDir, BufferedImage> faces) {
+        for (BufferedImage img : faces.values()) {
+            int w = img.getWidth();
+            int h = img.getHeight();
+            for (int y = 0; y < h; y++) {
+                for (int x = 0; x < w; x++) {
+                    if (((img.getRGB(x, y) >>> 24) & 0xFF) < 255) return true;
+                }
+            }
+        }
+        return false;
     }
 
     private static boolean isFullCubeBounds(JsonObject element) {
