@@ -46,9 +46,7 @@ public final class TesseraPlugin extends JavaPlugin {
             getLogger().warning("config.chunkGridSize=" + config.chunkGridSize()
                     + " but bundled heads.json was baked at gridN=" + registry.gridN()
                     + ". Discarding bundled entries; every block will be re-baked"
-                    + " at runtime via MineSkin (requires mineskinApiKey)."
-                    + " Re-run `gradle tesseraBake -PgridN=" + config.chunkGridSize()
-                    + "` to rebuild the bundled set at the configured size.");
+                    + " at runtime via MineSkin (requires mineskinApiKey).");
             this.registry = HeadsRegistry.empty(getLogger(), config.chunkGridSize(), mcVersion);
         }
         this.itemFactory = new HeadItemFactory();

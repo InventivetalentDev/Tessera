@@ -17,9 +17,8 @@ mineskinApiKey: ""
 # WARNING: changing this invalidates every previously baked block.
 # Bundled heads.json entries baked at the old gridN are dropped on
 # startup, and every block has to be re-uploaded to MineSkin at the new
-# size — either by re-running `gradle tesseraBake -PgridN=<N>` to rebuild
-# the bundled set, or on demand at runtime as players break blocks
-# (requires mineskinApiKey).
+# size on demand as players break blocks — set mineskinApiKey above so
+# runtime baking can run.
 chunkGridSize: 4
 
 # Materials this plugin should animate. Use ["*"] for all full-cube blocks.
