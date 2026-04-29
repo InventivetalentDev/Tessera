@@ -3,17 +3,15 @@ package io.tessera.assets.model;
 import java.awt.image.BufferedImage;
 
 /**
- * Per-pixel multiply of a source PNG by an ARGB tint, mirroring how vanilla
- * Minecraft applies biome colormap output at render time. Alpha is preserved
- * from the source; RGB channels are multiplied (in [0,255] integer space) by
- * the tint's RGB channels, divided by 255.
+ * Pixel operations for biome tinting: multiply and alpha-composite.
  *
- * <p>v1 applies one tint to all six face PNGs of a {@link BlockModel} —
- * see {@link BlockModel#withTint}. The cube-parent abstraction in
- * {@link ModelResolver} hides per-face {@code tintindex} info, so blocks like
- * grass_block (top tinted, dirt sides not) get tinted on every face. This is
- * acceptable for the brief break animation and a per-face refinement is
- * deferred.
+ * <p>{@link #multiply} mirrors how vanilla applies biome colormap output —
+ * channel-wise multiply, alpha preserved.
+ *
+ * <p>{@link #composite} handles grass_block's two-element model: the untinted
+ * dirt side base + the semi-transparent tinted overlay are baked together
+ * at skin-paint time so the FakeBlock renders correctly without needing
+ * a second entity layer.
  */
 final class TintApplier {
 
@@ -34,6 +32,39 @@ final class TintApplier {
                 int g = ((argb >> 8) & 0xFF) * tg / 255;
                 int b = (argb & 0xFF) * tb / 255;
                 out.setRGB(x, y, (a << 24) | (r << 16) | (g << 8) | b);
+            }
+        }
+        return out;
+    }
+
+    /**
+     * Alpha-composite {@code overlay} on top of {@code base} (source-over).
+     * {@code base} is assumed fully opaque; output alpha is always 0xFF.
+     */
+    static BufferedImage composite(BufferedImage base, BufferedImage overlay) {
+        int w = base.getWidth();
+        int h = base.getHeight();
+        int ow = overlay.getWidth();
+        int oh = overlay.getHeight();
+        BufferedImage out = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB);
+        for (int y = 0; y < h; y++) {
+            for (int x = 0; x < w; x++) {
+                int b = base.getRGB(x, y);
+                int o = (x < ow && y < oh) ? overlay.getRGB(x, y) : 0;
+                int oa = (o >>> 24) & 0xFF;
+                int pixel;
+                if (oa == 0) {
+                    pixel = b | 0xFF000000;
+                } else if (oa == 255) {
+                    pixel = o | 0xFF000000;
+                } else {
+                    float a = oa / 255f;
+                    int r  = (int)(a * ((o >> 16) & 0xFF) + (1 - a) * ((b >> 16) & 0xFF));
+                    int g  = (int)(a * ((o >> 8)  & 0xFF) + (1 - a) * ((b >> 8)  & 0xFF));
+                    int bl = (int)(a * (o & 0xFF)          + (1 - a) * (b & 0xFF));
+                    pixel = 0xFF000000 | (r << 16) | (g << 8) | bl;
+                }
+                out.setRGB(x, y, pixel);
             }
         }
         return out;

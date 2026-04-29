@@ -4,8 +4,7 @@ import org.junit.jupiter.api.Test;
 
 import java.awt.image.BufferedImage;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNotSame;
+import static org.junit.jupiter.api.Assertions.*;
 
 class TintApplierTest {
 
@@ -54,6 +53,34 @@ class TintApplierTest {
         assertNotSame(src, out);
         // Source untouched.
         assertEquals(0xFFFFFFFF, src.getRGB(0, 0));
+    }
+
+    @Test
+    void compositeFullyOpaqueOverlayReplacesBase() {
+        BufferedImage base = solid(0xFFFFFFFF);
+        BufferedImage overlay = solid(0xFF00FF00);  // opaque green
+        BufferedImage out = TintApplier.composite(base, overlay);
+        assertEquals(0xFF00FF00, out.getRGB(0, 0));
+    }
+
+    @Test
+    void compositeFullyTransparentOverlayKeepsBase() {
+        BufferedImage base = solid(0xFFFFFFFF);
+        BufferedImage overlay = solid(0x00000000);  // fully transparent
+        BufferedImage out = TintApplier.composite(base, overlay);
+        assertEquals(0xFFFFFFFF, out.getRGB(0, 0));
+    }
+
+    @Test
+    void compositeSemiTransparentBlends() {
+        BufferedImage base = solid(0xFF000000);   // black base
+        BufferedImage overlay = solid(0x80FFFFFF); // 50% white overlay
+        BufferedImage out = TintApplier.composite(base, overlay);
+        int rgb = out.getRGB(0, 0);
+        int r = (rgb >> 16) & 0xFF;
+        // 50% white on black → ~127
+        assertTrue(r > 100 && r < 150, "expected ~127, got " + r);
+        assertEquals(0xFF, (rgb >>> 24) & 0xFF, "output alpha should be opaque");
     }
 
     private static BufferedImage solid(int argb) {
