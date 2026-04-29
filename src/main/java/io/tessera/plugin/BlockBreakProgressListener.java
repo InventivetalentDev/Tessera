@@ -255,12 +255,23 @@ public final class BlockBreakProgressListener implements Listener {
 
     /**
      * Auto-tuned stale threshold: speculative trackers use the configured
-     * left-click grace window so a no-commit swing rolls back quickly;
-     * otherwise BOOTSTRAP until we've seen at least one inter-event gap,
-     * then 3x EMA + 200ms slack clamped to [MIN, MAX].
+     * left-click grace window so a no-commit swing rolls back quickly,
+     * extended by the seeded first-event estimate so slow blocks (bare
+     * hands on stone, anything on obsidian) aren't false-cancelled before
+     * the first {@link BlockBreakProgressUpdateEvent} can legitimately
+     * arrive. Otherwise BOOTSTRAP until we've seen at least one
+     * inter-event gap, then 3x EMA + 200ms slack clamped to [MIN, MAX].
      */
     private static long staleThresholdFor(TrackedBreak tb, TesseraConfig cfg) {
-        if (tb.speculative) return Math.max(100L, cfg.leftClickGraceMs());
+        if (tb.speculative) {
+            long grace = Math.max(100L, cfg.leftClickGraceMs());
+            if (tb.initialGapEstimateMs > 0L) {
+                // Slack absorbs scheduling jitter between
+                // Block.getBreakSpeed and the first real progress event.
+                return Math.max(grace, tb.initialGapEstimateMs + 200L);
+            }
+            return grace;
+        }
         if (tb.avgEventGapMs == 0L) return WATCHDOG_STALE_BOOTSTRAP_MS;
         long base = tb.avgEventGapMs * 3L + 200L;
         if (base < WATCHDOG_STALE_MIN_MS) return WATCHDOG_STALE_MIN_MS;
