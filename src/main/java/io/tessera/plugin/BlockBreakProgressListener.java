@@ -631,6 +631,18 @@ public final class BlockBreakProgressListener implements Listener {
         TrackedBreak tb = tracker.remove(posKey);
         if (tb == null) return;
         cancelReverseTask(tb);
+        // The real block is gone, but the client still has the sendBlockChange(BARRIER)
+        // override. Explicitly clear it to AIR so the override is lifted in the same
+        // tick as entity despawn — without this the client shows BARRIER for ~1 tick
+        // after the FakeBlock disappears.
+        if (tb.barrierSent) {
+            Player p = Bukkit.getPlayer(tb.currentPlayerId);
+            if (p != null) {
+                try { p.sendBlockChange(tb.origin, Material.AIR.createBlockData()); }
+                catch (RuntimeException ignored) {}
+            }
+            tb.barrierSent = false;
+        }
         disposeImmediate(tb, /*restoreBlock=*/ false);
         if (plugin.tesseraConfig().debug()) plugin.getLogger().info(
                 "[" + ts() + "] [debug-progress] real-break " + tb.key + " at " + posKey);
