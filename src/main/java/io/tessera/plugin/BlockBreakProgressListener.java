@@ -4,6 +4,8 @@ import io.papermc.paper.event.block.BlockBreakProgressUpdateEvent;
 import io.tessera.assemble.FakeBlockFactory;
 import io.tessera.core.BakeKey;
 import io.tessera.core.BlockKey;
+import io.tessera.core.ChunkCoord;
+import io.tessera.core.ChunkRef;
 import io.tessera.core.FakeBlock;
 import io.tessera.core.VariantKey;
 import io.tessera.effect.ChunkWaveSampler;
@@ -83,14 +85,16 @@ public final class BlockBreakProgressListener implements Listener {
     // interpolation that long if mining stops.
     private static final long MAX_INTERP_MS = 800L;
 
-    /** Snapshot of a FakeBlock pre-spawned while the player aims at a block. */
+    /**
+     * Front-facing chunks pre-spawned while the player aims at a block.
+     * Only the half with wave-position t &lt; {@link FakeBlockFactory#PRELOAD_T_THRESHOLD}
+     * is pre-spawned; the remainder is spawned on click.
+     */
     private record PreloadEntry(
             BlockPosKey posKey,
             BakeKey bakeKey,
             Quaternionf blockRotation,
-            FakeBlock fakeBlock,
-            float[] baseScales,
-            float[] currentScales
+            Map<ChunkCoord, ChunkRef> prespawnedChunks
     ) {}
 
     private final TesseraPlugin plugin;
@@ -289,7 +293,9 @@ public final class BlockBreakProgressListener implements Listener {
             PreloadEntry preload = consumePreload(player.getUniqueId(), posKey);
             if (preload != null) {
                 if (active.get() >= cfg.maxConcurrentFakeBlocks()) {
-                    preload.fakeBlock.despawn();
+                    preload.prespawnedChunks().values().forEach(r -> {
+                        if (!r.display().isDead()) r.display().remove();
+                    });
                     return;
                 }
                 BlockPosKey prev = tracker.activeBlockFor(player.getUniqueId());
@@ -299,10 +305,26 @@ public final class BlockBreakProgressListener implements Listener {
                 }
                 active.incrementAndGet();
                 Vector eyeDir = player.getEyeLocation().getDirection();
-                double[] chunkT = ChunkWaveSampler.precomputeT(preload.fakeBlock, eyeDir);
-                TrackedBreak tb = new TrackedBreak(player.getUniqueId(), preload.bakeKey.block(),
+                // Build the full FakeBlock, reusing the pre-spawned front-facing
+                // entities and spawning the remaining chunks fresh.
+                FakeBlock fb;
+                try {
+                    fb = factory.create(breakLoc, preload.bakeKey(), preload.blockRotation(),
+                            cfg.fillInterior(), eyeDir, /*compressShell=*/ true,
+                            preload.prespawnedChunks());
+                } catch (RuntimeException re) {
+                    // Clean up pre-spawned entities and fall through
+                    preload.prespawnedChunks().values().forEach(r -> {
+                        if (!r.display().isDead()) r.display().remove();
+                    });
+                    active.decrementAndGet();
+                    return;
+                }
+                double[] chunkT = ChunkWaveSampler.precomputeT(fb, eyeDir);
+                float[] base = DirectionalShrinkEffect.captureBaseScales(fb);
+                TrackedBreak tb = new TrackedBreak(player.getUniqueId(), preload.bakeKey().block(),
                         block.getLocation(), block.getBlockData(), eyeDir,
-                        preload.fakeBlock, chunkT, preload.baseScales, preload.currentScales);
+                        fb, chunkT, base, base.clone());
                 tracker.put(posKey, tb);
                 tb.speculative = true;
                 tb.initialGapEstimateMs = estimateInitialGapMs(block, player, cfg);
@@ -320,7 +342,7 @@ public final class BlockBreakProgressListener implements Listener {
                     }
                 }
                 if (cfg.debug()) plugin.getLogger().info(
-                        "[" + ts() + "] [debug-progress] eager-consume " + preload.bakeKey
+                        "[" + ts() + "] [debug-progress] eager-consume " + preload.bakeKey()
                                 + " at " + posKey + " player=" + player.getName()
                                 + " barrierSent=" + tb.barrierSent);
                 // Kick off the wave immediately — same as spawnAndRegister does at p=0.
@@ -796,41 +818,45 @@ public final class BlockBreakProgressListener implements Listener {
             Quaternionf blockRotation = registry.rotationFor(key, matchedKey);
             Vector eyeDir = player.getEyeLocation().getDirection();
 
-            FakeBlock fb;
+            Map<ChunkCoord, ChunkRef> prespawned;
             try {
-                fb = factory.create(target.getLocation(), bakeKey, blockRotation,
-                        cfg.fillInterior(), eyeDir, /*compressShell=*/ true);
+                prespawned = factory.preload(target.getLocation(), bakeKey, blockRotation, eyeDir);
             } catch (RuntimeException re) {
                 continue;
             }
-            float[] base = DirectionalShrinkEffect.captureBaseScales(fb);
+            if (prespawned.isEmpty()) continue;
             preloads.put(player.getUniqueId(),
-                    new PreloadEntry(targetKey, bakeKey, blockRotation, fb, base, base.clone()));
+                    new PreloadEntry(targetKey, bakeKey, blockRotation, prespawned));
 
             if (cfg.debug()) plugin.getLogger().info(
                     "[" + ts() + "] [debug-progress] eager-preload-spawn " + bakeKey
-                            + " at " + targetKey + " for=" + player.getName());
+                            + " at " + targetKey + " for=" + player.getName()
+                            + " chunks=" + prespawned.size());
         }
     }
 
-    /** Despawn the preloaded FakeBlock for {@code playerId}, if any. */
+    /** Despawn all pre-spawned entities for {@code playerId}, if any. */
     private void clearPreload(UUID playerId) {
         PreloadEntry entry = preloads.remove(playerId);
         if (entry != null) {
-            entry.fakeBlock.despawn();
+            entry.prespawnedChunks().values().forEach(ref -> {
+                if (!ref.display().isDead()) ref.display().remove();
+            });
         }
     }
 
     /**
      * Remove and return the preload for {@code playerId} if it matches
-     * {@code posKey}. If the preload is for a different position, despawns
-     * it and returns null.
+     * {@code posKey}. If the preload is for a different position, clears it
+     * and returns null.
      */
     private PreloadEntry consumePreload(UUID playerId, BlockPosKey posKey) {
         PreloadEntry entry = preloads.remove(playerId);
         if (entry == null) return null;
-        if (!entry.posKey.equals(posKey)) {
-            entry.fakeBlock.despawn();
+        if (!entry.posKey().equals(posKey)) {
+            entry.prespawnedChunks().values().forEach(ref -> {
+                if (!ref.display().isDead()) ref.display().remove();
+            });
             return null;
         }
         return entry;

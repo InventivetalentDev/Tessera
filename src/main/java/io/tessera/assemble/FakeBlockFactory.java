@@ -13,7 +13,9 @@ import org.joml.Quaternionf;
 import org.joml.Vector3f;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.EnumSet;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -70,6 +72,13 @@ public final class FakeBlockFactory {
      * undoes the contraction in lockstep with the barrier swap.
      */
     public static final float INITIAL_SHELL_COMPRESSION = 0.99f;
+    /**
+     * Eager-preload only pre-spawns chunks whose normalised wave position t is
+     * below this threshold — the front-facing half of the block. The remaining
+     * chunks are spawned on the first left-click when the full block is
+     * assembled; by the time the wave reaches them the render lag has resolved.
+     */
+    public static final double PRELOAD_T_THRESHOLD = 0.5;
 
     private final HeadItemFactory itemFactory;
     private final HeadsRegistry registry;
@@ -177,51 +186,8 @@ public final class FakeBlockFactory {
                 HeadFace.FRONT, FaceDir.SOUTH, FaceRotations.of(HeadFace.FRONT));
 
         float shellFactor = compressShell ? INITIAL_SHELL_COMPRESSION : 1f;
-
-        for (Map.Entry<ChunkCoord, HeadsRegistry.Entry> entry : chunks.entrySet()) {
-            ChunkCoord coord = entry.getKey();
-            HeadSkin head = HeadsRegistry.toHeadSkin(entry.getValue());
-            ItemStack itemStack = itemFactory.build(head);
-
-            Quaternionf faceRot = canonicalRotation;
-
-            float scale = geom.chunkScale() * shellFactor;
-            // Pass the actual rendered scale so the head's CUBE_CENTER_PRE
-            // compensation matches — otherwise the residual shifts every
-            // chunk up by (1−shellFactor) * chunkScale * |CUBE_CENTER_PRE_Y|,
-            // which makes the top-row chunks clip through the real block's
-            // top face.
-            Vector3f translation = geom.translationFor(coord, faceRot, scale);
-
-            Transformation tx = new Transformation(
-                    translation,
-                    new Quaternionf(blockRotation),       // L = block rotation (variant Ry/Rx)
-                    new Vector3f(scale, scale, scale),
-                    faceRot);
-
-            ItemDisplay display = world.spawn(origin, ItemDisplay.class, d -> {
-                d.setItemStack(itemStack);
-                d.setItemDisplayTransform(ItemDisplay.ItemDisplayTransform.NONE);
-                d.setTransformation(tx);
-                d.setInterpolationDuration(0);
-                d.setInterpolationDelay(0);
-                // Solid blocks store light-level 0 internally — the light engine only
-                // records light in air/transparent spaces, not inside opaque blocks.
-                // At break time the position is still solid (or air but not yet
-                // propagated), so Block.getLightFromSky() / getLightFromBlocks()
-                // both return 0, causing the entity to flash black. Pinning (15,15)
-                // avoids the flicker; the correct fix is to delay spawn by one tick
-                // so propagation completes, then omit setBrightness and let the
-                // entity sample its position naturally.
-//                d.setBrightness(new org.bukkit.entity.Display.Brightness(14, 14));
-                d.setViewRange(1.0f);
-                d.setPersistent(false);
-            });
-
-            refs.add(new ChunkRef(display, coord,
-                    geom.chunkLocalCenter(coord),
-                    outwardFacesAt(coord, gridN)));
-        }
+        populateOuterChunks(world, origin, geom, chunks, blockRotation, canonicalRotation,
+                gridN, shellFactor, Collections.emptyMap(), refs);
 
         if (fillInterior && gridN >= 3 && !chunks.isEmpty()) {
             spawnInteriorChunks(world, origin, geom, chunks, blockRotation,
@@ -229,6 +195,149 @@ public final class FakeBlockFactory {
         }
 
         return new FakeBlock(origin, bakeKey.block(), gridN, refs, blockRotation);
+    }
+
+    /**
+     * Pre-spawn only the front-facing half of the outer shell (chunks with
+     * wave position t &lt; {@link #PRELOAD_T_THRESHOLD}) for eager preload. The
+     * returned map is keyed by {@link ChunkCoord} so the consume path can
+     * pass it straight into
+     * {@link #create(Location, BakeKey, Quaternionf, boolean, Vector, boolean, Map)}.
+     */
+    public Map<ChunkCoord, ChunkRef> preload(Location blockLocation, BakeKey bakeKey,
+                                              Quaternionf blockRotation, Vector eyeDir) {
+        World world = blockLocation.getWorld();
+        if (world == null) return Collections.emptyMap();
+        int gridN = registry.gridN();
+        BlockGeometry geom = new BlockGeometry(gridN, blockRotation);
+        Location origin = new Location(world,
+                Math.floor(blockLocation.getX()),
+                Math.floor(blockLocation.getY()),
+                Math.floor(blockLocation.getZ()));
+
+        Map<ChunkCoord, HeadsRegistry.Entry> chunks = registry.chunksFor(bakeKey);
+        if (chunks.isEmpty()) return Collections.emptyMap();
+
+        Quaternionf canonicalRotation = HeadRotations.compose(
+                HeadFace.FRONT, FaceDir.SOUTH, FaceRotations.of(HeadFace.FRONT));
+        float shellFactor = INITIAL_SHELL_COMPRESSION;
+
+        // Compute normalised t values so we can filter to the front half.
+        Vector3f dir = new Vector3f((float) eyeDir.getX(), (float) eyeDir.getY(),
+                (float) eyeDir.getZ()).normalize();
+        Vector3f blockCenter = new Vector3f(0.5f, 0.5f, 0.5f);
+        double minP = Double.POSITIVE_INFINITY, maxP = Double.NEGATIVE_INFINITY;
+        for (ChunkCoord coord : chunks.keySet()) {
+            Vector3f rel = geom.chunkLocalCenter(coord).sub(blockCenter);
+            new Quaternionf(blockRotation).transform(rel);
+            double p = rel.dot(dir);
+            if (p < minP) minP = p;
+            if (p > maxP) maxP = p;
+        }
+        double range = Math.max(1e-6, maxP - minP);
+
+        List<ChunkRef> refs = new ArrayList<>(chunks.size() / 2 + 1);
+        for (Map.Entry<ChunkCoord, HeadsRegistry.Entry> entry : chunks.entrySet()) {
+            ChunkCoord coord = entry.getKey();
+            Vector3f rel = geom.chunkLocalCenter(coord).sub(blockCenter);
+            new Quaternionf(blockRotation).transform(rel);
+            double t = (rel.dot(dir) - minP) / range;
+            if (t > PRELOAD_T_THRESHOLD) continue;
+
+            ChunkRef ref = spawnChunk(world, origin, coord, entry.getValue(),
+                    blockRotation, canonicalRotation, geom, gridN, shellFactor);
+            refs.add(ref);
+        }
+
+        Map<ChunkCoord, ChunkRef> result = new HashMap<>(refs.size() * 2);
+        for (ChunkRef r : refs) result.put(r.coord(), r);
+        return result;
+    }
+
+    /**
+     * Like {@link #create(Location, BakeKey, Quaternionf, boolean, Vector, boolean)}
+     * but reuses any pre-spawned entities from {@code existingRefs} rather than
+     * spawning new ones for those coords. Chunks not present in
+     * {@code existingRefs} are spawned fresh at the shell-compressed scale.
+     * Used by the eager-preload consume path so the pre-warmed front-facing
+     * entities are incorporated into the full FakeBlock without a respawn.
+     */
+    public FakeBlock create(Location blockLocation, BakeKey bakeKey,
+                             Quaternionf blockRotation, boolean fillInterior, Vector eyeDir,
+                             boolean compressShell, Map<ChunkCoord, ChunkRef> existingRefs) {
+        World world = blockLocation.getWorld();
+        if (world == null) throw new IllegalArgumentException("Location has no world");
+        int gridN = registry.gridN();
+        BlockGeometry geom = new BlockGeometry(gridN, blockRotation);
+        Location origin = new Location(world,
+                Math.floor(blockLocation.getX()),
+                Math.floor(blockLocation.getY()),
+                Math.floor(blockLocation.getZ()));
+
+        Map<ChunkCoord, HeadsRegistry.Entry> chunks = registry.chunksFor(bakeKey);
+        List<ChunkRef> refs = new ArrayList<>(chunks.size());
+
+        Quaternionf canonicalRotation = HeadRotations.compose(
+                HeadFace.FRONT, FaceDir.SOUTH, FaceRotations.of(HeadFace.FRONT));
+        float shellFactor = compressShell ? INITIAL_SHELL_COMPRESSION : 1f;
+
+        populateOuterChunks(world, origin, geom, chunks, blockRotation, canonicalRotation,
+                gridN, shellFactor, existingRefs, refs);
+
+        if (fillInterior && gridN >= 3 && !chunks.isEmpty()) {
+            spawnInteriorChunks(world, origin, geom, chunks, blockRotation,
+                    canonicalRotation, gridN, eyeDir, refs, shellFactor);
+        }
+        return new FakeBlock(origin, bakeKey.block(), gridN, refs, blockRotation);
+    }
+
+    /**
+     * Populate {@code refs} with outer shell chunk refs, reusing entities from
+     * {@code existingRefs} where available and spawning fresh ones for the rest.
+     */
+    private void populateOuterChunks(World world, Location origin, BlockGeometry geom,
+                                      Map<ChunkCoord, HeadsRegistry.Entry> chunks,
+                                      Quaternionf blockRotation, Quaternionf canonicalRotation,
+                                      int gridN, float shellFactor,
+                                      Map<ChunkCoord, ChunkRef> existingRefs,
+                                      List<ChunkRef> refs) {
+        for (Map.Entry<ChunkCoord, HeadsRegistry.Entry> entry : chunks.entrySet()) {
+            ChunkCoord coord = entry.getKey();
+            ChunkRef existing = existingRefs.get(coord);
+            if (existing != null && !existing.display().isDead()) {
+                refs.add(existing);
+            } else {
+                refs.add(spawnChunk(world, origin, coord, entry.getValue(),
+                        blockRotation, canonicalRotation, geom, gridN, shellFactor));
+            }
+        }
+    }
+
+    /** Spawn a single outer-shell {@link ItemDisplay} chunk and return its {@link ChunkRef}. */
+    private ChunkRef spawnChunk(World world, Location origin, ChunkCoord coord,
+                                 HeadsRegistry.Entry entry, Quaternionf blockRotation,
+                                 Quaternionf canonicalRotation, BlockGeometry geom,
+                                 int gridN, float shellFactor) {
+        HeadSkin head = HeadsRegistry.toHeadSkin(entry);
+        ItemStack itemStack = itemFactory.build(head);
+        float scale = geom.chunkScale() * shellFactor;
+        Vector3f translation = geom.translationFor(coord, canonicalRotation, scale);
+        Transformation tx = new Transformation(
+                translation,
+                new Quaternionf(blockRotation),
+                new Vector3f(scale, scale, scale),
+                canonicalRotation);
+        ItemDisplay display = world.spawn(origin, ItemDisplay.class, d -> {
+            d.setItemStack(itemStack);
+            d.setItemDisplayTransform(ItemDisplay.ItemDisplayTransform.NONE);
+            d.setTransformation(tx);
+            d.setInterpolationDuration(0);
+            d.setInterpolationDelay(0);
+            d.setViewRange(1.0f);
+            d.setPersistent(false);
+        });
+        return new ChunkRef(display, coord, geom.chunkLocalCenter(coord),
+                outwardFacesAt(coord, gridN));
     }
 
     /**
