@@ -62,6 +62,7 @@ public final class ProgressTracker {
         public boolean shellExpanded;          // true once the spawn-time INITIAL_SHELL_COMPRESSION has been undone
         public BukkitTask reverseTask;         // non-null only while REVERSING
         public BukkitTask barrierSwapTask;     // non-null between spawn and the deferred sendBlockChange(BARRIER)
+        public BukkitTask pendingSpawnTask;    // non-null while a scheduler-spread spawn-continuation is queued
         // Lazy-spawn support: null on legacy paths; set right after tracker.put().
         public List<FakeBlockFactory.PendingChunkSpec> pendingChunks;
         public Map<ChunkCoord, Double> allOuterT;

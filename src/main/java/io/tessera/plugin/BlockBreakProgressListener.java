@@ -74,6 +74,10 @@ public final class BlockBreakProgressListener implements Listener {
     // multi-second gaps and we don't want a single event to stretch a smooth
     // interpolation that long if mining stops.
     private static final long MAX_INTERP_MS = 800L;
+    // Max interior chunks spawned per tick. Spreading across ticks via runTaskLater
+    // avoids the ~47ms spike that occurs when all 2744 interior chunks at gridN=16
+    // become eligible simultaneously. Each continuation fires 1 tick later.
+    private static final int PENDING_BATCH_SIZE = 128;
 
     /**
      * Front-facing chunks pre-spawned while the player aims at a block.
@@ -618,6 +622,7 @@ public final class BlockBreakProgressListener implements Listener {
         tb.currentPlayerId = newPlayer.getUniqueId();
         tb.barrierSent = false; // reset so sendBarrierNow will send to the new player
         tb.eyeDir = newPlayer.getEyeLocation().getDirection();
+        cancelPendingSpawnTask(tb);
         recomputeAllT(tb, tb.eyeDir);
         tracker.transferOwner(posKey, oldId, newPlayer.getUniqueId());
 
@@ -639,6 +644,7 @@ public final class BlockBreakProgressListener implements Listener {
 
     private void beginReverse(TrackedBreak tb, BlockPosKey posKey, TesseraConfig cfg) {
         if (tb.state == State.REVERSING) return;
+        cancelPendingSpawnTask(tb);
         tb.state = State.REVERSING;
         final double startProgress = tb.lastAppliedProgress;
         final long startMs = System.currentTimeMillis();
@@ -773,6 +779,7 @@ public final class BlockBreakProgressListener implements Listener {
     }
 
     private void disposeImmediate(TrackedBreak tb, boolean restoreBlock) {
+        cancelPendingSpawnTask(tb);
         if (restoreBlock && tb.barrierSent) {
             Player p = Bukkit.getPlayer(tb.currentPlayerId);
             if (p != null) {
@@ -796,6 +803,16 @@ public final class BlockBreakProgressListener implements Listener {
             } catch (RuntimeException ignored) {
             }
             tb.reverseTask = null;
+        }
+    }
+
+    private static void cancelPendingSpawnTask(TrackedBreak tb) {
+        if (tb.pendingSpawnTask != null) {
+            try {
+                tb.pendingSpawnTask.cancel();
+            } catch (RuntimeException ignored) {
+            }
+            tb.pendingSpawnTask = null;
         }
     }
 
@@ -991,34 +1008,46 @@ public final class BlockBreakProgressListener implements Listener {
     }
 
     /**
-     * Spawn any pending chunks whose wave position is within one {@code window}
-     * of {@code targetProgress}. The pending list is sorted ascending by t so we
-     * stop at the first non-matching entry.
+     * Spawn pending chunks whose wave position is within one {@code window} of
+     * {@code targetProgress}. The pending list is sorted ascending by t so we stop
+     * at the first out-of-range entry.
+     *
+     * <p>At most {@link #PENDING_BATCH_SIZE} chunks are spawned per call. If eligible
+     * chunks remain after the batch, a one-tick {@code runTaskLater} continuation is
+     * scheduled so the rest are spread across subsequent ticks rather than spiking
+     * one tick with all 2744 interior entities at gridN=16.
+     *
+     * <p>A shared {@link FakeBlockFactory.PendingSpawnContext} is built once for the
+     * batch — reusing {@link BlockGeometry}, the canonical rotation, and the donor
+     * {@link org.bukkit.inventory.ItemStack} for all interior chunks.
      */
     private void spawnPendingChunks(TrackedBreak tb, double targetProgress, double window) {
         if (tb.pendingChunks == null || tb.pendingChunks.isEmpty()) return;
-        if (tb.fakeBlock.despawned()) return; // FakeBlock already torn down — don't spawn orphaned entities
+        if (tb.fakeBlock.despawned()) return;
+        // Nothing eligible yet — wave hasn't reached the first pending chunk.
+        if (tb.pendingChunks.get(0).t() > targetProgress + window) return;
+
         float shellFactor = tb.shellExpanded ? 1.0f : FakeBlockFactory.INITIAL_SHELL_COMPRESSION;
         int gridN = tb.fakeBlock.gridN();
         float chunkScale = 2f / gridN;
-        // Cap spawns per call to one face-layer's worth (gridN²). This prevents
-        // a spike when many interior chunks become eligible at once (e.g. at
-        // gridN=16 with fillInterior=true, ~960 chunks could queue up on the
-        // consume tick — each world.spawn() is expensive). Remaining eligible
-        // chunks are deferred to the next applyForward call.
-        int spawnsLeft = gridN * gridN;
 
+        // Build shared context once for the batch: BlockGeometry, canonical rotation,
+        // and donor ItemStack (all interior chunks share the same skin, so we build
+        // the ItemStack once and clone it per spawn instead of rebuilding it 2744 times).
+        FakeBlockFactory.PendingSpawnContext ctx = factory.beginPendingBatch(
+                tb.fakeBlock.origin(), tb.fakeBlock.blockRotation(), tb.pendingChunks.get(0));
+
+        int spawned = 0;
         Iterator<FakeBlockFactory.PendingChunkSpec> it = tb.pendingChunks.iterator();
-        while (it.hasNext() && spawnsLeft > 0) {
+        while (it.hasNext() && spawned < PENDING_BATCH_SIZE) {
             FakeBlockFactory.PendingChunkSpec spec = it.next();
             if (spec.t() > targetProgress + window) break; // sorted — stop here
             it.remove();
-            spawnsLeft--;
+            spawned++;
 
             ChunkRef ref;
             try {
-                ref = factory.spawnPendingChunk(tb.fakeBlock.origin(), spec,
-                        tb.fakeBlock.blockRotation(), shellFactor);
+                ref = factory.spawnPendingChunk(ctx, spec, shellFactor);
             } catch (RuntimeException re) {
                 plugin.getLogger().warning(
                         "spawnPendingChunk failed for " + spec.coord() + ": " + re.getMessage());
@@ -1036,10 +1065,8 @@ public final class BlockBreakProgressListener implements Listener {
                 tb.currentScales[idx] = -1f;
             } else {
                 float baseAtSpawn = chunkScale * shellFactor;
-                // Compute the wave-correct scale for this chunk's wave position at the
-                // current progress, so the entity spawns at its proper size rather than
-                // at full scale. Without this, entities "pop" to full scale for one tick
-                // before applyAtProgress animates them down.
+                // Compute the wave-correct scale so the entity spawns at its proper size
+                // rather than at full scale (avoids a one-tick pop before applyAtProgress).
                 double sFraction = ChunkWaveSampler.shrunkFraction(spec.t(), targetProgress, window);
                 float correctScale = Math.max(0f, (float) (baseAtSpawn * (1.0 - sFraction)));
                 tb.baseScales[idx] = baseAtSpawn;
@@ -1048,13 +1075,28 @@ public final class BlockBreakProgressListener implements Listener {
                     Transformation cur = ref.display().getTransformation();
                     ref.display().setInterpolationDelay(0);
                     ref.display().setInterpolationDuration(0);
-                    ref.display().setTransformation(new org.bukkit.util.Transformation(
+                    ref.display().setTransformation(new Transformation(
                             cur.getTranslation(), cur.getLeftRotation(),
-                            new org.joml.Vector3f(correctScale, correctScale, correctScale),
+                            new Vector3f(correctScale, correctScale, correctScale),
                             cur.getRightRotation()));
                 }
             }
             // chunkT[idx] was pre-populated in buildTrackedBreak.
+        }
+
+        // Schedule a one-tick continuation if eligible chunks remain after the batch cap.
+        // Uses the same targetProgress so only already-eligible chunks are drained;
+        // newly-eligible chunks (from advancing progress events) are handled by the
+        // next applyForward → spawnPendingChunks call with a larger targetProgress.
+        if (tb.pendingSpawnTask == null && !tb.pendingChunks.isEmpty()
+                && tb.pendingChunks.get(0).t() <= targetProgress + window) {
+            final double capturedTarget = targetProgress;
+            final double capturedWindow = window;
+            tb.pendingSpawnTask = Bukkit.getScheduler().runTaskLater(plugin, () -> {
+                tb.pendingSpawnTask = null;
+                if (tb.fakeBlock.despawned() || tb.state != State.FORWARD) return;
+                spawnPendingChunks(tb, capturedTarget, capturedWindow);
+            }, 1L);
         }
     }
 

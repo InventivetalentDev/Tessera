@@ -93,6 +93,23 @@ public final class FakeBlockFactory {
             List<PendingChunkSpec> pendingSpecs,
             Map<ChunkCoord, Double> allOuterT) {}
 
+    /**
+     * Pre-built context shared across a batch of
+     * {@link #spawnPendingChunk(PendingSpawnContext, PendingChunkSpec, float)} calls.
+     * Build once per batch via {@link #beginPendingBatch} to avoid reconstructing
+     * {@link BlockGeometry} and the canonical rotation per spawn, and to share the
+     * donor {@link org.bukkit.inventory.ItemStack} clone-source across all interior
+     * chunks in the batch (they all use the same skin).
+     */
+    public record PendingSpawnContext(
+            World world,
+            Location origin,
+            Quaternionf blockRotation,
+            BlockGeometry geom,
+            Quaternionf canonicalRotation,
+            int gridN,
+            ItemStack interiorBaseStack) {}
+
     private final HeadItemFactory itemFactory;
     private final HeadsRegistry registry;
 
@@ -386,6 +403,60 @@ public final class FakeBlockFactory {
         }
 
         return new PreloadPlan(frontRefs, pending, allOuterT);
+    }
+
+    /**
+     * Build a {@link PendingSpawnContext} for a batch of pending chunk spawns.
+     * Pass any pending spec (or the first interior one) as {@code donorSpec} so
+     * the donor {@link org.bukkit.inventory.ItemStack} is built once for the whole
+     * batch; pass {@code null} if the batch has no interior chunks.
+     */
+    public PendingSpawnContext beginPendingBatch(Location origin, Quaternionf blockRotation,
+                                                  PendingChunkSpec donorSpec) {
+        World world = origin.getWorld();
+        int gridN = registry.gridN();
+        BlockGeometry geom = new BlockGeometry(gridN, blockRotation);
+        Quaternionf canonRot = HeadRotations.compose(
+                HeadFace.FRONT, FaceDir.SOUTH, FaceRotations.of(HeadFace.FRONT));
+        ItemStack interiorStack = donorSpec != null
+                ? itemFactory.build(HeadsRegistry.toHeadSkin(donorSpec.registryEntry()))
+                : null;
+        return new PendingSpawnContext(world, origin, blockRotation, geom, canonRot, gridN, interiorStack);
+    }
+
+    /**
+     * Spawn a single pending chunk using a pre-built context. Interior chunks clone the
+     * context's {@code interiorBaseStack} (no per-chunk skin build); outer chunks delegate
+     * to {@link #spawnChunk}.
+     */
+    public ChunkRef spawnPendingChunk(PendingSpawnContext ctx, PendingChunkSpec spec, float shellFactor) {
+        if (spec.interior()) {
+            ItemStack stack = ctx.interiorBaseStack() != null
+                    ? ctx.interiorBaseStack().clone()
+                    : itemFactory.build(HeadsRegistry.toHeadSkin(spec.registryEntry()));
+            float scale = ctx.geom().chunkScale() * shellFactor;
+            Vector3f translation = ctx.geom().translationFor(spec.coord(), ctx.canonicalRotation(), scale);
+            Transformation tx = new Transformation(
+                    translation,
+                    new Quaternionf(ctx.blockRotation()),
+                    new Vector3f(scale, scale, scale),
+                    ctx.canonicalRotation());
+            ItemDisplay display = ctx.world().spawn(ctx.origin(), ItemDisplay.class, d -> {
+                d.setItemStack(stack);
+                d.setItemDisplayTransform(ItemDisplay.ItemDisplayTransform.NONE);
+                d.setTransformation(tx);
+                d.setInterpolationDuration(0);
+                d.setInterpolationDelay(0);
+                d.setViewRange(1.0f);
+                d.setPersistent(false);
+            });
+            return new ChunkRef(display, spec.coord(),
+                    ctx.geom().chunkLocalCenter(spec.coord()),
+                    EnumSet.noneOf(FaceDir.class));
+        } else {
+            return spawnChunk(ctx.world(), ctx.origin(), spec.coord(), spec.registryEntry(),
+                    ctx.blockRotation(), ctx.canonicalRotation(), ctx.geom(), ctx.gridN(), shellFactor);
+        }
     }
 
     /**
