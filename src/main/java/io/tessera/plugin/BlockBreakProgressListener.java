@@ -85,7 +85,8 @@ public final class BlockBreakProgressListener implements Listener {
             BakeKey bakeKey,
             Quaternionf blockRotation,
             Map<ChunkCoord, ChunkRef> prespawnedChunks
-    ) {}
+    ) {
+    }
 
     private final TesseraPlugin plugin;
     private final FakeBlockFactory factory;
@@ -106,7 +107,9 @@ public final class BlockBreakProgressListener implements Listener {
         this.tracker = tracker;
     }
 
-    /** Start the watchdog and aim-watch timers. Called from plugin onEnable after registration. */
+    /**
+     * Start the watchdog and aim-watch timers. Called from plugin onEnable after registration.
+     */
     public void start() {
         this.watchdog = Bukkit.getScheduler().runTaskTimer(
                 plugin, this::watchdogTick, WATCHDOG_PERIOD_TICKS, WATCHDOG_PERIOD_TICKS);
@@ -115,7 +118,9 @@ public final class BlockBreakProgressListener implements Listener {
                 plugin, this::aimWatchTick, 2L, 2L);
     }
 
-    /** Stop timers and tear down all in-flight trackers and preloads. Called on plugin disable. */
+    /**
+     * Stop timers and tear down all in-flight trackers and preloads. Called on plugin disable.
+     */
     public void shutdown() {
         if (watchdog != null) {
             watchdog.cancel();
@@ -147,6 +152,10 @@ public final class BlockBreakProgressListener implements Listener {
         Location breakLoc = block.getLocation();
         BlockPosKey posKey = BlockPosKey.of(breakLoc);
         double progress = event.getProgress();
+
+        if (cfg.debug()) plugin.getLogger().info(
+                "[" + ts() + "] [debug-progress] progress " + posKey + " player=" + player.getName()
+                        + " progress=" + progress);
 
         TrackedBreak tb = tracker.get(posKey);
 
@@ -232,6 +241,9 @@ public final class BlockBreakProgressListener implements Listener {
         long now = System.currentTimeMillis();
         long gap = now - tb.lastUpdateTickMs;
         tb.avgEventGapMs = (tb.avgEventGapMs == 0L) ? gap : (tb.avgEventGapMs * 3L + gap) / 4L;
+        if (cfg.debug()) plugin.getLogger().info(
+                "[" + ts() + "] [debug-progress] update-gap " + posKey + " player=" + player.getName()
+                        + " gap=" + gap + " avg=" + tb.avgEventGapMs);
 
         if (Math.abs(progress - tb.lastAppliedProgress) < cfg.progressMinDelta()) {
             // Server is still emitting events (player is actively mining), even
@@ -277,7 +289,8 @@ public final class BlockBreakProgressListener implements Listener {
 
         try {
             if (block.getBreakSpeed(player) >= 1.0f) return;
-        } catch (NoSuchMethodError ignored) {}
+        } catch (NoSuchMethodError ignored) {
+        }
 
         Location breakLoc = block.getLocation();
         BlockPosKey posKey = BlockPosKey.of(breakLoc);
@@ -410,6 +423,10 @@ public final class BlockBreakProgressListener implements Listener {
                 long perStageMs = (long) Math.ceil(STAGE_PER_EVENT / perTick * MS_PER_TICK);
                 if (perStageMs < MS_PER_TICK) return MS_PER_TICK;
                 if (perStageMs > MAX_INTERP_MS) return MAX_INTERP_MS;
+                if (cfg.debug()) Bukkit.getPluginManager().getPlugin("Tessera").getLogger().info(
+                        "[" + ts() + "] [debug-progress] estimate-initial-gap player=" + player.getName()
+                                + " perTick=" + perTick
+                                + " perStageMs=" + perStageMs);
                 return perStageMs;
             }
         } catch (NoSuchMethodError | RuntimeException ignored) {
@@ -691,8 +708,10 @@ public final class BlockBreakProgressListener implements Listener {
         if (tb.barrierSent) {
             Player p = Bukkit.getPlayer(tb.currentPlayerId);
             if (p != null) {
-                try { p.sendBlockChange(tb.origin, Material.AIR.createBlockData()); }
-                catch (RuntimeException ignored) {}
+                try {
+                    p.sendBlockChange(tb.origin, Material.AIR.createBlockData());
+                } catch (RuntimeException ignored) {
+                }
             }
             tb.barrierSent = false;
         }
@@ -705,7 +724,9 @@ public final class BlockBreakProgressListener implements Listener {
                 "[" + ts() + "] [debug-progress] real-break " + tb.key + " at " + posKey);
     }
 
-    /** Public so BlockBreakListener can ask whether a position is tracked. */
+    /**
+     * Public so BlockBreakListener can ask whether a position is tracked.
+     */
     public boolean isTracked(BlockPosKey posKey) {
         return tracker.get(posKey) != null;
     }
@@ -764,7 +785,10 @@ public final class BlockBreakProgressListener implements Listener {
 
     private static void cancelReverseTask(TrackedBreak tb) {
         if (tb.reverseTask != null) {
-            try { tb.reverseTask.cancel(); } catch (RuntimeException ignored) {}
+            try {
+                tb.reverseTask.cancel();
+            } catch (RuntimeException ignored) {
+            }
             tb.reverseTask = null;
         }
     }
@@ -845,7 +869,8 @@ public final class BlockBreakProgressListener implements Listener {
             // Skip instamine (no animation to pre-warm).
             try {
                 if (target.getBreakSpeed(player) >= 1.0f) continue;
-            } catch (NoSuchMethodError | RuntimeException ignored) {}
+            } catch (NoSuchMethodError | RuntimeException ignored) {
+            }
 
             Material mat = target.getType();
             BlockKey key = BlockKey.of(mat.getKey().getNamespace() + ":" + mat.getKey().getKey());
@@ -877,7 +902,9 @@ public final class BlockBreakProgressListener implements Listener {
         }
     }
 
-    /** Despawn all pre-spawned entities for {@code playerId}, if any. */
+    /**
+     * Despawn all pre-spawned entities for {@code playerId}, if any.
+     */
     private void clearPreload(UUID playerId) {
         PreloadEntry entry = preloads.remove(playerId);
         if (entry != null) {
@@ -926,16 +953,16 @@ public final class BlockBreakProgressListener implements Listener {
      * as the wave advances without reallocating.
      */
     private TrackedBreak buildTrackedBreak(UUID playerId, BlockKey key, FakeBlock fb,
-                                            BlockData blockData, Vector eyeDir,
-                                            FakeBlockFactory.PreloadPlan plan) {
+                                           BlockData blockData, Vector eyeDir,
+                                           FakeBlockFactory.PreloadPlan plan) {
         List<ChunkRef> front = fb.chunks();
         int frontCount = front.size();
         int pendingCount = plan.pendingSpecs().size();
         int total = frontCount + pendingCount;
 
-        float[]  base    = new float[total];
-        float[]  current = new float[total];
-        double[] chunkT  = new double[total];
+        float[] base = new float[total];
+        float[] current = new float[total];
+        double[] chunkT = new double[total];
 
         // Front-half: read entity scale + globally-normalised t from the plan.
         for (int i = 0; i < frontCount; i++) {
@@ -953,7 +980,7 @@ public final class BlockBreakProgressListener implements Listener {
         TrackedBreak tb = new TrackedBreak(playerId, key, fb.origin(),
                 blockData, eyeDir, fb, chunkT, base, current);
         tb.pendingChunks = new ArrayList<>(plan.pendingSpecs());
-        tb.allOuterT     = new HashMap<>(plan.allOuterT());
+        tb.allOuterT = new HashMap<>(plan.allOuterT());
         return tb;
     }
 
@@ -966,7 +993,7 @@ public final class BlockBreakProgressListener implements Listener {
         if (tb.pendingChunks == null || tb.pendingChunks.isEmpty()) return;
         if (tb.fakeBlock.despawned()) return; // FakeBlock already torn down — don't spawn orphaned entities
         float shellFactor = tb.shellExpanded ? 1.0f : FakeBlockFactory.INITIAL_SHELL_COMPRESSION;
-        float chunkScale  = 2f / tb.fakeBlock.gridN();
+        float chunkScale = 2f / tb.fakeBlock.gridN();
 
         Iterator<FakeBlockFactory.PendingChunkSpec> it = tb.pendingChunks.iterator();
         while (it.hasNext()) {
@@ -991,7 +1018,7 @@ public final class BlockBreakProgressListener implements Listener {
                 // Interior tent: baseScale = full chunk scale (tent peak), currentScale = -1f
                 // sentinel so applyAtProgress writes on the first tick rather than skipping
                 // (Math.abs(target - (-1)) >= minDelta is always true).
-                tb.baseScales[idx]    = chunkScale;
+                tb.baseScales[idx] = chunkScale;
                 tb.currentScales[idx] = -1f;
             } else {
                 float baseAtSpawn = chunkScale * shellFactor;
@@ -1000,8 +1027,8 @@ public final class BlockBreakProgressListener implements Listener {
                 // at full scale. Without this, entities "pop" to full scale for one tick
                 // before applyAtProgress animates them down.
                 double sFraction = ChunkWaveSampler.shrunkFraction(spec.t(), targetProgress, window);
-                float correctScale = Math.max(0f, (float)(baseAtSpawn * (1.0 - sFraction)));
-                tb.baseScales[idx]    = baseAtSpawn;
+                float correctScale = Math.max(0f, (float) (baseAtSpawn * (1.0 - sFraction)));
+                tb.baseScales[idx] = baseAtSpawn;
                 tb.currentScales[idx] = correctScale;
                 if (correctScale < baseAtSpawn) {
                     Transformation cur = ref.display().getTransformation();
@@ -1033,7 +1060,7 @@ public final class BlockBreakProgressListener implements Listener {
         List<FakeBlockFactory.PendingChunkSpec> pending =
                 tb.pendingChunks != null ? tb.pendingChunks : List.of();
 
-        int aliveCount   = alive.size();
+        int aliveCount = alive.size();
         int pendingCount = pending.size();
         double[] proj = new double[aliveCount + pendingCount];
         double minP = Double.POSITIVE_INFINITY, maxP = Double.NEGATIVE_INFINITY;
@@ -1078,8 +1105,13 @@ public final class BlockBreakProgressListener implements Listener {
         }
     }
 
-    private static String fmt(double d) { return String.format("%.3f", d); }
+    private static String fmt(double d) {
+        return String.format("%.3f", d);
+    }
 
     private static final DateTimeFormatter TS_FMT = DateTimeFormatter.ofPattern("HH:mm:ss.SSS");
-    private static String ts() { return LocalTime.now().format(TS_FMT); }
+
+    private static String ts() {
+        return LocalTime.now().format(TS_FMT);
+    }
 }

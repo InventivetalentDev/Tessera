@@ -332,23 +332,25 @@ public final class FakeBlockFactory {
             allOuterT.put(e.getKey(), (e.getValue() - minP) / range);
         }
 
-        // 2. Split into front (spawn now) and back (pending later).
+        // 2. Spawn ALL outer chunks at consume time. Back-half outer chunks used to
+        // be deferred as pending, but that caused a bad visual: the player looks
+        // through shrinking front layers to full-scale back layers, so the block
+        // appears intact until the last moment. Spawning everything up front lets
+        // the full shell animate from the first tick. The eager-preload already
+        // rendered the front-half at aim time; only the back-half needs fresh spawns.
+        // Interior fill chunks remain lazy (they're never directly visible through
+        // the outer shell and the tent function keeps them brief anyway).
         Map<ChunkCoord, ChunkRef> frontRefs = new HashMap<>(chunks.size());
-        List<PendingChunkSpec> pending = new ArrayList<>(chunks.size());
+        List<PendingChunkSpec> pending = new ArrayList<>();
         for (Map.Entry<ChunkCoord, HeadsRegistry.Entry> e : chunks.entrySet()) {
             ChunkCoord c = e.getKey();
-            double t = allOuterT.get(c);
-            if (t <= PRELOAD_T_THRESHOLD) {
-                ChunkRef existing = existingFrontRefs.get(c);
-                if (existing != null && !existing.display().isDead()) {
-                    frontRefs.put(c, existing);
-                } else {
-                    frontRefs.put(c, spawnChunk(world, origin, c, e.getValue(),
-                            blockRotation, canonicalRotation, geom, gridN,
-                            INITIAL_SHELL_COMPRESSION));
-                }
+            ChunkRef existing = existingFrontRefs.get(c);
+            if (existing != null && !existing.display().isDead()) {
+                frontRefs.put(c, existing);
             } else {
-                pending.add(new PendingChunkSpec(c, e.getValue(), t, /*interior=*/ false));
+                frontRefs.put(c, spawnChunk(world, origin, c, e.getValue(),
+                        blockRotation, canonicalRotation, geom, gridN,
+                        INITIAL_SHELL_COMPRESSION));
             }
         }
 
