@@ -323,6 +323,11 @@ public final class BlockBreakProgressListener implements Listener {
                         "[" + ts() + "] [debug-progress] eager-consume " + preload.bakeKey
                                 + " at " + posKey + " player=" + player.getName()
                                 + " barrierSent=" + tb.barrierSent);
+                // Kick off the wave immediately — same as spawnAndRegister does at p=0.
+                // With smoothInterpolation, applyForward at p=0 extrapolates target=0.1
+                // and starts the near-side chunks lerping right away rather than
+                // waiting for the first real progress event (~75 ms for dirt).
+                applyForward(tb, 0d, cfg);
                 return;
             }
         }
