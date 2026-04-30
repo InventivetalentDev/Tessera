@@ -478,6 +478,20 @@ public final class FakeBlockFactory {
         }
     }
 
+    /**
+     * TODO(perf): Replace world.spawn() calls throughout this class with direct
+     * NMS/packet-based entity spawning. Bukkit's world.spawn() runs the full
+     * server-side entity lifecycle (chunk tracking, persistence, AI ticking),
+     * which is expensive when spawning dozens to hundreds of entities per block
+     * break. A packet-only path would:
+     *   - Send AddEntityPacket / SetEntityDataPacket directly to nearby players
+     *   - Skip the entity being registered in the world's entity store
+     *   - Skip entity tracker updates (no per-tick tracking overhead)
+     *   - Allow near-instant despawn by sending RemoveEntitiesPacket
+     * This would also eliminate the server-side cost spike seen when the reverse
+     * animation despawns large numbers of ItemDisplays simultaneously.
+     */
+
     /** Spawn a single outer-shell {@link ItemDisplay} chunk and return its {@link ChunkRef}. */
     private ChunkRef spawnChunk(World world, Location origin, ChunkCoord coord,
                                  HeadsRegistry.Entry entry, Quaternionf blockRotation,

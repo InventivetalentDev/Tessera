@@ -562,7 +562,18 @@ public final class BlockBreakProgressListener implements Listener {
                         + " by=" + player.getName());
         // Fires BlockBreakEvent synchronously; our BlockBreakListener.onBreak
         // sees the active tracker and disposes it via onRealBreak.
-        player.breakBlock(worldBlock);
+        // If breakBlock returns false the block was already gone (broken by
+        // an external mechanism that didn't fire BlockBreakEvent, or cancelled
+        // by another plugin). In that case onRealBreak will never run, so
+        // dispose here directly to avoid entities lingering until the watchdog.
+        if (!player.breakBlock(worldBlock)) {
+            BlockPosKey posKey = BlockPosKey.of(tb.origin);
+            TrackedBreak still = tracker.remove(posKey);
+            if (still == tb) {
+                disposeImmediate(tb, /*restoreBlock=*/ false);
+                clearPreloadsAt(posKey);
+            }
+        }
     }
 
     private void transferOwnership(TrackedBreak tb, BlockPosKey posKey, Player newPlayer,
@@ -946,6 +957,7 @@ public final class BlockBreakProgressListener implements Listener {
      */
     private void spawnPendingChunks(TrackedBreak tb, double targetProgress, double window) {
         if (tb.pendingChunks == null || tb.pendingChunks.isEmpty()) return;
+        if (tb.fakeBlock.despawned()) return; // FakeBlock already torn down — don't spawn orphaned entities
         float shellFactor = tb.shellExpanded ? 1.0f : FakeBlockFactory.INITIAL_SHELL_COMPRESSION;
         float chunkScale  = 2f / tb.fakeBlock.gridN();
 
@@ -975,9 +987,24 @@ public final class BlockBreakProgressListener implements Listener {
                 tb.baseScales[idx]    = chunkScale;
                 tb.currentScales[idx] = -1f;
             } else {
-                float s = chunkScale * shellFactor;
-                tb.baseScales[idx]    = s;
-                tb.currentScales[idx] = s;
+                float baseAtSpawn = chunkScale * shellFactor;
+                // Compute the wave-correct scale for this chunk's wave position at the
+                // current progress, so the entity spawns at its proper size rather than
+                // at full scale. Without this, entities "pop" to full scale for one tick
+                // before applyAtProgress animates them down.
+                double sFraction = ChunkWaveSampler.shrunkFraction(spec.t(), targetProgress, window);
+                float correctScale = Math.max(0f, (float)(baseAtSpawn * (1.0 - sFraction)));
+                tb.baseScales[idx]    = baseAtSpawn;
+                tb.currentScales[idx] = correctScale;
+                if (correctScale < baseAtSpawn) {
+                    Transformation cur = ref.display().getTransformation();
+                    ref.display().setInterpolationDelay(0);
+                    ref.display().setInterpolationDuration(0);
+                    ref.display().setTransformation(new org.bukkit.util.Transformation(
+                            cur.getTranslation(), cur.getLeftRotation(),
+                            new org.joml.Vector3f(correctScale, correctScale, correctScale),
+                            cur.getRightRotation()));
+                }
             }
             // chunkT[idx] was pre-populated in buildTrackedBreak.
         }
