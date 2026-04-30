@@ -506,6 +506,12 @@ public final class BlockBreakProgressListener implements Listener {
                 blockData, eyeDir, plan);
         tracker.put(posKey, tb);
 
+        // If a preload exists for this position but wasn't consumed by the eager path
+        // (e.g. startOnLeftClick=false, or onProgress fired before onInteract), its
+        // 676 compressed-scale entities would linger for the full break duration and
+        // peek through the FakeBlock as the wave shrinks them. Clear now.
+        clearPreloadsAt(posKey);
+
         if (cfg.clientHideRealBlock()) {
             sendBarrierNow(tb, player, breakLoc);
         }
