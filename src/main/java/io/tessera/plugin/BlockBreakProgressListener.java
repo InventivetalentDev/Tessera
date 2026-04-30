@@ -3,12 +3,7 @@ package io.tessera.plugin;
 import io.papermc.paper.event.block.BlockBreakProgressUpdateEvent;
 import io.tessera.assemble.BlockGeometry;
 import io.tessera.assemble.FakeBlockFactory;
-import io.tessera.core.BakeKey;
-import io.tessera.core.BlockKey;
-import io.tessera.core.ChunkCoord;
-import io.tessera.core.ChunkRef;
-import io.tessera.core.FakeBlock;
-import io.tessera.core.VariantKey;
+import io.tessera.core.*;
 import io.tessera.effect.ChunkWaveSampler;
 import io.tessera.effect.builtin.DirectionalShrinkEffect;
 import io.tessera.nms.BlockTintReader;
@@ -16,13 +11,8 @@ import io.tessera.plugin.ProgressTracker.BlockPosKey;
 import io.tessera.plugin.ProgressTracker.State;
 import io.tessera.plugin.ProgressTracker.TrackedBreak;
 import io.tessera.plugin.TesseraConfig.AnimationMode;
-import io.tessera.plugin.TesseraConfig.CollapseStyle;
 import io.tessera.skin.HeadsRegistry;
-import org.bukkit.Bukkit;
-import org.bukkit.FluidCollisionMode;
-import org.bukkit.GameMode;
-import org.bukkit.Location;
-import org.bukkit.Material;
+import org.bukkit.*;
 import org.bukkit.block.Block;
 import org.bukkit.block.data.BlockData;
 import org.bukkit.entity.Entity;
@@ -35,18 +25,14 @@ import org.bukkit.event.player.PlayerChangedWorldEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.scheduler.BukkitTask;
+import org.bukkit.util.Transformation;
 import org.bukkit.util.Vector;
 import org.joml.Quaternionf;
 import org.joml.Vector3f;
 
 import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.Iterator;
-import java.util.List;
-import java.util.Map;
-import java.util.UUID;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -352,7 +338,12 @@ public final class BlockBreakProgressListener implements Listener {
                                 + " barrierSent=" + tb.barrierSent
                                 + " front=" + plan.frontRefs().size()
                                 + " pending=" + plan.pendingSpecs().size());
-                applyForward(tb, 0d, cfg);
+                // Start one stage ahead so the wave is already at targetProgress≈0.2
+                // when the FakeBlock first appears. At high gridN the tiny chunks make
+                // the progress=0 state imperceptible; STAGE_PER_EVENT ensures the front
+                // layer is ~80% shrunk immediately. lastAppliedProgress=STAGE_PER_EVENT
+                // means the first real event (always 0.1) is skipped as a zero-delta.
+                applyForward(tb, STAGE_PER_EVENT, cfg);
                 return;
             }
         }
@@ -500,7 +491,10 @@ public final class BlockBreakProgressListener implements Listener {
                         + " front=" + plan.frontRefs().size()
                         + " pending=" + plan.pendingSpecs().size());
 
-        applyForward(tb, progress, cfg);
+        // When progress=0 (speculative spawn on first click before any event has arrived),
+        // jumpstart one stage ahead so the initial wave state is immediately perceptible
+        // even at high gridN where tiny chunks make a targetProgress=0.1 state invisible.
+        applyForward(tb, progress > 0d ? progress : STAGE_PER_EVENT, cfg);
     }
 
     private void applyForward(TrackedBreak tb, double progress, TesseraConfig cfg) {
