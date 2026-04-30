@@ -190,6 +190,34 @@ public final class DirectionalShrinkEffect implements ChunkEffect {
         }
     }
 
+    /**
+     * Despawn entities for chunks whose current scale is effectively zero AND
+     * whose wave position is behind the wave's rear edge ({@code progress - window}).
+     * The rear-edge guard prevents false-despawning of freshly-spawned interior
+     * chunks whose tent scale hasn't risen above zero yet.
+     *
+     * <p>{@code baseScales[i] <= 0} is used as the "not yet spawned" sentinel
+     * (pre-allocated array slots stay at 0 until the chunk is actually spawned).
+     */
+    public static void despawnPassedChunks(FakeBlock fakeBlock,
+                                           double[] chunkT,
+                                           float[] baseScales,
+                                           float[] currentScales,
+                                           double progress,
+                                           double window,
+                                           float minDelta) {
+        List<ChunkRef> chunks = fakeBlock.chunks();
+        int n = chunks.size();
+        double rear = progress - window;
+        for (int i = 0; i < n; i++) {
+            if (chunks.get(i).display().isDead()) continue;
+            if (baseScales[i] <= 0f) continue;          // not yet spawned
+            if (currentScales[i] >= minDelta) continue; // still visible
+            if (chunkT[i] > rear) continue;             // wave hasn't fully passed
+            chunks.get(i).display().remove();
+        }
+    }
+
     /** Capture the per-chunk uniform spawn scales (the X component, since spawns are uniform). */
     public static float[] captureBaseScales(FakeBlock fakeBlock) {
         List<ChunkRef> chunks = fakeBlock.chunks();

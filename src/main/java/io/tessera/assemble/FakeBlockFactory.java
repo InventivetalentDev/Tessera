@@ -80,6 +80,19 @@ public final class FakeBlockFactory {
      */
     public static final double PRELOAD_T_THRESHOLD = 0.5;
 
+    /** Outer or interior chunk scheduled for lazy spawning as the wave front advances. */
+    public record PendingChunkSpec(
+            ChunkCoord coord,
+            HeadsRegistry.Entry registryEntry,
+            double t,
+            boolean interior) {}
+
+    /** Result of {@link #preloadAndPending} — the already-spawned front refs plus a sorted pending list. */
+    public record PreloadPlan(
+            Map<ChunkCoord, ChunkRef> frontRefs,
+            List<PendingChunkSpec> pendingSpecs,
+            Map<ChunkCoord, Double> allOuterT) {}
+
     private final HeadItemFactory itemFactory;
     private final HeadsRegistry registry;
 
@@ -252,6 +265,158 @@ public final class FakeBlockFactory {
         Map<ChunkCoord, ChunkRef> result = new HashMap<>(refs.size() * 2);
         for (ChunkRef r : refs) result.put(r.coord(), r);
         return result;
+    }
+
+    /**
+     * Compute the full lazy-spawn plan: spawn the front half of outer chunks,
+     * return the back half + all interior chunks as sorted pending specs.
+     * t values are globally normalised across all outer coords so spawned and
+     * pending chunks share a consistent wave-position scale.
+     */
+    public PreloadPlan preloadAndPending(Location blockLocation, BakeKey bakeKey,
+                                          Quaternionf blockRotation,
+                                          boolean fillInterior, Vector eyeDir) {
+        return completePlan(blockLocation, bakeKey, blockRotation, fillInterior,
+                eyeDir, Collections.emptyMap());
+    }
+
+    /**
+     * Like {@link #preloadAndPending} but reuses {@code existingFrontRefs} for
+     * coords that are already spawned (eager-preload consume path). Fresh outer
+     * entities are spawned for any front-half coord NOT present in the map.
+     */
+    public PreloadPlan completePlan(Location blockLocation, BakeKey bakeKey,
+                                     Quaternionf blockRotation, boolean fillInterior,
+                                     Vector eyeDir,
+                                     Map<ChunkCoord, ChunkRef> existingFrontRefs) {
+        World world = blockLocation.getWorld();
+        if (world == null) {
+            return new PreloadPlan(Collections.emptyMap(),
+                    Collections.emptyList(), Collections.emptyMap());
+        }
+        int gridN = registry.gridN();
+        BlockGeometry geom = new BlockGeometry(gridN, blockRotation);
+        Location origin = new Location(world,
+                Math.floor(blockLocation.getX()),
+                Math.floor(blockLocation.getY()),
+                Math.floor(blockLocation.getZ()));
+
+        Map<ChunkCoord, HeadsRegistry.Entry> chunks = registry.chunksFor(bakeKey);
+        if (chunks.isEmpty()) {
+            return new PreloadPlan(Collections.emptyMap(),
+                    Collections.emptyList(), Collections.emptyMap());
+        }
+
+        Quaternionf canonicalRotation = HeadRotations.compose(
+                HeadFace.FRONT, FaceDir.SOUTH, FaceRotations.of(HeadFace.FRONT));
+
+        // 1. Project all outer coords; capture global min/max for t normalisation.
+        Vector3f dir = new Vector3f((float) eyeDir.getX(), (float) eyeDir.getY(),
+                (float) eyeDir.getZ()).normalize();
+        Vector3f blockCenter = new Vector3f(0.5f, 0.5f, 0.5f);
+        Map<ChunkCoord, Double> rawProj = new HashMap<>(chunks.size() * 2);
+        double minP = Double.POSITIVE_INFINITY, maxP = Double.NEGATIVE_INFINITY;
+        for (ChunkCoord c : chunks.keySet()) {
+            Vector3f rel = geom.chunkLocalCenter(c).sub(blockCenter);
+            new Quaternionf(blockRotation).transform(rel);
+            double p = rel.dot(dir);
+            rawProj.put(c, p);
+            if (p < minP) minP = p;
+            if (p > maxP) maxP = p;
+        }
+        double range = Math.max(1e-6, maxP - minP);
+
+        // Normalised t for all outer coords (returned to caller for array pre-population).
+        Map<ChunkCoord, Double> allOuterT = new HashMap<>(chunks.size() * 2);
+        for (var e : rawProj.entrySet()) {
+            allOuterT.put(e.getKey(), (e.getValue() - minP) / range);
+        }
+
+        // 2. Split into front (spawn now) and back (pending later).
+        Map<ChunkCoord, ChunkRef> frontRefs = new HashMap<>(chunks.size());
+        List<PendingChunkSpec> pending = new ArrayList<>(chunks.size());
+        for (Map.Entry<ChunkCoord, HeadsRegistry.Entry> e : chunks.entrySet()) {
+            ChunkCoord c = e.getKey();
+            double t = allOuterT.get(c);
+            if (t <= PRELOAD_T_THRESHOLD) {
+                ChunkRef existing = existingFrontRefs.get(c);
+                if (existing != null && !existing.display().isDead()) {
+                    frontRefs.put(c, existing);
+                } else {
+                    frontRefs.put(c, spawnChunk(world, origin, c, e.getValue(),
+                            blockRotation, canonicalRotation, geom, gridN,
+                            INITIAL_SHELL_COMPRESSION));
+                }
+            } else {
+                pending.add(new PendingChunkSpec(c, e.getValue(), t, /*interior=*/ false));
+            }
+        }
+
+        // 3. Interior chunks: all pending, using the same global t scale.
+        if (fillInterior && gridN >= 3) {
+            HeadsRegistry.Entry donor = pickInteriorDonor(chunks, gridN);
+            if (donor != null) {
+                for (int x = 1; x < gridN - 1; x++) {
+                    for (int y = 1; y < gridN - 1; y++) {
+                        for (int z = 1; z < gridN - 1; z++) {
+                            ChunkCoord c = new ChunkCoord(x, y, z);
+                            Vector3f rel = geom.chunkLocalCenter(c).sub(blockCenter);
+                            new Quaternionf(blockRotation).transform(rel);
+                            double p = rel.dot(dir);
+                            double t = (p - minP) / range;
+                            pending.add(new PendingChunkSpec(c, donor, t, /*interior=*/ true));
+                        }
+                    }
+                }
+            }
+        }
+
+        pending.sort((a, b) -> Double.compare(a.t(), b.t()));
+        return new PreloadPlan(frontRefs, pending, allOuterT);
+    }
+
+    /**
+     * Spawn a single chunk entity from a {@link PendingChunkSpec}. Used by the
+     * progress listener when the wave front approaches a not-yet-spawned chunk.
+     */
+    public ChunkRef spawnPendingChunk(Location originOfBlock, PendingChunkSpec spec,
+                                       Quaternionf blockRotation, float shellFactor) {
+        World world = originOfBlock.getWorld();
+        if (world == null) throw new IllegalArgumentException("Origin has no world");
+        int gridN = registry.gridN();
+        BlockGeometry geom = new BlockGeometry(gridN, blockRotation);
+        Quaternionf canonicalRotation = HeadRotations.compose(
+                HeadFace.FRONT, FaceDir.SOUTH, FaceRotations.of(HeadFace.FRONT));
+
+        if (spec.interior()) {
+            HeadSkin donorSkin = HeadsRegistry.toHeadSkin(spec.registryEntry());
+            ItemStack stack = itemFactory.build(donorSkin);
+            // Interior chunks spawn at shell-compressed scale; the tent formula
+            // in applyAtProgress will drive the visible scale from there.
+            float scale = geom.chunkScale() * shellFactor;
+            Vector3f translation = geom.translationFor(spec.coord(), canonicalRotation, scale);
+            Transformation tx = new Transformation(
+                    translation,
+                    new Quaternionf(blockRotation),
+                    new Vector3f(scale, scale, scale),
+                    canonicalRotation);
+            ItemStack stackCopy = stack.clone();
+            ItemDisplay display = world.spawn(originOfBlock, ItemDisplay.class, d -> {
+                d.setItemStack(stackCopy);
+                d.setItemDisplayTransform(ItemDisplay.ItemDisplayTransform.NONE);
+                d.setTransformation(tx);
+                d.setInterpolationDuration(0);
+                d.setInterpolationDelay(0);
+                d.setViewRange(1.0f);
+                d.setPersistent(false);
+            });
+            return new ChunkRef(display, spec.coord(),
+                    geom.chunkLocalCenter(spec.coord()),
+                    EnumSet.noneOf(FaceDir.class));
+        } else {
+            return spawnChunk(world, originOfBlock, spec.coord(), spec.registryEntry(),
+                    blockRotation, canonicalRotation, geom, gridN, shellFactor);
+        }
     }
 
     /**
