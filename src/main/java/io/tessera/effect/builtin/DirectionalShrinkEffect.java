@@ -119,9 +119,18 @@ public final class DirectionalShrinkEffect implements ChunkEffect {
             ChunkRef chunk = chunks.get(i);
             if (chunk.display().isDead()) continue;
             double s = ChunkWaveSampler.shrunkFraction(chunkT[i], progress, window);
-            float target = (style == CollapseStyle.POP)
-                    ? (s >= 1.0 ? 0f : baseScales[i])
-                    : (float) (baseScales[i] * (1.0 - s));
+            float target;
+            if (style == CollapseStyle.POP) {
+                target = s >= 1.0 ? 0f : baseScales[i];
+            } else if (chunk.outwardFaces().isEmpty()) {
+                // Interior (hollow-fill) chunk: tent curve — zero before the wave
+                // front reaches it, peaks at the wave front, zero again after.
+                // Only a cross-sectional plane worth of interior chunks is ever
+                // non-zero at a given progress, instead of the full half-volume.
+                target = (float) (baseScales[i] * 4.0 * s * (1.0 - s));
+            } else {
+                target = (float) (baseScales[i] * (1.0 - s));
+            }
             if (Math.abs(target - prevScales[i]) < minScaleDelta) continue;
             prevScales[i] = target;
             Transformation cur = chunk.display().getTransformation();
