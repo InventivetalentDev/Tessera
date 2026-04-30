@@ -372,6 +372,17 @@ public final class FakeBlockFactory {
         }
 
         pending.sort((a, b) -> Double.compare(a.t(), b.t()));
+
+        // Despawn any pre-spawned entity whose coord shifted to the back-half because
+        // the player's eyeDir changed between aim time and consume time. These entities
+        // are alive but would never be included in frontRefs (their t > PRELOAD_T_THRESHOLD
+        // under the new eyeDir) and therefore never reach fakeBlock.despawn().
+        for (Map.Entry<ChunkCoord, ChunkRef> e : existingFrontRefs.entrySet()) {
+            if (!frontRefs.containsKey(e.getKey()) && !e.getValue().display().isDead()) {
+                e.getValue().display().remove();
+            }
+        }
+
         return new PreloadPlan(frontRefs, pending, allOuterT);
     }
 
