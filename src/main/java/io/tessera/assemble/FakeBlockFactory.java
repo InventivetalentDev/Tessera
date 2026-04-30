@@ -233,11 +233,9 @@ public final class FakeBlockFactory {
 
     /**
      * Spawn the inner (gridN−2)³ chunks (those with no outward face) using
-     * a donor outer chunk's skin. Restricts to the breaker-facing half via
-     * the rotated-local-center · eyeDir projection so we only pay the entity
-     * cost for chunks the player will actually see during the wave passage.
-     * Identity threshold (chunks at the cube's midplane and nearer) is the
-     * sweet spot — covers the visible half plus a slim safety margin.
+     * a donor outer chunk's skin. All interior chunks are spawned — the
+     * previous near-half filter left far-side interior chunks absent, which
+     * was visible as empty space once the wave passed the block midpoint.
      */
     private void spawnInteriorChunks(World world, Location origin, BlockGeometry geom,
                                      Map<ChunkCoord, HeadsRegistry.Entry> chunks,
@@ -249,30 +247,10 @@ public final class FakeBlockFactory {
         HeadSkin donorSkin = HeadsRegistry.toHeadSkin(donorEntry);
         ItemStack donorStack = itemFactory.build(donorSkin);
 
-        // Eye direction (block-rotation-aware), used to pick the half closest
-        // to the breaker. If unavailable we fill everything — the caller
-        // should avoid that at high gridN.
-        Vector3f dir = null;
-        if (eyeDir != null) {
-            Vector e = eyeDir.clone().normalize();
-            dir = new Vector3f((float) e.getX(), (float) e.getY(), (float) e.getZ());
-        }
-        Vector3f blockCenter = new Vector3f(0.5f, 0.5f, 0.5f);
-
         for (int x = 1; x < gridN - 1; x++) {
             for (int y = 1; y < gridN - 1; y++) {
                 for (int z = 1; z < gridN - 1; z++) {
                     ChunkCoord coord = new ChunkCoord(x, y, z);
-                    if (dir != null) {
-                        // Same projection as ChunkWaveSampler — chunks with
-                        // negative projection sit on the breaker-facing side
-                        // of the cube center and are exposed early in the
-                        // wave. Drop the far-side ones to keep entity count
-                        // manageable.
-                        Vector3f rel = geom.chunkLocalCenter(coord).sub(blockCenter);
-                        blockRotation.transform(rel);
-                        if (rel.dot(dir) > 0f) continue;
-                    }
 
                     float scale = geom.chunkScale() * shellFactor;
                     Vector3f translation = geom.translationFor(coord, canonicalRotation, scale);
