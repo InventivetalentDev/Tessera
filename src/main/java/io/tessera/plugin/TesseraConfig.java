@@ -32,6 +32,7 @@ public record TesseraConfig(
         boolean smoothInterpolation,
         boolean startOnLeftClick,
         long leftClickGraceMs,
+        boolean eagerPreload,
         boolean enableTintedBlocks,
         boolean debug
 ) {
@@ -82,6 +83,7 @@ public record TesseraConfig(
                 readBool(cfg, "progress.smoothInterpolation", "smoothInterpolation", true),
                 readBool(cfg, "interaction.startOnLeftClick", "startOnLeftClick", true),
                 readLong(cfg, "interaction.leftClickGraceMs", "leftClickGraceMs", 500L),
+                readBool(cfg, "interaction.eagerPreload", "eagerPreload", false),
                 cfg.getBoolean("enableTintedBlocks", true),
                 readBool(cfg, "debug", "debug", false)
         );

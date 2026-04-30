@@ -125,3 +125,12 @@ interaction:
   # one destroy stage (50-700ms) — too small and slow blocks get rolled
   # back during the first stage; too large and idle swings linger.
   leftClickGraceMs: 500
+
+  # Pre-spawn the chunk lattice while the player is aiming at a block so
+  # the entities are already fully rendered by the time they left-click.
+  # When mining begins the real block is hidden immediately (no tick delay
+  # needed), making the animation visible from the very first hit on fast
+  # blocks like dirt or planks-with-an-axe. The trade-off is a brief window
+  # of extra entity traffic for every block the player looks at (~1 second
+  # of extra entity lifetime per aimed-at block on average).
+  eagerPreload: false
