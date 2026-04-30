@@ -58,11 +58,16 @@ public final class BlockBreakListener implements Listener {
 
         // Progress-driven path already spawned & animated the FakeBlock;
         // vanilla just removed the real block. Tear down the tracker and
-        // skip the post-break wave entirely.
+        // skip the post-break wave entirely. onRealBreak also sweeps any
+        // preloads aimed at this position.
         if (progressListener.isTracked(posKey)) {
             progressListener.onRealBreak(posKey);
             return;
         }
+
+        // No active tracker — but someone might have an eager preload aimed here
+        // (e.g. block broken by instamine, explosion, or another plugin).
+        progressListener.clearPreloadsAt(posKey);
 
         if (!cfg.enables(key.asString())) {
             if (cfg.debug()) plugin.getLogger().info("[debug] skip " + key + " (not enabled)");

@@ -679,6 +679,10 @@ public final class BlockBreakProgressListener implements Listener {
             tb.barrierSent = false;
         }
         disposeImmediate(tb, /*restoreBlock=*/ false);
+        // Clear any preloads aimed at this position — e.g. a second player who was
+        // aiming at the block while someone else was mining it. Without this their
+        // preload entities would remain visible in empty air until the next aimWatchTick.
+        clearPreloadsAt(posKey);
         if (plugin.tesseraConfig().debug()) plugin.getLogger().info(
                 "[" + ts() + "] [debug-progress] real-break " + tb.key + " at " + posKey);
     }
@@ -807,8 +811,15 @@ public final class BlockBreakProgressListener implements Listener {
 
             PreloadEntry existing = preloads.get(player.getUniqueId());
             if (existing != null) {
-                if (targetKey != null && existing.posKey.equals(targetKey)) continue;
-                clearPreload(player.getUniqueId());
+                if (targetKey != null && existing.posKey.equals(targetKey)) {
+                    // Same block — keep preload only if it is not yet being actively mined.
+                    // If another player started tracking it, our preload can never be
+                    // consumed and would otherwise linger until the block breaks.
+                    if (tracker.get(targetKey) == null) continue;
+                    clearPreload(player.getUniqueId());
+                } else {
+                    clearPreload(player.getUniqueId());
+                }
             }
             if (targetKey == null) continue;
             if (tracker.get(targetKey) != null) continue; // already tracking
@@ -856,6 +867,20 @@ public final class BlockBreakProgressListener implements Listener {
                 if (!ref.display().isDead()) ref.display().remove();
             });
         }
+    }
+
+    /**
+     * Despawn preload entities for ANY player whose preload targets {@code posKey}.
+     * Called when a block breaks so pre-spawned entities don't linger in empty air.
+     */
+    void clearPreloadsAt(BlockPosKey posKey) {
+        preloads.entrySet().removeIf(e -> {
+            if (!e.getValue().posKey().equals(posKey)) return false;
+            e.getValue().prespawnedChunks().values().forEach(ref -> {
+                if (!ref.display().isDead()) ref.display().remove();
+            });
+            return true;
+        });
     }
 
     /**
