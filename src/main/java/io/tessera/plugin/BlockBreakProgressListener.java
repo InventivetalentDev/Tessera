@@ -75,15 +75,14 @@ public final class BlockBreakProgressListener implements Listener {
     // multi-second gaps and we don't want a single event to stretch a smooth
     // interpolation that long if mining stops.
     private static final long MAX_INTERP_MS = 800L;
-    // Display-entity spawn packets have an initial render lag client-side
-    // (~1-2 ticks before the transformation actually paints), while
-    // sendBlockChange takes effect on the very next frame. If we send the
-    // BARRIER immediately after spawning the FakeBlock the player sees a
-    // brief see-through window: barrier (transparent) is rendered before
-    // the heads are. Defer the swap by a few ticks so the entity is fully
-    // visible when the real block is hidden. Empirically 1 tick is too
-    // short on typical connections.
-    private static final long BARRIER_SWAP_DELAY_TICKS = 3L;
+    // Display-entity spawn packets have an initial render lag client-side:
+    // the entity tracker sends the spawn packet at the end of the tick it
+    // was spawned in, so deferring by 1 tick guarantees the spawn packet is
+    // already in the client's queue before BARRIER hides the real block.
+    // Tested: 1 tick produces no visible see-through on typical connections.
+    // 3 ticks was the original value but costs ~100 ms of wasted animation
+    // time on fast blocks (dirt/planks-with-axe break in ~150–750 ms).
+    private static final long BARRIER_SWAP_DELAY_TICKS = 1L;
 
     private final TesseraPlugin plugin;
     private final FakeBlockFactory factory;
