@@ -173,9 +173,13 @@ public final class BlockBreakProgressListener implements Listener {
             // Event LEFT_CLICK_BLOCK). After a speculative pre-spawn we'd
             // otherwise treat the start as a cancel and reverse immediately —
             // visible as a short shrink-then-respawn jump at the beginning
-            // of every break. Only reverse if we've already observed
-            // positive progress, i.e. there's something to roll back.
-            if (tb.lastAppliedProgress <= 0d) {
+            // of every break. Only reverse if the speculative window has
+            // closed (a real positive event has been confirmed) so there's
+            // actually something to roll back. Using the speculative flag
+            // rather than lastAppliedProgress <= 0 handles the case where a
+            // jumpstart applyForward advances lastAppliedProgress before any
+            // real event has arrived.
+            if (tb.speculative || tb.lastAppliedProgress <= 0d) {
                 tb.lastUpdateTickMs = System.currentTimeMillis();
                 return;
             }
@@ -268,6 +272,9 @@ public final class BlockBreakProgressListener implements Listener {
         if (block == null) return;
         Player player = event.getPlayer();
 
+        if (cfg.debug()) plugin.getLogger().info(
+                "[" + ts() + "] [debug-progress] onInteract");
+
         try {
             if (block.getBreakSpeed(player) >= 1.0f) return;
         } catch (NoSuchMethodError ignored) {}
@@ -327,6 +334,8 @@ public final class BlockBreakProgressListener implements Listener {
                     tb.shellExpanded = true;
                     try {
                         player.sendBlockChange(breakLoc, Material.BARRIER.createBlockData());
+                        if (cfg.debug()) plugin.getLogger().info(
+                                "[" + ts() + "] [debug-progress] sent-barrier");
                         tb.barrierSent = true;
                     } catch (RuntimeException re) {
                         plugin.getLogger().warning("sendBlockChange(BARRIER) eager failed: " + re.getMessage());
@@ -514,6 +523,10 @@ public final class BlockBreakProgressListener implements Listener {
             targetProgress = progress;
             interpTicks = FORWARD_INTERP_TICKS_FALLBACK;
         }
+
+        if (cfg.debug()) plugin.getLogger().info(
+                "[" + ts() + "] [debug-progress] applyForward targetProgress=" + fmt(targetProgress));
+
         spawnPendingChunks(tb, targetProgress, cfg.waveWindow());
         boolean firstReal = tb.lastAppliedProgress <= 0d && progress > 0d;
         DirectionalShrinkEffect.applyAtProgress(tb.fakeBlock, tb.chunkT, tb.baseScales, tb.currentScales,
