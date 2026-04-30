@@ -70,9 +70,24 @@ public final class HeadsRegistry {
 
     public record Entry(String skinHash, String textureValue, String textureSignature, String mineskinUuid) {}
 
+    /**
+     * Optional persistence sink for runtime-baked entries. The plugin wires
+     * this to a JSON file under {@code plugins/Tessera/cache/} so registry
+     * mutations survive restarts. Bundled-{@code heads.json} entries loaded
+     * at startup do <i>not</i> flow through here — only later mutations from
+     * {@link #register} / {@link #invalidate} / {@link #invalidateAll} do.
+     */
+    public interface Persistence {
+        void save(BakeKey key, Map<ChunkCoord, Entry> chunks,
+                  Map<String, ModelResolver.VariantRotation> variants);
+        void remove(BlockKey block);
+        void clear();
+    }
+
     private final Logger logger;
     private final int gridN;
     private final String version;
+    private volatile Persistence persistence;
     // Keyed by BakeKey so tinted runtime variants (different tintArgb of the
     // same block) get separate chunk maps. heads.json on disk only ever
     // contains untinted entries — they're loaded as BakeKey.untinted(...)
@@ -254,11 +269,49 @@ public final class HeadsRegistry {
 
     public void register(BakeKey key, Map<ChunkCoord, Entry> chunks,
                          Map<String, ModelResolver.VariantRotation> variants) {
-        blocks.put(key, Map.copyOf(chunks));
-        if (variants != null && !variants.isEmpty()) {
-            variantRotations.put(key.block(), Map.copyOf(variants));
+        Map<ChunkCoord, Entry> chunksCopy = Map.copyOf(chunks);
+        Map<String, ModelResolver.VariantRotation> variantsCopy =
+                (variants == null || variants.isEmpty()) ? Collections.emptyMap() : Map.copyOf(variants);
+        blocks.put(key, chunksCopy);
+        if (!variantsCopy.isEmpty()) variantRotations.put(key.block(), variantsCopy);
+        for (Entry e : chunksCopy.values()) hashIndex.putIfAbsent(e.skinHash(), e);
+        Persistence p = persistence;
+        if (p != null) {
+            try {
+                p.save(key, chunksCopy, variantsCopy);
+            } catch (RuntimeException re) {
+                logger.warning("[heads-registry] persistence save failed for " + key + ": " + re.getMessage());
+            }
         }
-        for (Entry e : chunks.values()) hashIndex.putIfAbsent(e.skinHash(), e);
+    }
+
+    /**
+     * Wire a {@link Persistence} sink to mirror future {@link #register} /
+     * {@link #invalidate} / {@link #invalidateAll} calls to disk. Pass
+     * {@code null} to detach. Already-loaded entries (bundled heads.json) are
+     * <i>not</i> replayed through the sink — call sites that load from
+     * persistence should bypass this hook by using
+     * {@link #registerSilently}.
+     */
+    public void setPersistence(Persistence p) {
+        this.persistence = p;
+    }
+
+    /**
+     * Like {@link #register} but bypasses the {@link Persistence} sink. Used
+     * when loading existing persisted entries back into the registry at
+     * startup — re-saving them would be redundant and could amplify any
+     * format drift.
+     */
+    public void registerSilently(BakeKey key, Map<ChunkCoord, Entry> chunks,
+                                 Map<String, ModelResolver.VariantRotation> variants) {
+        Persistence saved = this.persistence;
+        this.persistence = null;
+        try {
+            register(key, chunks, variants);
+        } finally {
+            this.persistence = saved;
+        }
     }
 
     /**
@@ -291,6 +344,11 @@ public final class HeadsRegistry {
     public boolean invalidate(BlockKey block) {
         variantRotations.remove(block);
         boolean removed = blocks.keySet().removeIf(k -> k.block().equals(block));
+        Persistence p = persistence;
+        if (p != null) {
+            try { p.remove(block); }
+            catch (RuntimeException re) { logger.warning("[heads-registry] persistence remove failed: " + re.getMessage()); }
+        }
         return removed;
     }
 
@@ -306,6 +364,11 @@ public final class HeadsRegistry {
         variantRotations.clear();
         // hashIndex stays — its only consumer is BlockBaker.findByHash,
         // which is bypassed when TileRotations.consumeStale is true.
+        Persistence p = persistence;
+        if (p != null) {
+            try { p.clear(); }
+            catch (RuntimeException re) { logger.warning("[heads-registry] persistence clear failed: " + re.getMessage()); }
+        }
         return n;
     }
 

@@ -34,4 +34,18 @@ public record BakeKey(BlockKey block, int tintArgb) {
         if (tintArgb == 0) return block.toString();
         return block + "#" + String.format("%06x", tintArgb & 0xFFFFFF);
     }
+
+    /**
+     * Inverse of {@link #toString()}. Accepts {@code "minecraft:stone"} →
+     * untinted and {@code "minecraft:oak_leaves#7fbf2e"} → tinted with the
+     * upper byte forced to {@code 0xFF} (matching {@code BlockTintReader}'s
+     * stable-alpha convention).
+     */
+    public static BakeKey parse(String s) {
+        int hash = s.indexOf('#');
+        if (hash < 0) return untinted(BlockKey.of(s));
+        BlockKey block = BlockKey.of(s.substring(0, hash));
+        int rgb = Integer.parseInt(s.substring(hash + 1), 16);
+        return new BakeKey(block, 0xFF000000 | (rgb & 0xFFFFFF));
+    }
 }
