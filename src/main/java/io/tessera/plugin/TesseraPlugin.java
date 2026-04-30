@@ -7,6 +7,7 @@ import io.tessera.skin.HeadsRegistry;
 import io.tessera.skin.SkinDiskCache;
 import io.tessera.skin.SkinUploader;
 import io.tessera.skin.bake.BlockBaker;
+import io.tessera.skin.bake.RuntimeHeadsStore;
 import org.bukkit.Bukkit;
 import org.bukkit.command.PluginCommand;
 import org.bukkit.plugin.java.JavaPlugin;
@@ -61,8 +62,17 @@ public final class TesseraPlugin extends JavaPlugin {
         Path pngDir = cacheRoot.resolve("heads");
         Path assetsDir = cacheRoot.resolve("assets");
         Path skinCacheFile = cacheRoot.resolve("skins.json");
+        Path runtimeHeadsFile = cacheRoot.resolve("runtime-heads.json");
         McAssetClient assets = new McAssetClient(assetsDir, getLogger());
         this.diskCache = new SkinDiskCache(getLogger(), skinCacheFile);
+
+        // Rehydrate runtime-baked entries from previous sessions, then attach
+        // the same store as a persistence sink so future bakes / invalidations
+        // are mirrored to disk.
+        RuntimeHeadsStore runtimeHeads = new RuntimeHeadsStore(
+                getLogger(), runtimeHeadsFile, registry.gridN(), registry.version());
+        runtimeHeads.loadInto(registry);
+        registry.setPersistence(runtimeHeads);
         this.bakerExecutor = Executors.newFixedThreadPool(2, named("Tessera-Baker"));
         this.baker = new BlockBaker(getLogger(), assets, mcVersion, registry, uploader, diskCache, pngDir, bakerExecutor);
 
