@@ -82,8 +82,9 @@ animation:
   # the speed of the animation.
   #
   # Cost scales with gridN: at gridN=4 it's +(gridN-2)^3 = +8 entities per
-  # FakeBlock (negligible); at gridN=8 it's +216 per FakeBlock — consider
-  # lowering limits.maxConcurrentFakeBlocks if you raise gridN with this on.
+  # FakeBlock (negligible); at gridN=8 it's +216 per FakeBlock; at gridN=16
+  # it's +2744 — recommend leaving this OFF for gridN > 8. Even with lazy
+  # spawning the per-tick spawn cost causes visible frame spikes at gridN=16.
   fillInterior: false
 
 progress:

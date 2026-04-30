@@ -999,13 +999,21 @@ public final class BlockBreakProgressListener implements Listener {
         if (tb.pendingChunks == null || tb.pendingChunks.isEmpty()) return;
         if (tb.fakeBlock.despawned()) return; // FakeBlock already torn down — don't spawn orphaned entities
         float shellFactor = tb.shellExpanded ? 1.0f : FakeBlockFactory.INITIAL_SHELL_COMPRESSION;
-        float chunkScale = 2f / tb.fakeBlock.gridN();
+        int gridN = tb.fakeBlock.gridN();
+        float chunkScale = 2f / gridN;
+        // Cap spawns per call to one face-layer's worth (gridN²). This prevents
+        // a spike when many interior chunks become eligible at once (e.g. at
+        // gridN=16 with fillInterior=true, ~960 chunks could queue up on the
+        // consume tick — each world.spawn() is expensive). Remaining eligible
+        // chunks are deferred to the next applyForward call.
+        int spawnsLeft = gridN * gridN;
 
         Iterator<FakeBlockFactory.PendingChunkSpec> it = tb.pendingChunks.iterator();
-        while (it.hasNext()) {
+        while (it.hasNext() && spawnsLeft > 0) {
             FakeBlockFactory.PendingChunkSpec spec = it.next();
             if (spec.t() > targetProgress + window) break; // sorted — stop here
             it.remove();
+            spawnsLeft--;
 
             ChunkRef ref;
             try {
