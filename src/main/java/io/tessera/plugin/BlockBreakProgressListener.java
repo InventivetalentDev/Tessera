@@ -1032,10 +1032,16 @@ public final class BlockBreakProgressListener implements Listener {
         float chunkScale = 2f / gridN;
 
         // Build shared context once for the batch: BlockGeometry, canonical rotation,
-        // and donor ItemStack (all interior chunks share the same skin, so we build
-        // the ItemStack once and clone it per spawn instead of rebuilding it 2744 times).
+        // and donor ItemStack. Interior chunks all share the same skin so we build
+        // the ItemStack once and clone it. Outer specs don't use interiorBaseStack, so
+        // we only pass an interior spec as the donor — null when the batch is all outer.
+        FakeBlockFactory.PendingChunkSpec interiorDonor = null;
+        for (FakeBlockFactory.PendingChunkSpec s : tb.pendingChunks) {
+            if (s.t() > targetProgress + window) break;
+            if (s.interior()) { interiorDonor = s; break; }
+        }
         FakeBlockFactory.PendingSpawnContext ctx = factory.beginPendingBatch(
-                tb.fakeBlock.origin(), tb.fakeBlock.blockRotation(), tb.pendingChunks.get(0));
+                tb.fakeBlock.origin(), tb.fakeBlock.blockRotation(), interiorDonor);
 
         int spawned = 0;
         Iterator<FakeBlockFactory.PendingChunkSpec> it = tb.pendingChunks.iterator();

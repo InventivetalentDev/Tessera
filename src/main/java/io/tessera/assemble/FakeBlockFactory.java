@@ -79,6 +79,14 @@ public final class FakeBlockFactory {
      * assembled; by the time the wave reaches them the render lag has resolved.
      */
     public static final double PRELOAD_T_THRESHOLD = 0.5;
+    /**
+     * Outer shell chunks spawned immediately at consume time (sorted front-first by
+     * wave position t). Remaining outer chunks go to {@link PreloadPlan#pendingSpecs}
+     * and are batch-spawned by the progress listener as the wave advances, avoiding a
+     * tick spike at click time. Pre-spawned preload entities are always kept in the
+     * immediate set regardless of this limit.
+     */
+    public static final int OUTER_INITIAL_SPAWN = 128;
 
     /** Outer or interior chunk scheduled for lazy spawning as the wave front advances. */
     public record PendingChunkSpec(
@@ -349,25 +357,33 @@ public final class FakeBlockFactory {
             allOuterT.put(e.getKey(), (e.getValue() - minP) / range);
         }
 
-        // 2. Spawn ALL outer chunks at consume time. Back-half outer chunks used to
-        // be deferred as pending, but that caused a bad visual: the player looks
-        // through shrinking front layers to full-scale back layers, so the block
-        // appears intact until the last moment. Spawning everything up front lets
-        // the full shell animate from the first tick. The eager-preload already
-        // rendered the front-half at aim time; only the back-half needs fresh spawns.
-        // Interior fill chunks remain lazy (they're never directly visible through
-        // the outer shell and the tent function keeps them brief anyway).
-        Map<ChunkCoord, ChunkRef> frontRefs = new HashMap<>(chunks.size());
+        // 2. Outer shell: always keep alive pre-spawned preload entities (discarding
+        // them would waste the aim-time render warm-up). For new spawns, only the
+        // first OUTER_INITIAL_SPAWN chunks are materialised immediately (sorted
+        // ascending by t so the front-facing layer is always in the initial batch);
+        // the rest go into pendingSpecs and are spread across ticks by the progress
+        // listener's spawnPendingChunks scheduler, avoiding a click-time spike.
+        Map<ChunkCoord, ChunkRef> frontRefs = new HashMap<>(OUTER_INITIAL_SPAWN + existingFrontRefs.size());
         List<PendingChunkSpec> pending = new ArrayList<>();
-        for (Map.Entry<ChunkCoord, HeadsRegistry.Entry> e : chunks.entrySet()) {
+
+        for (Map.Entry<ChunkCoord, ChunkRef> e : existingFrontRefs.entrySet()) {
+            if (!e.getValue().display().isDead()) frontRefs.put(e.getKey(), e.getValue());
+        }
+
+        List<Map.Entry<ChunkCoord, HeadsRegistry.Entry>> sortedOuter = new ArrayList<>(chunks.entrySet());
+        sortedOuter.sort((a, b) -> Double.compare(allOuterT.get(a.getKey()), allOuterT.get(b.getKey())));
+
+        int newOuterSpawned = 0;
+        for (Map.Entry<ChunkCoord, HeadsRegistry.Entry> e : sortedOuter) {
             ChunkCoord c = e.getKey();
-            ChunkRef existing = existingFrontRefs.get(c);
-            if (existing != null && !existing.display().isDead()) {
-                frontRefs.put(c, existing);
-            } else {
+            if (frontRefs.containsKey(c)) continue; // already from preload
+            if (newOuterSpawned < OUTER_INITIAL_SPAWN) {
                 frontRefs.put(c, spawnChunk(world, origin, c, e.getValue(),
                         blockRotation, canonicalRotation, geom, gridN,
                         INITIAL_SHELL_COMPRESSION));
+                newOuterSpawned++;
+            } else {
+                pending.add(new PendingChunkSpec(c, e.getValue(), allOuterT.get(c), false));
             }
         }
 
@@ -391,16 +407,6 @@ public final class FakeBlockFactory {
         }
 
         pending.sort((a, b) -> Double.compare(a.t(), b.t()));
-
-        // Despawn any pre-spawned entity whose coord shifted to the back-half because
-        // the player's eyeDir changed between aim time and consume time. These entities
-        // are alive but would never be included in frontRefs (their t > PRELOAD_T_THRESHOLD
-        // under the new eyeDir) and therefore never reach fakeBlock.despawn().
-        for (Map.Entry<ChunkCoord, ChunkRef> e : existingFrontRefs.entrySet()) {
-            if (!frontRefs.containsKey(e.getKey()) && !e.getValue().display().isDead()) {
-                e.getValue().display().remove();
-            }
-        }
 
         return new PreloadPlan(frontRefs, pending, allOuterT);
     }
