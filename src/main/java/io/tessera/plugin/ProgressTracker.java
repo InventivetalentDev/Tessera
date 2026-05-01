@@ -1,12 +1,15 @@
 package io.tessera.plugin;
 
+import io.tessera.assemble.FakeBlockFactory;
 import io.tessera.core.BlockKey;
+import io.tessera.core.ChunkCoord;
 import io.tessera.core.FakeBlock;
 import org.bukkit.Location;
 import org.bukkit.block.data.BlockData;
 import org.bukkit.scheduler.BukkitTask;
 import org.bukkit.util.Vector;
 
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -59,6 +62,10 @@ public final class ProgressTracker {
         public boolean shellExpanded;          // true once the spawn-time INITIAL_SHELL_COMPRESSION has been undone
         public BukkitTask reverseTask;         // non-null only while REVERSING
         public BukkitTask barrierSwapTask;     // non-null between spawn and the deferred sendBlockChange(BARRIER)
+        public BukkitTask pendingSpawnTask;    // non-null while a scheduler-spread spawn-continuation is queued
+        // Lazy-spawn support: null on legacy paths; set right after tracker.put().
+        public List<FakeBlockFactory.PendingChunkSpec> pendingChunks;
+        public Map<ChunkCoord, Double> allOuterT;
 
         public TrackedBreak(UUID playerId, BlockKey key, Location origin,
                             BlockData originalBlockData, Vector eyeDir,
@@ -84,6 +91,9 @@ public final class ProgressTracker {
             this.shellExpanded = false;
             this.reverseTask = null;
             this.barrierSwapTask = null;
+            this.pendingSpawnTask = null;
+            this.pendingChunks = null;
+            this.allOuterT = null;
         }
     }
 

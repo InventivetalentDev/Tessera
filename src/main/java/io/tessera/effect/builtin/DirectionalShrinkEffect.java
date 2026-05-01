@@ -184,6 +184,30 @@ public final class DirectionalShrinkEffect implements ChunkEffect {
         handle.setTransformation(zero, 0, style == CollapseStyle.POP ? 0 : interpTicks);
     }
 
+    /**
+     * Despawn chunks that the wave has fully passed and that have already
+     * animated to (near-)zero scale. Guards against false-despawn of
+     * freshly-spawned chunks whose scale hasn't risen yet.
+     */
+    public static void despawnPassedChunks(FakeBlock fakeBlock,
+                                           double[] chunkT,
+                                           float[] baseScales,
+                                           float[] currentScales,
+                                           double progress,
+                                           double window,
+                                           float minDelta) {
+        List<ChunkRef> chunks = fakeBlock.chunks();
+        double rear = progress - window;
+        for (int i = 0; i < chunks.size(); i++) {
+            DisplayHandle handle = chunks.get(i).handle();
+            if (!handle.isAlive()) continue;
+            if (baseScales[i] <= 0f) continue;     // not yet spawned (pre-allocated slot)
+            if (currentScales[i] >= minDelta) continue; // still visible
+            if (chunkT[i] > rear) continue;         // wave hasn't fully passed
+            handle.despawn();
+        }
+    }
+
     /** Sort chunks by Manhattan distance from the surface — diagnostic aid for tests. */
     static List<ChunkRef> sortBySurface(List<ChunkRef> chunks) {
         List<ChunkRef> out = new ArrayList<>(chunks);
