@@ -8,6 +8,7 @@ import io.tessera.core.VariantKey;
 import io.tessera.effect.EffectContext;
 import io.tessera.effect.builtin.DirectionalShrinkEffect;
 import io.tessera.nms.BlockTintReader;
+import org.bukkit.entity.Player;
 import io.tessera.plugin.ProgressTracker.BlockPosKey;
 import io.tessera.skin.HeadsRegistry;
 import io.tessera.skin.bake.BlockBaker;
@@ -91,8 +92,9 @@ public final class BlockBreakListener implements Listener {
         int tint = cfg.enableTintedBlocks() ? BlockTintReader.read(event.getBlock()) : 0;
         BakeKey bakeKey = new BakeKey(key, tint);
 
+        Player player = event.getPlayer();
         if (registry.has(bakeKey)) {
-            spawn(bakeKey, blockData, breakLoc, eyeDir, cfg);
+            spawn(player, bakeKey, blockData, breakLoc, eyeDir, cfg);
             return;
         }
 
@@ -107,19 +109,17 @@ public final class BlockBreakListener implements Listener {
                 return;
             }
             if (!ok) return;
-            // Re-check world is still loaded; player may have logged off.
+            // Re-check world is still loaded and player is still online.
             if (Bukkit.getWorld(world) == null) return;
-            Bukkit.getScheduler().runTask(plugin, () -> spawn(bakeKey, blockData, breakLoc, eyeDir, cfg));
+            if (!player.isOnline()) return;
+            Bukkit.getScheduler().runTask(plugin, () -> spawn(player, bakeKey, blockData, breakLoc, eyeDir, cfg));
         });
     }
 
-    private void spawn(BakeKey bakeKey, BlockData blockData, Location breakLoc, Vector eyeDir, TesseraConfig cfg) {
+    private void spawn(Player viewer, BakeKey bakeKey, BlockData blockData,
+                       Location breakLoc, Vector eyeDir, TesseraConfig cfg) {
         if (active.get() >= cfg.maxConcurrentFakeBlocks()) return;
         active.incrementAndGet();
-        // Resolve the blockstate variant rotation (identity if the block has
-        // no per-state variants registered or the state doesn't match any
-        // known key). Falling back to identity = render as canonical
-        // variant, which is a reasonable default for unsupported states.
         BlockKey key = bakeKey.block();
         String fullStateKey = VariantKey.fromBlockData(blockData);
         String matchedKey = VariantKey.pickMatching(fullStateKey, registry.variantsFor(key).keySet());
@@ -127,7 +127,7 @@ public final class BlockBreakListener implements Listener {
 
         FakeBlock fb;
         try {
-            fb = factory.create(breakLoc, bakeKey, blockRotation, cfg.fillInterior(), eyeDir);
+            fb = factory.create(viewer, breakLoc, bakeKey, blockRotation, cfg.fillInterior(), eyeDir);
         } catch (RuntimeException re) {
             active.decrementAndGet();
             plugin.getLogger().warning("Failed to spawn FakeBlock for " + bakeKey + ": " + re.getMessage());

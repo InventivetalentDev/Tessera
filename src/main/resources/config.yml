@@ -1,3 +1,11 @@
+# Entity transport backend.
+#   packet - send raw clientbound packets directly to the breaking player only.
+#            No server-side entity tracking; best performance. Default.
+#   bukkit - use the Paper World.spawn() API. Safer fallback if a Minecraft
+#            update renames internal Display fields that the packet path
+#            needs via reflection.
+transport: packet
+
 # How many chunks per axis each block is split into. Must divide 16
 # (block textures are 16×16 px) — permitted values: 1, 2, 4, 8, 16.
 #   gridN=4   →  4×4 tiles per face, 64 chunks/block (56 visible);

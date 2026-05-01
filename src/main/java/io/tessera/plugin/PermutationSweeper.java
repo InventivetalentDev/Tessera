@@ -102,10 +102,10 @@ public final class PermutationSweeper {
                 + (bakes == 1 ? "" : "s") + " expected.");
 
         Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> runSweep(
-                world, anchor, lineDir, key, mat, face, headFace, combos, before, sender));
+                p, world, anchor, lineDir, key, mat, face, headFace, combos, before, sender));
     }
 
-    private void runSweep(World world, Location anchor, Vector3f lineDir,
+    private void runSweep(Player viewer, World world, Location anchor, Vector3f lineDir,
                           BlockKey key, Material mat, FaceDir face, HeadFace headFace,
                           List<Combo> combos, Snapshot before, CommandSender sender) {
         try {
@@ -148,7 +148,7 @@ public final class PermutationSweeper {
                 java.util.concurrent.CountDownLatch latch = new java.util.concurrent.CountDownLatch(1);
                 Bukkit.getScheduler().runTask(plugin, () -> {
                     try {
-                        spawnOne(world, anchor, lineDir, slot, key, mat, headFace, combo);
+                        spawnOne(viewer, world, anchor, lineDir, slot, key, mat, headFace, combo);
                     } finally {
                         latch.countDown();
                     }
@@ -171,7 +171,7 @@ public final class PermutationSweeper {
         }
     }
 
-    private void spawnOne(World world, Location anchor, Vector3f lineDir, int slot,
+    private void spawnOne(Player viewer, World world, Location anchor, Vector3f lineDir, int slot,
                           BlockKey key, Material mat, HeadFace headFace, Combo c) {
         // Set this combo's HeadRotation just before factory.create so the
         // captured runtime spin matches the labeled config.
@@ -189,7 +189,7 @@ public final class PermutationSweeper {
                 lineDir.y * slot * 2.0, lineDir.z * slot * 2.0);
         FakeBlock fb;
         try {
-            fb = factory.create(pos, key);
+            fb = factory.create(viewer, pos, key);
         } catch (RuntimeException re) {
             plugin.getLogger().warning("[sweep] spawn failed at " + c.label() + ": " + re.getMessage());
             return;

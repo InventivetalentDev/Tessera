@@ -1,6 +1,6 @@
 package io.tessera.core;
 
-import org.bukkit.entity.ItemDisplay;
+import io.tessera.transport.DisplayHandle;
 import org.joml.Vector3f;
 
 import java.util.EnumSet;
@@ -16,19 +16,19 @@ import java.util.EnumSet;
  */
 public final class ChunkRef {
 
-    private final ItemDisplay display;
+    private final DisplayHandle handle;
     private final ChunkCoord coord;
     private final Vector3f localCenter;
     private final EnumSet<FaceDir> outwardFaces;
 
-    public ChunkRef(ItemDisplay display, ChunkCoord coord, Vector3f localCenter, EnumSet<FaceDir> outwardFaces) {
-        this.display = display;
+    public ChunkRef(DisplayHandle handle, ChunkCoord coord, Vector3f localCenter, EnumSet<FaceDir> outwardFaces) {
+        this.handle = handle;
         this.coord = coord;
         this.localCenter = new Vector3f(localCenter);
         this.outwardFaces = EnumSet.copyOf(outwardFaces);
     }
 
-    public ItemDisplay display() { return display; }
+    public DisplayHandle handle() { return handle; }
     public ChunkCoord coord() { return coord; }
     public Vector3f localCenter() { return new Vector3f(localCenter); }
     public EnumSet<FaceDir> outwardFaces() { return EnumSet.copyOf(outwardFaces); }

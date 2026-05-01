@@ -6,6 +6,7 @@ import io.tessera.effect.ChunkEffect;
 import io.tessera.effect.ChunkWaveSampler;
 import io.tessera.effect.EffectContext;
 import io.tessera.plugin.TesseraConfig.CollapseStyle;
+import io.tessera.transport.DisplayHandle;
 import org.bukkit.Bukkit;
 import org.bukkit.util.Transformation;
 import org.joml.Vector3f;
@@ -73,10 +74,6 @@ public final class DirectionalShrinkEffect implements ChunkEffect {
 
         for (int i = 0; i < chunks.size(); i++) {
             ChunkRef chunk = chunks.get(i);
-            // proj > 0 = chunk on far side of block (in same direction as
-            // the player's look vector). proj < 0 = near side. We want
-            // near-side chunks (small t) to shrink FIRST (small delay), far
-            // ones LAST.
             int delayTicks = (int) Math.round(t[i] * waveTicks);
 
             Bukkit.getScheduler().runTaskLater(ctx.plugin(),
@@ -84,21 +81,15 @@ public final class DirectionalShrinkEffect implements ChunkEffect {
                     Math.max(0, delayTicks));
         }
 
-        // Cleanup at end of animation. +2 ticks of slack so the last shrink
-        // finishes before we remove entities (avoids a perceptible pop).
         Bukkit.getScheduler().runTaskLater(ctx.plugin(), fakeBlock::despawn,
                 totalTicks + 2L);
     }
 
     /**
      * Apply a single wave-snapshot at the given mining {@code progress} (0..1).
-     * For SHRINK each chunk is scaled to {@code base * (1 - shrunkFraction(t,
-     * progress, window))}. For POP each chunk is full-size while the wave is
-     * in front of it (s &lt; 1) and 0 once the wave has passed (s == 1).
      * Chunks whose scale changes by less than {@code minScaleDelta} from
-     * {@code prevScales[i]} are skipped to avoid redundant interpolation
-     * packets; applied scales are written back into {@code prevScales} for
-     * the next call.
+     * {@code prevScales[i]} are skipped to avoid redundant packets.
+     * Applied scales are written back into {@code prevScales} for the next call.
      *
      * <p>Does NOT despawn the FakeBlock — caller owns lifecycle.
      */
@@ -117,33 +108,26 @@ public final class DirectionalShrinkEffect implements ChunkEffect {
         int interp = Math.max(0, interpTicks);
         for (int i = 0; i < n; i++) {
             ChunkRef chunk = chunks.get(i);
-            if (chunk.display().isDead()) continue;
+            DisplayHandle handle = chunk.handle();
+            if (!handle.isAlive()) continue;
             double s = ChunkWaveSampler.shrunkFraction(chunkT[i], progress, window);
             float target;
             if (style == CollapseStyle.POP) {
                 target = s >= 1.0 ? 0f : baseScales[i];
             } else if (chunk.outwardFaces().isEmpty()) {
-                // Interior (hollow-fill) chunk: tent curve — zero before the wave
-                // front reaches it, peaks at the wave front, zero again after.
-                // Only a cross-sectional plane worth of interior chunks is ever
-                // non-zero at a given progress, instead of the full half-volume.
                 target = (float) (baseScales[i] * 4.0 * s * (1.0 - s));
             } else {
                 target = (float) (baseScales[i] * (1.0 - s));
             }
             if (Math.abs(target - prevScales[i]) < minScaleDelta) continue;
             prevScales[i] = target;
-            Transformation cur = chunk.display().getTransformation();
+            Transformation cur = handle.getTransformation();
             Transformation next = new Transformation(
                     cur.getTranslation(),
                     cur.getLeftRotation(),
                     new Vector3f(target, target, target),
                     cur.getRightRotation());
-            chunk.display().setInterpolationDelay(0);
-            // POP wants an instant transition (interp=0); for SHRINK we honour
-            // the caller's pacing.
-            chunk.display().setInterpolationDuration(style == CollapseStyle.POP ? 0 : interp);
-            chunk.display().setTransformation(next);
+            handle.setTransformation(next, 0, style == CollapseStyle.POP ? 0 : interp);
         }
     }
 
@@ -151,18 +135,7 @@ public final class DirectionalShrinkEffect implements ChunkEffect {
      * Multiply every chunk's scale (and the per-chunk {@code baseScales} /
      * {@code prevScales} that drive {@link #applyAtProgress}) by
      * {@code factor}. Used in two directions, both timed to a simultaneous
-     * sendBlockChange so the snap is masked by the block-vs-BARRIER swap:
-     * <ul>
-     *   <li>{@code factor = 1 / INITIAL_SHELL_COMPRESSION ≈ 1.0101} when the
-     *       BARRIER hides the real block — grows the lattice from "fits
-     *       inside" to "fills the block volume".</li>
-     *   <li>{@code factor = INITIAL_SHELL_COMPRESSION ≈ 0.99} when the real
-     *       block is restored at the start of a reverse — shrinks the
-     *       lattice back inside the now-visible block so it doesn't
-     *       z-fight or expose see-through gaps.</li>
-     * </ul>
-     * {@code interpTicks = 0} produces an instant snap that lines up with
-     * the accompanying block change; non-zero lerps over that many ticks.
+     * sendBlockChange so the snap is masked by the block-vs-BARRIER swap.
      */
     public static void rescaleShell(FakeBlock fakeBlock,
                                     float[] baseScales,
@@ -177,16 +150,15 @@ public final class DirectionalShrinkEffect implements ChunkEffect {
             baseScales[i] *= factor;
             float newScale = prevScales[i] * factor;
             prevScales[i] = newScale;
-            if (chunk.display().isDead()) continue;
-            Transformation cur = chunk.display().getTransformation();
+            DisplayHandle handle = chunk.handle();
+            if (!handle.isAlive()) continue;
+            Transformation cur = handle.getTransformation();
             Transformation next = new Transformation(
                     cur.getTranslation(),
                     cur.getLeftRotation(),
                     new Vector3f(newScale, newScale, newScale),
                     cur.getRightRotation());
-            chunk.display().setInterpolationDelay(0);
-            chunk.display().setInterpolationDuration(interp);
-            chunk.display().setTransformation(next);
+            handle.setTransformation(next, 0, interp);
         }
     }
 
@@ -195,22 +167,21 @@ public final class DirectionalShrinkEffect implements ChunkEffect {
         List<ChunkRef> chunks = fakeBlock.chunks();
         float[] out = new float[chunks.size()];
         for (int i = 0; i < chunks.size(); i++) {
-            out[i] = chunks.get(i).display().getTransformation().getScale().x;
+            out[i] = chunks.get(i).handle().getTransformation().getScale().x;
         }
         return out;
     }
 
     private void collapseChunk(ChunkRef chunk, int interpTicks) {
-        if (chunk.display().isDead()) return;
-        Transformation cur = chunk.display().getTransformation();
+        DisplayHandle handle = chunk.handle();
+        if (!handle.isAlive()) return;
+        Transformation cur = handle.getTransformation();
         Transformation zero = new Transformation(
                 cur.getTranslation(),
                 cur.getLeftRotation(),
                 new Vector3f(0f, 0f, 0f),
                 cur.getRightRotation());
-        chunk.display().setInterpolationDelay(0);
-        chunk.display().setInterpolationDuration(style == CollapseStyle.POP ? 0 : interpTicks);
-        chunk.display().setTransformation(zero);
+        handle.setTransformation(zero, 0, style == CollapseStyle.POP ? 0 : interpTicks);
     }
 
     /** Sort chunks by Manhattan distance from the surface — diagnostic aid for tests. */

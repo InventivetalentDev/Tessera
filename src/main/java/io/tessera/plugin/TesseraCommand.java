@@ -165,7 +165,7 @@ public final class TesseraCommand implements CommandExecutor {
      */
     private void spawnTest(CommandSender sender, Player p, BlockKey key, Location target, boolean staticMode) {
         org.bukkit.util.Vector eyeDir = p.getEyeLocation().getDirection();
-        FakeBlock fb = factory.create(target, key, new org.joml.Quaternionf(),
+        FakeBlock fb = factory.create(p, target, key, new org.joml.Quaternionf(),
                 plugin.tesseraConfig().fillInterior(), eyeDir);
         if (fb.chunks().isEmpty()) {
             sender.sendMessage("§cFakeBlock has 0 chunks - heads.json entry for " + key + " is empty.");
