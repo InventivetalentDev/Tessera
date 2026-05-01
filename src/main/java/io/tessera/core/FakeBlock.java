@@ -1,5 +1,6 @@
 package io.tessera.core;
 
+import io.tessera.transport.TransportSession;
 import org.bukkit.Location;
 import org.joml.Quaternionf;
 
@@ -18,14 +19,17 @@ public final class FakeBlock {
     private final int gridN;
     private final List<ChunkRef> chunks;
     private final Quaternionf blockRotation;
+    private final TransportSession session;
     private boolean despawned = false;
 
-    public FakeBlock(Location origin, BlockKey blockKey, int gridN, List<ChunkRef> chunks, Quaternionf blockRotation) {
+    public FakeBlock(Location origin, BlockKey blockKey, int gridN, List<ChunkRef> chunks,
+                     Quaternionf blockRotation, TransportSession session) {
         this.origin = origin.clone();
         this.blockKey = blockKey;
         this.gridN = gridN;
         this.chunks = List.copyOf(chunks);
         this.blockRotation = new Quaternionf(blockRotation);
+        this.session = session;
     }
 
     public Location origin() { return origin.clone(); }
@@ -43,12 +47,10 @@ public final class FakeBlock {
      */
     public Quaternionf blockRotation() { return new Quaternionf(blockRotation); }
 
-    /** Removes every spawned ItemDisplay. Idempotent. Must be called on the main thread. */
+    /** Removes every spawned display handle. Idempotent. Must be called on the main thread. */
     public void despawn() {
         if (despawned) return;
         despawned = true;
-        for (ChunkRef c : chunks) {
-            if (!c.display().isDead()) c.display().remove();
-        }
+        session.close();
     }
 }

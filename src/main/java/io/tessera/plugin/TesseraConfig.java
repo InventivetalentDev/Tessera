@@ -34,7 +34,8 @@ public record TesseraConfig(
         long leftClickGraceMs,
         boolean eagerPreload,
         boolean enableTintedBlocks,
-        boolean debug
+        boolean debug,
+        Transport transport
 ) {
 
     public enum AnimationMode { PROGRESS, POST_BREAK }
@@ -49,6 +50,18 @@ public record TesseraConfig(
      * </ul>
      */
     public enum CollapseStyle { SHRINK, POP }
+
+    /**
+     * Entity transport backend.
+     * <ul>
+     *   <li>{@link #PACKET} — send raw clientbound packets directly to the breaker.
+     *       No server-side entity tracking; zero impact on world entity lists.
+     *       Default and recommended.</li>
+     *   <li>{@link #BUKKIT} — use the standard Paper API ({@code World.spawn}).
+     *       Fallback for MC updates that break the packet path.</li>
+     * </ul>
+     */
+    public enum Transport { PACKET, BUKKIT }
 
     public static TesseraConfig from(FileConfiguration cfg) {
         int grid = readInt(cfg, "chunkGridSize", 4);
@@ -65,6 +78,9 @@ public record TesseraConfig(
                 readString(cfg, "animation.mode", "animationMode", "progress"));
         CollapseStyle style = parseCollapseStyle(
                 readString(cfg, "animation.style", "collapseStyle", "shrink"));
+
+        Transport transport = parseTransport(
+                readString(cfg, "transport", "transport", "packet"));
 
         return new TesseraConfig(
                 readString(cfg, "mineskin.apiKey", "mineskinApiKey", ""),
@@ -85,7 +101,8 @@ public record TesseraConfig(
                 readLong(cfg, "interaction.leftClickGraceMs", "leftClickGraceMs", 500L),
                 readBool(cfg, "interaction.eagerPreload", "eagerPreload", false),
                 cfg.getBoolean("enableTintedBlocks", true),
-                readBool(cfg, "debug", "debug", false)
+                readBool(cfg, "debug", "debug", false),
+                transport
         );
     }
 
@@ -110,6 +127,15 @@ public record TesseraConfig(
             case "pop", "instant", "disappear" -> CollapseStyle.POP;
             default -> throw new IllegalArgumentException(
                     "animation.style must be 'shrink' or 'pop'; got " + raw);
+        };
+    }
+
+    private static Transport parseTransport(String raw) {
+        return switch (raw.toLowerCase(Locale.ROOT)) {
+            case "packet", "nms" -> Transport.PACKET;
+            case "bukkit", "api" -> Transport.BUKKIT;
+            default -> throw new IllegalArgumentException(
+                    "transport must be 'packet' or 'bukkit'; got " + raw);
         };
     }
 

@@ -8,6 +8,9 @@ import io.tessera.skin.SkinDiskCache;
 import io.tessera.skin.SkinUploader;
 import io.tessera.skin.bake.BlockBaker;
 import io.tessera.skin.bake.RuntimeHeadsStore;
+import io.tessera.transport.DisplayTransport;
+import io.tessera.transport.bukkit.BukkitDisplayTransport;
+import io.tessera.transport.packet.PacketDisplayTransport;
 import org.bukkit.Bukkit;
 import org.bukkit.command.PluginCommand;
 import org.bukkit.plugin.java.JavaPlugin;
@@ -51,7 +54,8 @@ public final class TesseraPlugin extends JavaPlugin {
             this.registry = HeadsRegistry.empty(getLogger(), config.chunkGridSize(), mcVersion);
         }
         this.itemFactory = new HeadItemFactory();
-        this.blockFactory = new FakeBlockFactory(itemFactory, registry);
+        DisplayTransport transport = pickTransport(config);
+        this.blockFactory = new FakeBlockFactory(itemFactory, registry, transport);
 
         // Runtime baker: kicks in when a player breaks a block we don't
         // have in heads.json yet. Uses a small thread pool so multiple
@@ -125,5 +129,20 @@ public final class TesseraPlugin extends JavaPlugin {
     public void reloadTesseraConfig() {
         reloadConfig();
         this.config = TesseraConfig.from(getConfig());
+    }
+
+    private DisplayTransport pickTransport(TesseraConfig cfg) {
+        if (cfg.transport() == TesseraConfig.Transport.BUKKIT) {
+            getLogger().info("Transport: bukkit (Paper API)");
+            return new BukkitDisplayTransport(this);
+        }
+        PacketDisplayTransport packet = new PacketDisplayTransport();
+        if (packet.isAvailable()) {
+            getLogger().info("Transport: packet (NMS direct)");
+            return packet;
+        }
+        getLogger().warning("Packet transport unavailable (reflection init failed — MC update may have"
+                + " renamed Display fields). Falling back to Bukkit transport.");
+        return new BukkitDisplayTransport(this);
     }
 }
