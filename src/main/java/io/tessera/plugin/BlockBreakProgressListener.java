@@ -3,13 +3,7 @@ package io.tessera.plugin;
 import io.papermc.paper.event.block.BlockBreakProgressUpdateEvent;
 import io.tessera.assemble.BlockGeometry;
 import io.tessera.assemble.FakeBlockFactory;
-import io.tessera.core.BakeKey;
-import io.tessera.core.BlockKey;
-import io.tessera.core.ChunkCoord;
-import io.tessera.core.ChunkRef;
-import io.tessera.core.FakeBlock;
-import io.tessera.core.VariantKey;
-import io.tessera.transport.TransportSession;
+import io.tessera.core.*;
 import io.tessera.effect.ChunkWaveSampler;
 import io.tessera.effect.builtin.DirectionalShrinkEffect;
 import io.tessera.nms.BlockTintReader;
@@ -17,13 +11,9 @@ import io.tessera.plugin.ProgressTracker.BlockPosKey;
 import io.tessera.plugin.ProgressTracker.State;
 import io.tessera.plugin.ProgressTracker.TrackedBreak;
 import io.tessera.plugin.TesseraConfig.AnimationMode;
-import io.tessera.plugin.TesseraConfig.CollapseStyle;
 import io.tessera.skin.HeadsRegistry;
-import org.bukkit.Bukkit;
-import org.bukkit.FluidCollisionMode;
-import org.bukkit.GameMode;
-import org.bukkit.Location;
-import org.bukkit.Material;
+import io.tessera.transport.TransportSession;
+import org.bukkit.*;
 import org.bukkit.block.Block;
 import org.bukkit.block.data.BlockData;
 import org.bukkit.entity.Entity;
@@ -43,12 +33,7 @@ import org.joml.Vector3f;
 
 import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.Iterator;
-import java.util.List;
-import java.util.Map;
-import java.util.UUID;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -425,14 +410,17 @@ public final class BlockBreakProgressListener implements Listener {
     }
 
     private void applyForward(TrackedBreak tb, double progress, TesseraConfig cfg) {
+        cancelSmoothTask(tb);
+
         double targetProgress;
         int interpTicks;
         if (cfg.smoothInterpolation()) {
             long gapMs = tb.avgEventGapMs > 0L ? tb.avgEventGapMs : tb.initialGapEstimateMs;
             if (gapMs <= 0L) gapMs = MS_PER_TICK;
             if (gapMs > MAX_INTERP_MS) gapMs = MAX_INTERP_MS;
-            interpTicks = Math.max(1, (int) Math.round((double) gapMs / MS_PER_TICK));
             targetProgress = Math.min(PREDICTIVE_TARGET_MAX, progress + STAGE_PER_EVENT);
+            interpTicks = 2;
+            scheduleSmoothAdvance(tb, progress, targetProgress, gapMs, cfg);
         } else {
             targetProgress = progress;
             interpTicks = FORWARD_INTERP_TICKS_FALLBACK;
@@ -442,8 +430,10 @@ public final class BlockBreakProgressListener implements Listener {
 
         spawnPendingChunks(tb, targetProgress, cfg.waveWindow());
         boolean firstReal = tb.lastAppliedProgress <= 0d && progress > 0d;
+        // Snap to the confirmed progress; smooth task will advance toward targetProgress.
+        double immediateTarget = cfg.smoothInterpolation() ? progress : targetProgress;
         DirectionalShrinkEffect.applyAtProgress(tb.fakeBlock, tb.chunkT, tb.baseScales, tb.currentScales,
-                targetProgress, cfg.waveWindow(), interpTicks, cfg.progressMinDelta(), cfg.collapseStyle());
+                immediateTarget, cfg.waveWindow(), interpTicks, cfg.progressMinDelta(), cfg.collapseStyle());
         tb.lastAppliedProgress = progress;
         tb.lastUpdateTickMs = System.currentTimeMillis();
         DirectionalShrinkEffect.despawnPassedChunks(tb.fakeBlock, tb.chunkT,
@@ -456,6 +446,30 @@ public final class BlockBreakProgressListener implements Listener {
                         + " barrierSent=" + tb.barrierSent
                         + " shellExpanded=" + tb.shellExpanded);
         maybeForceBreak(tb, progress, cfg);
+    }
+
+    private void scheduleSmoothAdvance(TrackedBreak tb, double fromProgress, double toProgress,
+                                       long durationMs, TesseraConfig cfg) {
+        final long startMs = System.currentTimeMillis();
+        tb.smoothAdvanceTask = Bukkit.getScheduler().runTaskTimer(plugin, () -> {
+            if (tb.state != State.FORWARD || tb.fakeBlock.despawned()) {
+                cancelSmoothTask(tb);
+                return;
+            }
+            long elapsed = System.currentTimeMillis() - startMs;
+            if (elapsed >= durationMs) {
+                cancelSmoothTask(tb);
+                return;
+            }
+            double fraction = (double) elapsed / durationMs;
+            double interpProgress = fromProgress + fraction * (toProgress - fromProgress);
+            spawnPendingChunks(tb, interpProgress, cfg.waveWindow());
+            DirectionalShrinkEffect.applyAtProgress(tb.fakeBlock, tb.chunkT, tb.baseScales, tb.currentScales,
+                    interpProgress, cfg.waveWindow(), 2, cfg.progressMinDelta(), cfg.collapseStyle());
+            DirectionalShrinkEffect.despawnPassedChunks(tb.fakeBlock, tb.chunkT, tb.baseScales, tb.currentScales,
+                    interpProgress, cfg.waveWindow(), (float) cfg.progressMinDelta());
+            tb.lastUpdateTickMs = System.currentTimeMillis();
+        }, 1L, 1L);
     }
 
     private void maybeForceBreak(TrackedBreak tb, double progress, TesseraConfig cfg) {
@@ -492,6 +506,7 @@ public final class BlockBreakProgressListener implements Listener {
         tb.currentPlayerId = newPlayer.getUniqueId();
         tb.barrierSent = false;
         tb.eyeDir = newPlayer.getEyeLocation().getDirection();
+        cancelSmoothTask(tb);
         cancelPendingSpawnTask(tb);
         recomputeAllT(tb, tb.eyeDir);
         tracker.transferOwner(posKey, oldId, newPlayer.getUniqueId());
@@ -514,6 +529,7 @@ public final class BlockBreakProgressListener implements Listener {
 
     private void beginReverse(TrackedBreak tb, BlockPosKey posKey, TesseraConfig cfg) {
         if (tb.state == State.REVERSING) return;
+        cancelSmoothTask(tb);
         cancelPendingSpawnTask(tb);
         tb.state = State.REVERSING;
         final double startProgress = tb.lastAppliedProgress;
@@ -619,6 +635,7 @@ public final class BlockBreakProgressListener implements Listener {
     }
 
     private void disposeImmediate(TrackedBreak tb, boolean restoreBlock) {
+        cancelSmoothTask(tb);
         cancelPendingSpawnTask(tb);
         if (restoreBlock && tb.barrierSent) {
             Player p = Bukkit.getPlayer(tb.currentPlayerId);
@@ -639,6 +656,13 @@ public final class BlockBreakProgressListener implements Listener {
         if (tb.reverseTask != null) {
             try { tb.reverseTask.cancel(); } catch (RuntimeException ignored) {}
             tb.reverseTask = null;
+        }
+    }
+
+    private static void cancelSmoothTask(TrackedBreak tb) {
+        if (tb.smoothAdvanceTask != null) {
+            try { tb.smoothAdvanceTask.cancel(); } catch (RuntimeException ignored) {}
+            tb.smoothAdvanceTask = null;
         }
     }
 

@@ -63,6 +63,7 @@ public final class ProgressTracker {
         public BukkitTask reverseTask;         // non-null only while REVERSING
         public BukkitTask barrierSwapTask;     // non-null between spawn and the deferred sendBlockChange(BARRIER)
         public BukkitTask pendingSpawnTask;    // non-null while a scheduler-spread spawn-continuation is queued
+        public BukkitTask smoothAdvanceTask;   // non-null while smooth-interp is ticking between events
         // Lazy-spawn support: null on legacy paths; set right after tracker.put().
         public List<FakeBlockFactory.PendingChunkSpec> pendingChunks;
         public Map<ChunkCoord, Double> allOuterT;
@@ -92,6 +93,7 @@ public final class ProgressTracker {
             this.reverseTask = null;
             this.barrierSwapTask = null;
             this.pendingSpawnTask = null;
+            this.smoothAdvanceTask = null;
             this.pendingChunks = null;
             this.allOuterT = null;
         }
