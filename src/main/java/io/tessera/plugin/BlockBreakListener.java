@@ -31,7 +31,6 @@ public final class BlockBreakListener implements Listener {
     private final FakeBlockFactory factory;
     private final HeadsRegistry registry;
     private final BlockBaker baker;
-    private final DirectionalShrinkEffect effect = new DirectionalShrinkEffect();
     private final AtomicInteger active;
     private final ProgressTracker tracker;
     private final BlockBreakProgressListener progressListener;
@@ -59,11 +58,16 @@ public final class BlockBreakListener implements Listener {
 
         // Progress-driven path already spawned & animated the FakeBlock;
         // vanilla just removed the real block. Tear down the tracker and
-        // skip the post-break wave entirely.
+        // skip the post-break wave entirely. onRealBreak also sweeps any
+        // preloads aimed at this position.
         if (progressListener.isTracked(posKey)) {
             progressListener.onRealBreak(posKey);
             return;
         }
+
+        // No active tracker — but someone might have an eager preload aimed here
+        // (e.g. block broken by instamine, explosion, or another plugin).
+        progressListener.clearPreloadsAt(posKey);
 
         if (!cfg.enables(key.asString())) {
             if (cfg.debug()) plugin.getLogger().info("[debug] skip " + key + " (not enabled)");
@@ -123,7 +127,7 @@ public final class BlockBreakListener implements Listener {
 
         FakeBlock fb;
         try {
-            fb = factory.create(breakLoc, bakeKey, blockRotation);
+            fb = factory.create(breakLoc, bakeKey, blockRotation, cfg.fillInterior(), eyeDir);
         } catch (RuntimeException re) {
             active.decrementAndGet();
             plugin.getLogger().warning("Failed to spawn FakeBlock for " + bakeKey + ": " + re.getMessage());
@@ -131,7 +135,7 @@ public final class BlockBreakListener implements Listener {
         }
 
         EffectContext ctx = new EffectContext(eyeDir, System.currentTimeMillis(), cfg.effectDurationMs(), plugin);
-        effect.applyTimed(fb, ctx);
+        new DirectionalShrinkEffect(cfg.collapseStyle()).applyTimed(fb, ctx);
 
         long despawnTicks = (cfg.effectDurationMs() / 50L) + 5L;
         plugin.getServer().getScheduler().runTaskLater(plugin, active::decrementAndGet, despawnTicks);

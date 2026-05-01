@@ -164,7 +164,9 @@ public final class TesseraCommand implements CommandExecutor {
      * being rushed by the shrink animation.
      */
     private void spawnTest(CommandSender sender, Player p, BlockKey key, Location target, boolean staticMode) {
-        FakeBlock fb = factory.create(target, key);
+        org.bukkit.util.Vector eyeDir = p.getEyeLocation().getDirection();
+        FakeBlock fb = factory.create(target, key, new org.joml.Quaternionf(),
+                plugin.tesseraConfig().fillInterior(), eyeDir);
         if (fb.chunks().isEmpty()) {
             sender.sendMessage("§cFakeBlock has 0 chunks - heads.json entry for " + key + " is empty.");
             return;
@@ -185,7 +187,7 @@ public final class TesseraCommand implements CommandExecutor {
                 System.currentTimeMillis(),
                 plugin.tesseraConfig().effectDurationMs(),
                 plugin);
-        new DirectionalShrinkEffect().applyTimed(fb, ctx);
+        new DirectionalShrinkEffect(plugin.tesseraConfig().collapseStyle()).applyTimed(fb, ctx);
         sender.sendMessage("§aSpawned FakeBlock for " + key + " at " + formatLoc(target));
     }
 

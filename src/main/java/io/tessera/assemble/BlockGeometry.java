@@ -117,12 +117,24 @@ public final class BlockGeometry {
      * <br>{@code T = blockCenter + rotatedCell - disp}.
      */
     public Vector3f translationFor(ChunkCoord coord, Quaternionf faceRot) {
-        float scale = chunkScale();
+        return translationFor(coord, faceRot, chunkScale());
+    }
+
+    /**
+     * As {@link #translationFor(ChunkCoord, Quaternionf)} but with an
+     * explicit {@code overrideScale} for callers that render at a non-default
+     * size. The {@code disp} compensation depends on the rendered cube size,
+     * so passing a scale that doesn't match the entity's transform leaves a
+     * residual {@code (overrideScale - chunkScale) * CUBE_CENTER_PRE} offset
+     * — visible as the lattice slightly clipping through one face of the
+     * real block when the shell is rendered compressed.
+     */
+    public Vector3f translationFor(ChunkCoord coord, Quaternionf faceRot, float overrideScale) {
         Vector3f blockCenter = new Vector3f(0.5f, 0.5f, 0.5f);
         Vector3f cellLocal = chunkLocalCenter(coord).sub(blockCenter);
         Vector3f rotatedCell = new Quaternionf(blockRotation).transform(cellLocal);
         Vector3f disp = faceRot.transform(new Vector3f(CUBE_CENTER_PRE));
-        disp.mul(scale, scale, scale);
+        disp.mul(overrideScale, overrideScale, overrideScale);
         new Quaternionf(blockRotation).transform(disp);
         return blockCenter.add(rotatedCell).sub(disp);
     }

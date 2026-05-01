@@ -51,10 +51,14 @@ public final class ProgressTracker {
         public double lastAppliedProgress;
         public long lastUpdateTickMs;
         public long avgEventGapMs;             // EMA of inter-event gap; 0 until first delta seen
+        public long initialGapEstimateMs;      // seeded from Block.getBreakSpeed; used until EMA has data
         public State state;
         public boolean barrierSent;
         public boolean autoBreakTriggered;     // we already called player.breakBlock; don't re-fire
+        public boolean speculative;            // spawned from PlayerInteractEvent; awaiting first real progress
+        public boolean shellExpanded;          // true once the spawn-time INITIAL_SHELL_COMPRESSION has been undone
         public BukkitTask reverseTask;         // non-null only while REVERSING
+        public BukkitTask barrierSwapTask;     // non-null between spawn and the deferred sendBlockChange(BARRIER)
 
         public TrackedBreak(UUID playerId, BlockKey key, Location origin,
                             BlockData originalBlockData, Vector eyeDir,
@@ -72,10 +76,14 @@ public final class ProgressTracker {
             this.lastAppliedProgress = 0d;
             this.lastUpdateTickMs = System.currentTimeMillis();
             this.avgEventGapMs = 0L;
+            this.initialGapEstimateMs = 0L;
             this.state = State.FORWARD;
             this.barrierSent = false;
             this.autoBreakTriggered = false;
+            this.speculative = false;
+            this.shellExpanded = false;
             this.reverseTask = null;
+            this.barrierSwapTask = null;
         }
     }
 

@@ -1,9 +1,3 @@
-# MineSkin API key — required for runtime uploads of blocks not in the
-# bundled heads.json. Get one at https://account.mineskin.org/.
-# Without a key the plugin only renders blocks present in heads.json
-# and falls back to vanilla particles for anything else.
-mineskinApiKey: ""
-
 # How many chunks per axis each block is split into. Must divide 16
 # (block textures are 16×16 px) — permitted values: 1, 2, 4, 8, 16.
 #   gridN=4   →  4×4 tiles per face, 64 chunks/block (56 visible);
@@ -17,58 +11,9 @@ mineskinApiKey: ""
 # WARNING: changing this invalidates every previously baked block.
 # Bundled heads.json entries baked at the old gridN are dropped on
 # startup, and every block has to be re-uploaded to MineSkin at the new
-# size on demand as players break blocks — set mineskinApiKey above so
+# size on demand as players break blocks — set mineskin.apiKey below so
 # runtime baking can run.
 chunkGridSize: 4
-
-# Materials this plugin should animate. Use ["*"] for all full-cube blocks.
-enabledMaterials: ["*"]
-
-# Materials to never animate, even if "*" is enabled.
-disabledMaterials:
-  - "minecraft:water"
-  - "minecraft:lava"
-  - "minecraft:fire"
-  - "minecraft:soul_fire"
-
-# Total duration of the directional-shrink break animation in milliseconds.
-# Only used in 'post-break' animation mode (and as the instamine fallback).
-effectDurationMs: 600
-
-# Hard cap on concurrent FakeBlocks (sub-block effect entities).
-# Excess block-break events fall back to the vanilla animation.
-maxConcurrentFakeBlocks: 8
-
-# When the chunked-shrink animation plays.
-#   progress   - drive the wave by live mining progress; chunks shrink as
-#                the player mines and the block is gone exactly when the
-#                wave finishes.
-#   post-break - legacy behavior: wait for BlockBreakEvent, then play the
-#                wave on the empty cell over effectDurationMs.
-animationMode: progress
-
-# Progress-mode only. Send sendBlockChange(BARRIER) to the breaker so the
-# real block doesn't z-fight with (or hide behind) the shrinking FakeBlock
-# chunks. The real block stays on the server.
-#
-# Survival caveat: a client mining a BARRIER refuses to send the final
-# "destroy completed" packet, so vanilla on its own never fires
-# BlockBreakEvent. The plugin compensates by force-breaking the real
-# block via Player.breakBlock(...) once the progress wave reaches 1.0 —
-# that fires BlockBreakEvent synchronously, runs enchantments, and
-# produces tool-correct drops just like a normal break.
-clientHideRealBlock: true
-
-# Progress-mode only. Width of the shrink wave along the breaker's eye
-# direction (0..1). Smaller = sharper wave front; larger = more chunks
-# collapsing in parallel. 0.25 means roughly a quarter of the chunks are
-# mid-shrink at any given moment.
-waveWindow: 0.25
-
-# Progress-mode only. Minimum change in progress before we re-apply the
-# transformation. Avoids redundant interpolation packets when progress
-# barely moved between ticks.
-progressMinDelta: 0.02
 
 # Bake biome-tinted blocks (grass, leaves, water, vines) on demand. The
 # resolved per-biome tint is read at break time and multiplied into the
@@ -80,3 +25,112 @@ enableTintedBlocks: true
 # Verbose logging for asset resolution, skin packing, and progress-mode
 # state transitions (spawn / transfer / reverse / break / watchdog).
 debug: false
+
+mineskin:
+  # API key — required for runtime uploads of blocks not in the bundled
+  # heads.json. Get one at https://account.mineskin.org/.
+  # Without a key the plugin only renders blocks present in heads.json
+  # and falls back to vanilla particles for anything else.
+  apiKey: ""
+
+materials:
+  # Materials this plugin should animate. Use ["*"] for all full-cube blocks.
+  enabled: ["*"]
+
+  # Materials to never animate, even if "*" is enabled.
+  disabled:
+    - "minecraft:water"
+    - "minecraft:lava"
+    - "minecraft:fire"
+    - "minecraft:soul_fire"
+
+limits:
+  # Hard cap on concurrent FakeBlocks (sub-block effect entities).
+  # Excess block-break events fall back to the vanilla animation.
+  maxConcurrentFakeBlocks: 8
+
+animation:
+  # When the chunked animation plays.
+  #   progress   - drive the wave by live mining progress; chunks animate as
+  #                the player mines and the block is gone exactly when the
+  #                wave finishes.
+  #   post-break - legacy behavior: wait for BlockBreakEvent, then play the
+  #                wave on the empty cell over animation.durationMs.
+  mode: progress
+
+  # How a chunk transitions out as the wave reaches it.
+  #   shrink - chunk uniformly scales toward 0 (smooth collapse).
+  #   pop    - chunk stays at full size until the wave hits it, then
+  #            disappears in one tick (crumble look).
+  style: shrink
+
+  # Total duration of the directional break animation in milliseconds.
+  # Only used in 'post-break' animation mode (and as the instamine fallback).
+  durationMs: 600
+
+  # Width of the shrink wave along the breaker's eye direction (0..1).
+  # Smaller = sharper wave front; larger = more chunks collapsing in
+  # parallel. 0.25 means roughly a quarter of the chunks are mid-shrink at
+  # any given moment.
+  waveWindow: 0.25
+
+  # Spawn extra chunks inside the cube so the player doesn't see straight
+  # through holes in the lattice while the wave is mid-animation. Only
+  # interior chunks on the half of the cube nearest the breaker are
+  # filled — the far half stays hollow since by the time the wave reaches
+  # it, the cube is mostly gone and the brief peek-through is hidden by
+  # the speed of the animation.
+  #
+  # Cost scales with gridN: at gridN=4 it's +(gridN-2)^3 = +8 entities per
+  # FakeBlock (negligible); at gridN=8 it's +216 per FakeBlock — consider
+  # lowering limits.maxConcurrentFakeBlocks if you raise gridN with this on.
+  fillInterior: false
+
+progress:
+  # Send sendBlockChange(BARRIER) to the breaker so the real block doesn't
+  # z-fight with (or hide behind) the shrinking FakeBlock chunks. The real
+  # block stays on the server.
+  #
+  # Survival caveat: a client mining a BARRIER refuses to send the final
+  # "destroy completed" packet, so vanilla on its own never fires
+  # BlockBreakEvent. The plugin compensates by force-breaking the real
+  # block via Player.breakBlock(...) once the progress wave reaches 1.0 —
+  # that fires BlockBreakEvent synchronously, runs enchantments, and
+  # produces tool-correct drops just like a normal break.
+  clientHideRealBlock: true
+
+  # Minimum change in progress before we re-apply the transformation.
+  # Avoids redundant interpolation packets when progress barely moved
+  # between ticks.
+  minDelta: 0.02
+
+  # Smooth between vanilla's 0.1 progress steps. BlockBreakProgressUpdateEvent
+  # only fires on destroy-stage boundaries (so 10 events for the whole
+  # break), which on its own looks choppy. With this enabled, each event
+  # sets the display interpolation duration equal to the expected gap
+  # until the next event so the client lerps continuously through the
+  # gap. The expected gap is seeded from Block.getBreakSpeed(player) on
+  # first contact and refined from observed inter-event timings.
+  smoothInterpolation: true
+
+interaction:
+  # Start the animation on the first left-click instead of waiting for
+  # vanilla's first 0.1 progress event (~600ms in for default mining).
+  # Worst case (the player swings without committing to mining) the
+  # watchdog reverses the speculative animation back out.
+  startOnLeftClick: true
+
+  # If no BlockBreakProgressUpdateEvent arrives within this many ms after a
+  # speculative left-click spawn, reverse it back out. Should be roughly
+  # one destroy stage (50-700ms) — too small and slow blocks get rolled
+  # back during the first stage; too large and idle swings linger.
+  leftClickGraceMs: 500
+
+  # Pre-spawn the chunk lattice while the player is aiming at a block so
+  # the entities are already fully rendered by the time they left-click.
+  # When mining begins the real block is hidden immediately (no tick delay
+  # needed), making the animation visible from the very first hit on fast
+  # blocks like dirt or planks-with-an-axe. The trade-off is a brief window
+  # of extra entity traffic for every block the player looks at (~1 second
+  # of extra entity lifetime per aimed-at block on average).
+  eagerPreload: false
