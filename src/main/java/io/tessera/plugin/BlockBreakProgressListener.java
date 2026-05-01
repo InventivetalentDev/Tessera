@@ -241,9 +241,7 @@ public final class BlockBreakProgressListener implements Listener {
         if (block == null) return;
         Player player = event.getPlayer();
 
-        try {
-            if (block.getBreakSpeed(player) >= 1.0f) return;
-        } catch (NoSuchMethodError ignored) {}
+        if (tooFast(block, player, cfg)) return;
 
         Location breakLoc = block.getLocation();
         BlockPosKey posKey = BlockPosKey.of(breakLoc);
@@ -347,6 +345,24 @@ public final class BlockBreakProgressListener implements Listener {
         return Math.max(MS_PER_TICK, Math.min(MAX_INTERP_MS, cfg.leftClickGraceMs()));
     }
 
+    /**
+     * Estimates total break duration in milliseconds from {@code Block.getBreakSpeed}.
+     * Returns {@link Long#MAX_VALUE} when the speed is unavailable (assume slow enough).
+     */
+    static long estimateBreakDurationMs(Block block, Player player) {
+        try {
+            float perTick = block.getBreakSpeed(player);
+            if (perTick > 0f) return (long) Math.ceil(1.0 / (double) perTick * MS_PER_TICK);
+        } catch (NoSuchMethodError | RuntimeException ignored) {}
+        return Long.MAX_VALUE;
+    }
+
+    /** Returns true when the block is estimated to break too fast for the animation to be worthwhile. */
+    private static boolean tooFast(Block block, Player player, TesseraConfig cfg) {
+        int min = cfg.minBreakDurationMs();
+        return min > 0 && estimateBreakDurationMs(block, player) < min;
+    }
+
     @EventHandler(priority = EventPriority.MONITOR)
     public void onQuit(PlayerQuitEvent event) {
         UUID id = event.getPlayer().getUniqueId();
@@ -366,6 +382,7 @@ public final class BlockBreakProgressListener implements Listener {
         Material mat = block.getType();
         BlockKey key = BlockKey.of(mat.getKey().getNamespace() + ":" + mat.getKey().getKey());
         if (!cfg.enables(key.asString())) return;
+        if (tooFast(block, player, cfg)) return;
         int tint = cfg.enableTintedBlocks() ? io.tessera.nms.BlockTintReader.read(block) : 0;
         io.tessera.core.BakeKey bakeKey = new io.tessera.core.BakeKey(key, tint);
         if (!registry.has(bakeKey)) return;
@@ -704,9 +721,7 @@ public final class BlockBreakProgressListener implements Listener {
             if (targetKey == null) continue;
             if (tracker.get(targetKey) != null) continue;
 
-            try {
-                if (target.getBreakSpeed(player) >= 1.0f) continue;
-            } catch (NoSuchMethodError | RuntimeException ignored) {}
+            if (tooFast(target, player, cfg)) continue;
 
             Material mat = target.getType();
             BlockKey key = BlockKey.of(mat.getKey().getNamespace() + ":" + mat.getKey().getKey());

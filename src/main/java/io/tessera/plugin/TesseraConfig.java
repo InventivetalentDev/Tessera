@@ -33,6 +33,7 @@ public record TesseraConfig(
         boolean startOnLeftClick,
         long leftClickGraceMs,
         boolean eagerPreload,
+        int minBreakDurationMs,
         boolean enableTintedBlocks,
         boolean debug,
         Transport transport
@@ -100,6 +101,7 @@ public record TesseraConfig(
                 readBool(cfg, "interaction.startOnLeftClick", "startOnLeftClick", true),
                 readLong(cfg, "interaction.leftClickGraceMs", "leftClickGraceMs", 500L),
                 readBool(cfg, "interaction.eagerPreload", "eagerPreload", false),
+                readInt(cfg, "interaction.minBreakDurationMs", "minBreakDurationMs", 1000),
                 cfg.getBoolean("enableTintedBlocks", true),
                 readBool(cfg, "debug", "debug", false),
                 transport
