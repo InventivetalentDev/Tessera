@@ -3,6 +3,7 @@ package io.tessera.core;
 import org.bukkit.Location;
 import org.joml.Quaternionf;
 
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -24,13 +25,17 @@ public final class FakeBlock {
         this.origin = origin.clone();
         this.blockKey = blockKey;
         this.gridN = gridN;
-        this.chunks = List.copyOf(chunks);
+        this.chunks = new ArrayList<>(chunks);
         this.blockRotation = new Quaternionf(blockRotation);
     }
 
     public Location origin() { return origin.clone(); }
     public BlockKey blockKey() { return blockKey; }
     public int gridN() { return gridN; }
+    /**
+     * Returns the live chunk list. Mutable — the progress listener appends to
+     * it as the wave front lazily spawns additional chunks. Main thread only.
+     */
     public List<ChunkRef> chunks() { return chunks; }
     public boolean despawned() { return despawned; }
 

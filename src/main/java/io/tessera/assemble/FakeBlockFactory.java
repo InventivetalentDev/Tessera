@@ -79,6 +79,44 @@ public final class FakeBlockFactory {
      * assembled; by the time the wave reaches them the render lag has resolved.
      */
     public static final double PRELOAD_T_THRESHOLD = 0.5;
+    /**
+     * Outer shell chunks spawned immediately at consume time (sorted front-first by
+     * wave position t). Remaining outer chunks go to {@link PreloadPlan#pendingSpecs}
+     * and are batch-spawned by the progress listener as the wave advances, avoiding a
+     * tick spike at click time. Pre-spawned preload entities are always kept in the
+     * immediate set regardless of this limit.
+     */
+    public static final int OUTER_INITIAL_SPAWN = 128;
+
+    /** Outer or interior chunk scheduled for lazy spawning as the wave front advances. */
+    public record PendingChunkSpec(
+            ChunkCoord coord,
+            HeadsRegistry.Entry registryEntry,
+            double t,
+            boolean interior) {}
+
+    /** Result of {@link #preloadAndPending} — the already-spawned front refs plus a sorted pending list. */
+    public record PreloadPlan(
+            Map<ChunkCoord, ChunkRef> frontRefs,
+            List<PendingChunkSpec> pendingSpecs,
+            Map<ChunkCoord, Double> allOuterT) {}
+
+    /**
+     * Pre-built context shared across a batch of
+     * {@link #spawnPendingChunk(PendingSpawnContext, PendingChunkSpec, float)} calls.
+     * Build once per batch via {@link #beginPendingBatch} to avoid reconstructing
+     * {@link BlockGeometry} and the canonical rotation per spawn, and to share the
+     * donor {@link org.bukkit.inventory.ItemStack} clone-source across all interior
+     * chunks in the batch (they all use the same skin).
+     */
+    public record PendingSpawnContext(
+            World world,
+            Location origin,
+            Quaternionf blockRotation,
+            BlockGeometry geom,
+            Quaternionf canonicalRotation,
+            int gridN,
+            ItemStack interiorBaseStack) {}
 
     private final HeadItemFactory itemFactory;
     private final HeadsRegistry registry;
@@ -255,6 +293,223 @@ public final class FakeBlockFactory {
     }
 
     /**
+     * Compute the full lazy-spawn plan: spawn the front half of outer chunks,
+     * return the back half + all interior chunks as sorted pending specs.
+     * t values are globally normalised across all outer coords so spawned and
+     * pending chunks share a consistent wave-position scale.
+     */
+    public PreloadPlan preloadAndPending(Location blockLocation, BakeKey bakeKey,
+                                          Quaternionf blockRotation,
+                                          boolean fillInterior, Vector eyeDir) {
+        return completePlan(blockLocation, bakeKey, blockRotation, fillInterior,
+                eyeDir, Collections.emptyMap());
+    }
+
+    /**
+     * Like {@link #preloadAndPending} but reuses {@code existingFrontRefs} for
+     * coords that are already spawned (eager-preload consume path). Fresh outer
+     * entities are spawned for any front-half coord NOT present in the map.
+     */
+    public PreloadPlan completePlan(Location blockLocation, BakeKey bakeKey,
+                                     Quaternionf blockRotation, boolean fillInterior,
+                                     Vector eyeDir,
+                                     Map<ChunkCoord, ChunkRef> existingFrontRefs) {
+        World world = blockLocation.getWorld();
+        if (world == null) {
+            return new PreloadPlan(Collections.emptyMap(),
+                    Collections.emptyList(), Collections.emptyMap());
+        }
+        int gridN = registry.gridN();
+        BlockGeometry geom = new BlockGeometry(gridN, blockRotation);
+        Location origin = new Location(world,
+                Math.floor(blockLocation.getX()),
+                Math.floor(blockLocation.getY()),
+                Math.floor(blockLocation.getZ()));
+
+        Map<ChunkCoord, HeadsRegistry.Entry> chunks = registry.chunksFor(bakeKey);
+        if (chunks.isEmpty()) {
+            return new PreloadPlan(Collections.emptyMap(),
+                    Collections.emptyList(), Collections.emptyMap());
+        }
+
+        Quaternionf canonicalRotation = HeadRotations.compose(
+                HeadFace.FRONT, FaceDir.SOUTH, FaceRotations.of(HeadFace.FRONT));
+
+        // 1. Project all outer coords; capture global min/max for t normalisation.
+        Vector3f dir = new Vector3f((float) eyeDir.getX(), (float) eyeDir.getY(),
+                (float) eyeDir.getZ()).normalize();
+        Vector3f blockCenter = new Vector3f(0.5f, 0.5f, 0.5f);
+        Map<ChunkCoord, Double> rawProj = new HashMap<>(chunks.size() * 2);
+        double minP = Double.POSITIVE_INFINITY, maxP = Double.NEGATIVE_INFINITY;
+        for (ChunkCoord c : chunks.keySet()) {
+            Vector3f rel = geom.chunkLocalCenter(c).sub(blockCenter);
+            new Quaternionf(blockRotation).transform(rel);
+            double p = rel.dot(dir);
+            rawProj.put(c, p);
+            if (p < minP) minP = p;
+            if (p > maxP) maxP = p;
+        }
+        double range = Math.max(1e-6, maxP - minP);
+
+        // Normalised t for all outer coords (returned to caller for array pre-population).
+        Map<ChunkCoord, Double> allOuterT = new HashMap<>(chunks.size() * 2);
+        for (var e : rawProj.entrySet()) {
+            allOuterT.put(e.getKey(), (e.getValue() - minP) / range);
+        }
+
+        // 2. Outer shell: always keep alive pre-spawned preload entities (discarding
+        // them would waste the aim-time render warm-up). For new spawns, only the
+        // first OUTER_INITIAL_SPAWN chunks are materialised immediately (sorted
+        // ascending by t so the front-facing layer is always in the initial batch);
+        // the rest go into pendingSpecs and are spread across ticks by the progress
+        // listener's spawnPendingChunks scheduler, avoiding a click-time spike.
+        Map<ChunkCoord, ChunkRef> frontRefs = new HashMap<>(OUTER_INITIAL_SPAWN + existingFrontRefs.size());
+        List<PendingChunkSpec> pending = new ArrayList<>();
+
+        for (Map.Entry<ChunkCoord, ChunkRef> e : existingFrontRefs.entrySet()) {
+            if (!e.getValue().display().isDead()) frontRefs.put(e.getKey(), e.getValue());
+        }
+
+        List<Map.Entry<ChunkCoord, HeadsRegistry.Entry>> sortedOuter = new ArrayList<>(chunks.entrySet());
+        sortedOuter.sort((a, b) -> Double.compare(allOuterT.get(a.getKey()), allOuterT.get(b.getKey())));
+
+        int newOuterSpawned = 0;
+        for (Map.Entry<ChunkCoord, HeadsRegistry.Entry> e : sortedOuter) {
+            ChunkCoord c = e.getKey();
+            if (frontRefs.containsKey(c)) continue; // already from preload
+            if (newOuterSpawned < OUTER_INITIAL_SPAWN) {
+                frontRefs.put(c, spawnChunk(world, origin, c, e.getValue(),
+                        blockRotation, canonicalRotation, geom, gridN,
+                        INITIAL_SHELL_COMPRESSION));
+                newOuterSpawned++;
+            } else {
+                pending.add(new PendingChunkSpec(c, e.getValue(), allOuterT.get(c), false));
+            }
+        }
+
+        // 3. Interior chunks: all pending, using the same global t scale.
+        if (fillInterior && gridN >= 3) {
+            HeadsRegistry.Entry donor = pickInteriorDonor(chunks, gridN);
+            if (donor != null) {
+                for (int x = 1; x < gridN - 1; x++) {
+                    for (int y = 1; y < gridN - 1; y++) {
+                        for (int z = 1; z < gridN - 1; z++) {
+                            ChunkCoord c = new ChunkCoord(x, y, z);
+                            Vector3f rel = geom.chunkLocalCenter(c).sub(blockCenter);
+                            new Quaternionf(blockRotation).transform(rel);
+                            double p = rel.dot(dir);
+                            double t = (p - minP) / range;
+                            pending.add(new PendingChunkSpec(c, donor, t, /*interior=*/ true));
+                        }
+                    }
+                }
+            }
+        }
+
+        pending.sort((a, b) -> Double.compare(a.t(), b.t()));
+
+        return new PreloadPlan(frontRefs, pending, allOuterT);
+    }
+
+    /**
+     * Build a {@link PendingSpawnContext} for a batch of pending chunk spawns.
+     * Pass any pending spec (or the first interior one) as {@code donorSpec} so
+     * the donor {@link org.bukkit.inventory.ItemStack} is built once for the whole
+     * batch; pass {@code null} if the batch has no interior chunks.
+     */
+    public PendingSpawnContext beginPendingBatch(Location origin, Quaternionf blockRotation,
+                                                  PendingChunkSpec donorSpec) {
+        World world = origin.getWorld();
+        int gridN = registry.gridN();
+        BlockGeometry geom = new BlockGeometry(gridN, blockRotation);
+        Quaternionf canonRot = HeadRotations.compose(
+                HeadFace.FRONT, FaceDir.SOUTH, FaceRotations.of(HeadFace.FRONT));
+        ItemStack interiorStack = donorSpec != null
+                ? itemFactory.build(HeadsRegistry.toHeadSkin(donorSpec.registryEntry()))
+                : null;
+        return new PendingSpawnContext(world, origin, blockRotation, geom, canonRot, gridN, interiorStack);
+    }
+
+    /**
+     * Spawn a single pending chunk using a pre-built context. Interior chunks clone the
+     * context's {@code interiorBaseStack} (no per-chunk skin build); outer chunks delegate
+     * to {@link #spawnChunk}.
+     */
+    public ChunkRef spawnPendingChunk(PendingSpawnContext ctx, PendingChunkSpec spec, float shellFactor) {
+        if (spec.interior()) {
+            ItemStack stack = ctx.interiorBaseStack() != null
+                    ? ctx.interiorBaseStack().clone()
+                    : itemFactory.build(HeadsRegistry.toHeadSkin(spec.registryEntry()));
+            float scale = ctx.geom().chunkScale() * shellFactor;
+            Vector3f translation = ctx.geom().translationFor(spec.coord(), ctx.canonicalRotation(), scale);
+            Transformation tx = new Transformation(
+                    translation,
+                    new Quaternionf(ctx.blockRotation()),
+                    new Vector3f(scale, scale, scale),
+                    ctx.canonicalRotation());
+            ItemDisplay display = ctx.world().spawn(ctx.origin(), ItemDisplay.class, d -> {
+                d.setItemStack(stack);
+                d.setItemDisplayTransform(ItemDisplay.ItemDisplayTransform.NONE);
+                d.setTransformation(tx);
+                d.setInterpolationDuration(0);
+                d.setInterpolationDelay(0);
+                d.setViewRange(1.0f);
+                d.setPersistent(false);
+            });
+            return new ChunkRef(display, spec.coord(),
+                    ctx.geom().chunkLocalCenter(spec.coord()),
+                    EnumSet.noneOf(FaceDir.class));
+        } else {
+            return spawnChunk(ctx.world(), ctx.origin(), spec.coord(), spec.registryEntry(),
+                    ctx.blockRotation(), ctx.canonicalRotation(), ctx.geom(), ctx.gridN(), shellFactor);
+        }
+    }
+
+    /**
+     * Spawn a single chunk entity from a {@link PendingChunkSpec}. Used by the
+     * progress listener when the wave front approaches a not-yet-spawned chunk.
+     */
+    public ChunkRef spawnPendingChunk(Location originOfBlock, PendingChunkSpec spec,
+                                       Quaternionf blockRotation, float shellFactor) {
+        World world = originOfBlock.getWorld();
+        if (world == null) throw new IllegalArgumentException("Origin has no world");
+        int gridN = registry.gridN();
+        BlockGeometry geom = new BlockGeometry(gridN, blockRotation);
+        Quaternionf canonicalRotation = HeadRotations.compose(
+                HeadFace.FRONT, FaceDir.SOUTH, FaceRotations.of(HeadFace.FRONT));
+
+        if (spec.interior()) {
+            HeadSkin donorSkin = HeadsRegistry.toHeadSkin(spec.registryEntry());
+            ItemStack stack = itemFactory.build(donorSkin);
+            // Interior chunks spawn at shell-compressed scale; the tent formula
+            // in applyAtProgress will drive the visible scale from there.
+            float scale = geom.chunkScale() * shellFactor;
+            Vector3f translation = geom.translationFor(spec.coord(), canonicalRotation, scale);
+            Transformation tx = new Transformation(
+                    translation,
+                    new Quaternionf(blockRotation),
+                    new Vector3f(scale, scale, scale),
+                    canonicalRotation);
+            ItemStack stackCopy = stack.clone();
+            ItemDisplay display = world.spawn(originOfBlock, ItemDisplay.class, d -> {
+                d.setItemStack(stackCopy);
+                d.setItemDisplayTransform(ItemDisplay.ItemDisplayTransform.NONE);
+                d.setTransformation(tx);
+                d.setInterpolationDuration(0);
+                d.setInterpolationDelay(0);
+                d.setViewRange(1.0f);
+                d.setPersistent(false);
+            });
+            return new ChunkRef(display, spec.coord(),
+                    geom.chunkLocalCenter(spec.coord()),
+                    EnumSet.noneOf(FaceDir.class));
+        } else {
+            return spawnChunk(world, originOfBlock, spec.coord(), spec.registryEntry(),
+                    blockRotation, canonicalRotation, geom, gridN, shellFactor);
+        }
+    }
+
+    /**
      * Like {@link #create(Location, BakeKey, Quaternionf, boolean, Vector, boolean)}
      * but reuses any pre-spawned entities from {@code existingRefs} rather than
      * spawning new ones for those coords. Chunks not present in
@@ -312,6 +567,20 @@ public final class FakeBlockFactory {
             }
         }
     }
+
+    /**
+     * TODO(perf): Replace world.spawn() calls throughout this class with direct
+     * NMS/packet-based entity spawning. Bukkit's world.spawn() runs the full
+     * server-side entity lifecycle (chunk tracking, persistence, AI ticking),
+     * which is expensive when spawning dozens to hundreds of entities per block
+     * break. A packet-only path would:
+     *   - Send AddEntityPacket / SetEntityDataPacket directly to nearby players
+     *   - Skip the entity being registered in the world's entity store
+     *   - Skip entity tracker updates (no per-tick tracking overhead)
+     *   - Allow near-instant despawn by sending RemoveEntitiesPacket
+     * This would also eliminate the server-side cost spike seen when the reverse
+     * animation despawns large numbers of ItemDisplays simultaneously.
+     */
 
     /** Spawn a single outer-shell {@link ItemDisplay} chunk and return its {@link ChunkRef}. */
     private ChunkRef spawnChunk(World world, Location origin, ChunkCoord coord,

@@ -290,8 +290,7 @@ public final class HeadsRegistry {
      * {@link #invalidate} / {@link #invalidateAll} calls to disk. Pass
      * {@code null} to detach. Already-loaded entries (bundled heads.json) are
      * <i>not</i> replayed through the sink — call sites that load from
-     * persistence should bypass this hook by using
-     * {@link #registerSilently}.
+     * persistence should bypass this hook by using {@link #registerSilently}.
      */
     public void setPersistence(Persistence p) {
         this.persistence = p;

@@ -1,13 +1,9 @@
 package io.tessera.plugin;
 
 import io.papermc.paper.event.block.BlockBreakProgressUpdateEvent;
+import io.tessera.assemble.BlockGeometry;
 import io.tessera.assemble.FakeBlockFactory;
-import io.tessera.core.BakeKey;
-import io.tessera.core.BlockKey;
-import io.tessera.core.ChunkCoord;
-import io.tessera.core.ChunkRef;
-import io.tessera.core.FakeBlock;
-import io.tessera.core.VariantKey;
+import io.tessera.core.*;
 import io.tessera.effect.ChunkWaveSampler;
 import io.tessera.effect.builtin.DirectionalShrinkEffect;
 import io.tessera.nms.BlockTintReader;
@@ -15,13 +11,8 @@ import io.tessera.plugin.ProgressTracker.BlockPosKey;
 import io.tessera.plugin.ProgressTracker.State;
 import io.tessera.plugin.ProgressTracker.TrackedBreak;
 import io.tessera.plugin.TesseraConfig.AnimationMode;
-import io.tessera.plugin.TesseraConfig.CollapseStyle;
 import io.tessera.skin.HeadsRegistry;
-import org.bukkit.Bukkit;
-import org.bukkit.FluidCollisionMode;
-import org.bukkit.GameMode;
-import org.bukkit.Location;
-import org.bukkit.Material;
+import org.bukkit.*;
 import org.bukkit.block.Block;
 import org.bukkit.block.data.BlockData;
 import org.bukkit.entity.Entity;
@@ -34,15 +25,14 @@ import org.bukkit.event.player.PlayerChangedWorldEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.scheduler.BukkitTask;
+import org.bukkit.util.Transformation;
 import org.bukkit.util.Vector;
 import org.joml.Quaternionf;
+import org.joml.Vector3f;
 
 import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
-import java.util.UUID;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -84,6 +74,10 @@ public final class BlockBreakProgressListener implements Listener {
     // multi-second gaps and we don't want a single event to stretch a smooth
     // interpolation that long if mining stops.
     private static final long MAX_INTERP_MS = 800L;
+    // Max interior chunks spawned per tick. Spreading across ticks via runTaskLater
+    // avoids the ~47ms spike that occurs when all 2744 interior chunks at gridN=16
+    // become eligible simultaneously. Each continuation fires 1 tick later.
+    private static final int PENDING_BATCH_SIZE = 128;
 
     /**
      * Front-facing chunks pre-spawned while the player aims at a block.
@@ -95,7 +89,8 @@ public final class BlockBreakProgressListener implements Listener {
             BakeKey bakeKey,
             Quaternionf blockRotation,
             Map<ChunkCoord, ChunkRef> prespawnedChunks
-    ) {}
+    ) {
+    }
 
     private final TesseraPlugin plugin;
     private final FakeBlockFactory factory;
@@ -116,7 +111,9 @@ public final class BlockBreakProgressListener implements Listener {
         this.tracker = tracker;
     }
 
-    /** Start the watchdog and aim-watch timers. Called from plugin onEnable after registration. */
+    /**
+     * Start the watchdog and aim-watch timers. Called from plugin onEnable after registration.
+     */
     public void start() {
         this.watchdog = Bukkit.getScheduler().runTaskTimer(
                 plugin, this::watchdogTick, WATCHDOG_PERIOD_TICKS, WATCHDOG_PERIOD_TICKS);
@@ -125,7 +122,9 @@ public final class BlockBreakProgressListener implements Listener {
                 plugin, this::aimWatchTick, 2L, 2L);
     }
 
-    /** Stop timers and tear down all in-flight trackers and preloads. Called on plugin disable. */
+    /**
+     * Stop timers and tear down all in-flight trackers and preloads. Called on plugin disable.
+     */
     public void shutdown() {
         if (watchdog != null) {
             watchdog.cancel();
@@ -158,6 +157,10 @@ public final class BlockBreakProgressListener implements Listener {
         BlockPosKey posKey = BlockPosKey.of(breakLoc);
         double progress = event.getProgress();
 
+        if (cfg.debug()) plugin.getLogger().info(
+                "[" + ts() + "] [debug-progress] progress " + posKey + " player=" + player.getName()
+                        + " progress=" + progress);
+
         TrackedBreak tb = tracker.get(posKey);
 
         if (tb == null) {
@@ -183,9 +186,13 @@ public final class BlockBreakProgressListener implements Listener {
             // Event LEFT_CLICK_BLOCK). After a speculative pre-spawn we'd
             // otherwise treat the start as a cancel and reverse immediately —
             // visible as a short shrink-then-respawn jump at the beginning
-            // of every break. Only reverse if we've already observed
-            // positive progress, i.e. there's something to roll back.
-            if (tb.lastAppliedProgress <= 0d) {
+            // of every break. Only reverse if the speculative window has
+            // closed (a real positive event has been confirmed) so there's
+            // actually something to roll back. Using the speculative flag
+            // rather than lastAppliedProgress <= 0 handles the case where a
+            // jumpstart applyForward advances lastAppliedProgress before any
+            // real event has arrived.
+            if (tb.speculative || tb.lastAppliedProgress <= 0d) {
                 tb.lastUpdateTickMs = System.currentTimeMillis();
                 return;
             }
@@ -238,6 +245,9 @@ public final class BlockBreakProgressListener implements Listener {
         long now = System.currentTimeMillis();
         long gap = now - tb.lastUpdateTickMs;
         tb.avgEventGapMs = (tb.avgEventGapMs == 0L) ? gap : (tb.avgEventGapMs * 3L + gap) / 4L;
+        if (cfg.debug()) plugin.getLogger().info(
+                "[" + ts() + "] [debug-progress] update-gap " + posKey + " player=" + player.getName()
+                        + " gap=" + gap + " avg=" + tb.avgEventGapMs);
 
         if (Math.abs(progress - tb.lastAppliedProgress) < cfg.progressMinDelta()) {
             // Server is still emitting events (player is actively mining), even
@@ -278,9 +288,13 @@ public final class BlockBreakProgressListener implements Listener {
         if (block == null) return;
         Player player = event.getPlayer();
 
+        if (cfg.debug()) plugin.getLogger().info(
+                "[" + ts() + "] [debug-progress] onInteract");
+
         try {
             if (block.getBreakSpeed(player) >= 1.0f) return;
-        } catch (NoSuchMethodError ignored) {}
+        } catch (NoSuchMethodError ignored) {
+        }
 
         Location breakLoc = block.getLocation();
         BlockPosKey posKey = BlockPosKey.of(breakLoc);
@@ -305,26 +319,27 @@ public final class BlockBreakProgressListener implements Listener {
                 }
                 active.incrementAndGet();
                 Vector eyeDir = player.getEyeLocation().getDirection();
-                // Build the full FakeBlock, reusing the pre-spawned front-facing
-                // entities and spawning the remaining chunks fresh.
-                FakeBlock fb;
+                // completePlan reuses the pre-spawned front entities and builds
+                // a sorted pending list for the back-half + interior chunks.
+                FakeBlockFactory.PreloadPlan plan;
                 try {
-                    fb = factory.create(breakLoc, preload.bakeKey(), preload.blockRotation(),
-                            cfg.fillInterior(), eyeDir, /*compressShell=*/ true,
+                    plan = factory.completePlan(breakLoc, preload.bakeKey(),
+                            preload.blockRotation(), cfg.fillInterior(), eyeDir,
                             preload.prespawnedChunks());
                 } catch (RuntimeException re) {
-                    // Clean up pre-spawned entities and fall through
                     preload.prespawnedChunks().values().forEach(r -> {
                         if (!r.display().isDead()) r.display().remove();
                     });
                     active.decrementAndGet();
                     return;
                 }
-                double[] chunkT = ChunkWaveSampler.precomputeT(fb, eyeDir);
-                float[] base = DirectionalShrinkEffect.captureBaseScales(fb);
-                TrackedBreak tb = new TrackedBreak(player.getUniqueId(), preload.bakeKey().block(),
-                        block.getLocation(), block.getBlockData(), eyeDir,
-                        fb, chunkT, base, base.clone());
+                int gridN = registry.gridN();
+                Location origin = new Location(breakLoc.getWorld(),
+                        Math.floor(breakLoc.getX()), Math.floor(breakLoc.getY()), Math.floor(breakLoc.getZ()));
+                FakeBlock fb = new FakeBlock(origin, preload.bakeKey().block(), gridN,
+                        new ArrayList<>(plan.frontRefs().values()), preload.blockRotation());
+                TrackedBreak tb = buildTrackedBreak(player.getUniqueId(),
+                        preload.bakeKey().block(), fb, block.getBlockData(), eyeDir, plan);
                 tracker.put(posKey, tb);
                 tb.speculative = true;
                 tb.initialGapEstimateMs = estimateInitialGapMs(block, player, cfg);
@@ -336,6 +351,8 @@ public final class BlockBreakProgressListener implements Listener {
                     tb.shellExpanded = true;
                     try {
                         player.sendBlockChange(breakLoc, Material.BARRIER.createBlockData());
+                        if (cfg.debug()) plugin.getLogger().info(
+                                "[" + ts() + "] [debug-progress] sent-barrier");
                         tb.barrierSent = true;
                     } catch (RuntimeException re) {
                         plugin.getLogger().warning("sendBlockChange(BARRIER) eager failed: " + re.getMessage());
@@ -344,12 +361,15 @@ public final class BlockBreakProgressListener implements Listener {
                 if (cfg.debug()) plugin.getLogger().info(
                         "[" + ts() + "] [debug-progress] eager-consume " + preload.bakeKey()
                                 + " at " + posKey + " player=" + player.getName()
-                                + " barrierSent=" + tb.barrierSent);
-                // Kick off the wave immediately — same as spawnAndRegister does at p=0.
-                // With smoothInterpolation, applyForward at p=0 extrapolates target=0.1
-                // and starts the near-side chunks lerping right away rather than
-                // waiting for the first real progress event (~75 ms for dirt).
-                applyForward(tb, 0d, cfg);
+                                + " barrierSent=" + tb.barrierSent
+                                + " front=" + plan.frontRefs().size()
+                                + " pending=" + plan.pendingSpecs().size());
+                // Start one stage ahead so the wave is already at targetProgress≈0.2
+                // when the FakeBlock first appears. At high gridN the tiny chunks make
+                // the progress=0 state imperceptible; STAGE_PER_EVENT ensures the front
+                // layer is ~80% shrunk immediately. lastAppliedProgress=STAGE_PER_EVENT
+                // means the first real event (always 0.1) is skipped as a zero-delta.
+                applyForward(tb, STAGE_PER_EVENT, cfg);
                 return;
             }
         }
@@ -407,6 +427,10 @@ public final class BlockBreakProgressListener implements Listener {
                 long perStageMs = (long) Math.ceil(STAGE_PER_EVENT / perTick * MS_PER_TICK);
                 if (perStageMs < MS_PER_TICK) return MS_PER_TICK;
                 if (perStageMs > MAX_INTERP_MS) return MAX_INTERP_MS;
+                if (cfg.debug()) Bukkit.getPluginManager().getPlugin("Tessera").getLogger().info(
+                        "[" + ts() + "] [debug-progress] estimate-initial-gap player=" + player.getName()
+                                + " perTick=" + perTick
+                                + " perStageMs=" + perStageMs);
                 return perStageMs;
             }
         } catch (NoSuchMethodError | RuntimeException ignored) {
@@ -464,23 +488,33 @@ public final class BlockBreakProgressListener implements Listener {
 
         Vector eyeDir = player.getEyeLocation().getDirection();
         active.incrementAndGet();
-        FakeBlock fb;
+
+        // Lazy-spawn plan: front half spawned now, back half + interior pending.
+        FakeBlockFactory.PreloadPlan plan;
         try {
-            fb = factory.create(breakLoc, bakeKey, blockRotation, cfg.fillInterior(), eyeDir,
-                    /*compressShell=*/ true);
+            plan = factory.preloadAndPending(breakLoc, bakeKey, blockRotation,
+                    cfg.fillInterior(), eyeDir);
         } catch (RuntimeException re) {
             active.decrementAndGet();
             plugin.getLogger().warning("Failed to spawn FakeBlock for " + bakeKey + ": " + re.getMessage());
             return;
         }
 
-        double[] chunkT = io.tessera.effect.ChunkWaveSampler.precomputeT(fb, eyeDir);
-        float[] base = DirectionalShrinkEffect.captureBaseScales(fb);
-        float[] current = base.clone();
+        int gridN = registry.gridN();
+        Location origin = new Location(breakLoc.getWorld(),
+                Math.floor(breakLoc.getX()), Math.floor(breakLoc.getY()), Math.floor(breakLoc.getZ()));
+        FakeBlock fb = new FakeBlock(origin, key, gridN,
+                new ArrayList<>(plan.frontRefs().values()), blockRotation);
 
-        TrackedBreak tb = new TrackedBreak(player.getUniqueId(), key, fb.origin(),
-                blockData, eyeDir, fb, chunkT, base, current);
+        TrackedBreak tb = buildTrackedBreak(player.getUniqueId(), key, fb,
+                blockData, eyeDir, plan);
         tracker.put(posKey, tb);
+
+        // If a preload exists for this position but wasn't consumed by the eager path
+        // (e.g. startOnLeftClick=false, or onProgress fired before onInteract), its
+        // 676 compressed-scale entities would linger for the full break duration and
+        // peek through the FakeBlock as the wave shrinks them. Clear now.
+        clearPreloadsAt(posKey);
 
         if (cfg.clientHideRealBlock()) {
             sendBarrierNow(tb, player, breakLoc);
@@ -489,9 +523,14 @@ public final class BlockBreakProgressListener implements Listener {
         if (cfg.debug()) plugin.getLogger().info(
                 "[" + ts() + "] [debug-progress] spawn " + key + " at " + posKey
                         + " player=" + player.getName() + " progress=" + fmt(progress)
-                        + " barrierSent=" + tb.barrierSent);
+                        + " barrierSent=" + tb.barrierSent
+                        + " front=" + plan.frontRefs().size()
+                        + " pending=" + plan.pendingSpecs().size());
 
-        applyForward(tb, progress, cfg);
+        // When progress=0 (speculative spawn on first click before any event has arrived),
+        // jumpstart one stage ahead so the initial wave state is immediately perceptible
+        // even at high gridN where tiny chunks make a targetProgress=0.1 state invisible.
+        applyForward(tb, progress > 0d ? progress : STAGE_PER_EVENT, cfg);
     }
 
     private void applyForward(TrackedBreak tb, double progress, TesseraConfig cfg) {
@@ -511,11 +550,19 @@ public final class BlockBreakProgressListener implements Listener {
             targetProgress = progress;
             interpTicks = FORWARD_INTERP_TICKS_FALLBACK;
         }
+
+        if (cfg.debug()) plugin.getLogger().info(
+                "[" + ts() + "] [debug-progress] applyForward targetProgress=" + fmt(targetProgress));
+
+        spawnPendingChunks(tb, targetProgress, cfg.waveWindow());
         boolean firstReal = tb.lastAppliedProgress <= 0d && progress > 0d;
         DirectionalShrinkEffect.applyAtProgress(tb.fakeBlock, tb.chunkT, tb.baseScales, tb.currentScales,
                 targetProgress, cfg.waveWindow(), interpTicks, cfg.progressMinDelta(), cfg.collapseStyle());
         tb.lastAppliedProgress = progress;
         tb.lastUpdateTickMs = System.currentTimeMillis();
+        DirectionalShrinkEffect.despawnPassedChunks(tb.fakeBlock, tb.chunkT,
+                tb.baseScales, tb.currentScales,
+                progress, cfg.waveWindow(), (float) cfg.progressMinDelta());
         if (firstReal && cfg.debug()) plugin.getLogger().info(
                 "[" + ts() + "] [debug-progress] first-real-progress " + tb.key
                         + " progress=" + fmt(progress) + " target=" + fmt(targetProgress)
@@ -549,7 +596,18 @@ public final class BlockBreakProgressListener implements Listener {
                         + " by=" + player.getName());
         // Fires BlockBreakEvent synchronously; our BlockBreakListener.onBreak
         // sees the active tracker and disposes it via onRealBreak.
-        player.breakBlock(worldBlock);
+        // If breakBlock returns false the block was already gone (broken by
+        // an external mechanism that didn't fire BlockBreakEvent, or cancelled
+        // by another plugin). In that case onRealBreak will never run, so
+        // dispose here directly to avoid entities lingering until the watchdog.
+        if (!player.breakBlock(worldBlock)) {
+            BlockPosKey posKey = BlockPosKey.of(tb.origin);
+            TrackedBreak still = tracker.remove(posKey);
+            if (still == tb) {
+                disposeImmediate(tb, /*restoreBlock=*/ false);
+                clearPreloadsAt(posKey);
+            }
+        }
     }
 
     private void transferOwnership(TrackedBreak tb, BlockPosKey posKey, Player newPlayer,
@@ -564,7 +622,8 @@ public final class BlockBreakProgressListener implements Listener {
         tb.currentPlayerId = newPlayer.getUniqueId();
         tb.barrierSent = false; // reset so sendBarrierNow will send to the new player
         tb.eyeDir = newPlayer.getEyeLocation().getDirection();
-        tb.chunkT = io.tessera.effect.ChunkWaveSampler.precomputeT(tb.fakeBlock, tb.eyeDir);
+        cancelPendingSpawnTask(tb);
+        recomputeAllT(tb, tb.eyeDir);
         tracker.transferOwner(posKey, oldId, newPlayer.getUniqueId());
 
         if (cfg.clientHideRealBlock()) {
@@ -585,6 +644,7 @@ public final class BlockBreakProgressListener implements Listener {
 
     private void beginReverse(TrackedBreak tb, BlockPosKey posKey, TesseraConfig cfg) {
         if (tb.state == State.REVERSING) return;
+        cancelPendingSpawnTask(tb);
         tb.state = State.REVERSING;
         final double startProgress = tb.lastAppliedProgress;
         final long startMs = System.currentTimeMillis();
@@ -660,8 +720,10 @@ public final class BlockBreakProgressListener implements Listener {
         if (tb.barrierSent) {
             Player p = Bukkit.getPlayer(tb.currentPlayerId);
             if (p != null) {
-                try { p.sendBlockChange(tb.origin, Material.AIR.createBlockData()); }
-                catch (RuntimeException ignored) {}
+                try {
+                    p.sendBlockChange(tb.origin, Material.AIR.createBlockData());
+                } catch (RuntimeException ignored) {
+                }
             }
             tb.barrierSent = false;
         }
@@ -674,7 +736,9 @@ public final class BlockBreakProgressListener implements Listener {
                 "[" + ts() + "] [debug-progress] real-break " + tb.key + " at " + posKey);
     }
 
-    /** Public so BlockBreakListener can ask whether a position is tracked. */
+    /**
+     * Public so BlockBreakListener can ask whether a position is tracked.
+     */
     public boolean isTracked(BlockPosKey posKey) {
         return tracker.get(posKey) != null;
     }
@@ -715,6 +779,7 @@ public final class BlockBreakProgressListener implements Listener {
     }
 
     private void disposeImmediate(TrackedBreak tb, boolean restoreBlock) {
+        cancelPendingSpawnTask(tb);
         if (restoreBlock && tb.barrierSent) {
             Player p = Bukkit.getPlayer(tb.currentPlayerId);
             if (p != null) {
@@ -733,8 +798,21 @@ public final class BlockBreakProgressListener implements Listener {
 
     private static void cancelReverseTask(TrackedBreak tb) {
         if (tb.reverseTask != null) {
-            try { tb.reverseTask.cancel(); } catch (RuntimeException ignored) {}
+            try {
+                tb.reverseTask.cancel();
+            } catch (RuntimeException ignored) {
+            }
             tb.reverseTask = null;
+        }
+    }
+
+    private static void cancelPendingSpawnTask(TrackedBreak tb) {
+        if (tb.pendingSpawnTask != null) {
+            try {
+                tb.pendingSpawnTask.cancel();
+            } catch (RuntimeException ignored) {
+            }
+            tb.pendingSpawnTask = null;
         }
     }
 
@@ -814,7 +892,8 @@ public final class BlockBreakProgressListener implements Listener {
             // Skip instamine (no animation to pre-warm).
             try {
                 if (target.getBreakSpeed(player) >= 1.0f) continue;
-            } catch (NoSuchMethodError | RuntimeException ignored) {}
+            } catch (NoSuchMethodError | RuntimeException ignored) {
+            }
 
             Material mat = target.getType();
             BlockKey key = BlockKey.of(mat.getKey().getNamespace() + ":" + mat.getKey().getKey());
@@ -846,7 +925,9 @@ public final class BlockBreakProgressListener implements Listener {
         }
     }
 
-    /** Despawn all pre-spawned entities for {@code playerId}, if any. */
+    /**
+     * Despawn all pre-spawned entities for {@code playerId}, if any.
+     */
     private void clearPreload(UUID playerId) {
         PreloadEntry entry = preloads.remove(playerId);
         if (entry != null) {
@@ -887,8 +968,212 @@ public final class BlockBreakProgressListener implements Listener {
         return entry;
     }
 
-    private static String fmt(double d) { return String.format("%.3f", d); }
+    // ── Lazy-spawn helpers ───────────────────────────────────────────────────
+
+    /**
+     * Build a pre-allocated-array {@link TrackedBreak} from a {@link FakeBlockFactory.PreloadPlan}.
+     * Arrays are sized for front + pending so the lazy-spawn lifecycle can fill slots
+     * as the wave advances without reallocating.
+     */
+    private TrackedBreak buildTrackedBreak(UUID playerId, BlockKey key, FakeBlock fb,
+                                           BlockData blockData, Vector eyeDir,
+                                           FakeBlockFactory.PreloadPlan plan) {
+        List<ChunkRef> front = fb.chunks();
+        int frontCount = front.size();
+        int pendingCount = plan.pendingSpecs().size();
+        int total = frontCount + pendingCount;
+
+        float[] base = new float[total];
+        float[] current = new float[total];
+        double[] chunkT = new double[total];
+
+        // Front-half: read entity scale + globally-normalised t from the plan.
+        for (int i = 0; i < frontCount; i++) {
+            ChunkRef cr = front.get(i);
+            float s = cr.display().getTransformation().getScale().x;
+            base[i] = s;
+            current[i] = s;
+            chunkT[i] = plan.allOuterT().getOrDefault(cr.coord(), 0.0);
+        }
+        // Pending: t pre-populated; base/current stay 0 until the chunk is spawned.
+        for (int i = 0; i < pendingCount; i++) {
+            chunkT[frontCount + i] = plan.pendingSpecs().get(i).t();
+        }
+
+        TrackedBreak tb = new TrackedBreak(playerId, key, fb.origin(),
+                blockData, eyeDir, fb, chunkT, base, current);
+        tb.pendingChunks = new ArrayList<>(plan.pendingSpecs());
+        tb.allOuterT = new HashMap<>(plan.allOuterT());
+        return tb;
+    }
+
+    /**
+     * Spawn pending chunks whose wave position is within one {@code window} of
+     * {@code targetProgress}. The pending list is sorted ascending by t so we stop
+     * at the first out-of-range entry.
+     *
+     * <p>At most {@link #PENDING_BATCH_SIZE} chunks are spawned per call. If eligible
+     * chunks remain after the batch, a one-tick {@code runTaskLater} continuation is
+     * scheduled so the rest are spread across subsequent ticks rather than spiking
+     * one tick with all 2744 interior entities at gridN=16.
+     *
+     * <p>A shared {@link FakeBlockFactory.PendingSpawnContext} is built once for the
+     * batch — reusing {@link BlockGeometry}, the canonical rotation, and the donor
+     * {@link org.bukkit.inventory.ItemStack} for all interior chunks.
+     */
+    private void spawnPendingChunks(TrackedBreak tb, double targetProgress, double window) {
+        if (tb.pendingChunks == null || tb.pendingChunks.isEmpty()) return;
+        if (tb.fakeBlock.despawned()) return;
+        // Nothing eligible yet — wave hasn't reached the first pending chunk.
+        if (tb.pendingChunks.get(0).t() > targetProgress + window) return;
+
+        float shellFactor = tb.shellExpanded ? 1.0f : FakeBlockFactory.INITIAL_SHELL_COMPRESSION;
+        int gridN = tb.fakeBlock.gridN();
+        float chunkScale = 2f / gridN;
+
+        // Build shared context once for the batch: BlockGeometry, canonical rotation,
+        // and donor ItemStack. Interior chunks all share the same skin so we build
+        // the ItemStack once and clone it. Outer specs don't use interiorBaseStack, so
+        // we only pass an interior spec as the donor — null when the batch is all outer.
+        FakeBlockFactory.PendingChunkSpec interiorDonor = null;
+        for (FakeBlockFactory.PendingChunkSpec s : tb.pendingChunks) {
+            if (s.t() > targetProgress + window) break;
+            if (s.interior()) { interiorDonor = s; break; }
+        }
+        FakeBlockFactory.PendingSpawnContext ctx = factory.beginPendingBatch(
+                tb.fakeBlock.origin(), tb.fakeBlock.blockRotation(), interiorDonor);
+
+        int spawned = 0;
+        Iterator<FakeBlockFactory.PendingChunkSpec> it = tb.pendingChunks.iterator();
+        while (it.hasNext() && spawned < PENDING_BATCH_SIZE) {
+            FakeBlockFactory.PendingChunkSpec spec = it.next();
+            if (spec.t() > targetProgress + window) break; // sorted — stop here
+            it.remove();
+            spawned++;
+
+            ChunkRef ref;
+            try {
+                ref = factory.spawnPendingChunk(ctx, spec, shellFactor);
+            } catch (RuntimeException re) {
+                plugin.getLogger().warning(
+                        "spawnPendingChunk failed for " + spec.coord() + ": " + re.getMessage());
+                continue;
+            }
+
+            int idx = tb.fakeBlock.chunks().size();
+            tb.fakeBlock.chunks().add(ref);
+
+            if (spec.interior()) {
+                // Interior tent: baseScale = full chunk scale (tent peak), currentScale = -1f
+                // sentinel so applyAtProgress writes on the first tick rather than skipping
+                // (Math.abs(target - (-1)) >= minDelta is always true).
+                tb.baseScales[idx] = chunkScale;
+                tb.currentScales[idx] = -1f;
+            } else {
+                float baseAtSpawn = chunkScale * shellFactor;
+                // Compute the wave-correct scale so the entity spawns at its proper size
+                // rather than at full scale (avoids a one-tick pop before applyAtProgress).
+                double sFraction = ChunkWaveSampler.shrunkFraction(spec.t(), targetProgress, window);
+                float correctScale = Math.max(0f, (float) (baseAtSpawn * (1.0 - sFraction)));
+                tb.baseScales[idx] = baseAtSpawn;
+                tb.currentScales[idx] = correctScale;
+                if (correctScale < baseAtSpawn) {
+                    Transformation cur = ref.display().getTransformation();
+                    ref.display().setInterpolationDelay(0);
+                    ref.display().setInterpolationDuration(0);
+                    ref.display().setTransformation(new Transformation(
+                            cur.getTranslation(), cur.getLeftRotation(),
+                            new Vector3f(correctScale, correctScale, correctScale),
+                            cur.getRightRotation()));
+                }
+            }
+            // chunkT[idx] was pre-populated in buildTrackedBreak.
+        }
+
+        // Schedule a one-tick continuation if eligible chunks remain after the batch cap.
+        // Uses the same targetProgress so only already-eligible chunks are drained;
+        // newly-eligible chunks (from advancing progress events) are handled by the
+        // next applyForward → spawnPendingChunks call with a larger targetProgress.
+        if (tb.pendingSpawnTask == null && !tb.pendingChunks.isEmpty()
+                && tb.pendingChunks.get(0).t() <= targetProgress + window) {
+            final double capturedTarget = targetProgress;
+            final double capturedWindow = window;
+            tb.pendingSpawnTask = Bukkit.getScheduler().runTaskLater(plugin, () -> {
+                tb.pendingSpawnTask = null;
+                if (tb.fakeBlock.despawned() || tb.state != State.FORWARD) return;
+                spawnPendingChunks(tb, capturedTarget, capturedWindow);
+            }, 1L);
+        }
+    }
+
+    /**
+     * Recompute t values for all alive + pending chunks using a new eye direction.
+     * Uses global min/max across both sets so spawned and pending chunks remain
+     * on a consistent wave-position scale after an ownership transfer.
+     */
+    private void recomputeAllT(TrackedBreak tb, Vector newEyeDir) {
+        BlockGeometry geom = new BlockGeometry(tb.fakeBlock.gridN(), tb.fakeBlock.blockRotation());
+        Vector e = newEyeDir.clone().normalize();
+        Vector3f dir = new Vector3f((float) e.getX(), (float) e.getY(), (float) e.getZ());
+        Vector3f blockCenter = new Vector3f(0.5f, 0.5f, 0.5f);
+        Quaternionf blockRot = tb.fakeBlock.blockRotation();
+
+        List<ChunkRef> alive = tb.fakeBlock.chunks();
+        List<FakeBlockFactory.PendingChunkSpec> pending =
+                tb.pendingChunks != null ? tb.pendingChunks : List.of();
+
+        int aliveCount = alive.size();
+        int pendingCount = pending.size();
+        double[] proj = new double[aliveCount + pendingCount];
+        double minP = Double.POSITIVE_INFINITY, maxP = Double.NEGATIVE_INFINITY;
+
+        for (int i = 0; i < aliveCount; i++) {
+            Vector3f rel = geom.chunkLocalCenter(alive.get(i).coord()).sub(blockCenter);
+            new Quaternionf(blockRot).transform(rel);
+            double p = rel.dot(dir);
+            proj[i] = p;
+            if (p < minP) minP = p;
+            if (p > maxP) maxP = p;
+        }
+        for (int i = 0; i < pendingCount; i++) {
+            Vector3f rel = geom.chunkLocalCenter(pending.get(i).coord()).sub(blockCenter);
+            new Quaternionf(blockRot).transform(rel);
+            double p = rel.dot(dir);
+            proj[aliveCount + i] = p;
+            if (p < minP) minP = p;
+            if (p > maxP) maxP = p;
+        }
+        double range = Math.max(1e-6, maxP - minP);
+
+        // Update tb.chunkT for alive chunks.
+        for (int i = 0; i < aliveCount; i++) {
+            tb.chunkT[i] = (proj[i] - minP) / range;
+        }
+        // Rebuild pending list with updated t values, re-sort, realign chunkT slots.
+        if (!pending.isEmpty()) {
+            List<FakeBlockFactory.PendingChunkSpec> rebuilt = new ArrayList<>(pendingCount);
+            for (int i = 0; i < pendingCount; i++) {
+                FakeBlockFactory.PendingChunkSpec old = pending.get(i);
+                rebuilt.add(new FakeBlockFactory.PendingChunkSpec(
+                        old.coord(), old.registryEntry(),
+                        (proj[aliveCount + i] - minP) / range,
+                        old.interior()));
+            }
+            rebuilt.sort((a, b) -> Double.compare(a.t(), b.t()));
+            tb.pendingChunks = rebuilt;
+            for (int i = 0; i < pendingCount; i++) {
+                tb.chunkT[aliveCount + i] = rebuilt.get(i).t();
+            }
+        }
+    }
+
+    private static String fmt(double d) {
+        return String.format("%.3f", d);
+    }
 
     private static final DateTimeFormatter TS_FMT = DateTimeFormatter.ofPattern("HH:mm:ss.SSS");
-    private static String ts() { return LocalTime.now().format(TS_FMT); }
+
+    private static String ts() {
+        return LocalTime.now().format(TS_FMT);
+    }
 }
