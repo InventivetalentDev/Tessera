@@ -68,10 +68,9 @@ public record TesseraConfig(
         if (grid < 1 || grid > 16 || 16 % grid != 0) {
             throw new IllegalArgumentException(
                     "chunkGridSize must be one of 1, 2, 4, 8, 16; got " + grid
-                            + ". Note: changing chunkGridSize invalidates every"
-                            + " previously baked block — bundled heads.json"
-                            + " entries are dropped and each block has to be"
-                            + " re-uploaded to MineSkin at the new size.");
+                            + ". Note: each grid size loads its own heads-<N>.json"
+                            + " file — if no bundled file exists for the chosen"
+                            + " size, blocks are re-baked on demand via MineSkin.");
         }
 
         AnimationMode mode = parseAnimationMode(

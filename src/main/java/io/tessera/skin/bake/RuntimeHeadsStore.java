@@ -1,10 +1,5 @@
 package io.tessera.skin.bake;
 
-import com.google.gson.Gson;
-import com.google.gson.GsonBuilder;
-import com.google.gson.JsonElement;
-import com.google.gson.JsonObject;
-import com.google.gson.JsonParser;
 import io.tessera.assets.model.ModelResolver;
 import io.tessera.core.BakeKey;
 import io.tessera.core.BlockKey;
@@ -24,15 +19,18 @@ import java.util.logging.Logger;
 
 /**
  * Persistent on-disk store for {@link HeadsRegistry} entries created at
- * runtime by {@link BlockBaker}. Bundled {@code heads.json} ships in the jar
- * resources and never changes; this file ({@code plugins/Tessera/cache/runtime-heads.json})
- * captures everything baked on demand so a server restart doesn't redo the
- * full asset → split → pack → assemble pipeline for every previously-seen
- * block.
+ * runtime by {@link BlockBaker}. Bundled {@code heads-{N}.json} ships in the
+ * jar resources and never changes; this file
+ * ({@code plugins/Tessera/cache/heads-{gridN}.json}) captures everything baked
+ * on demand so a server restart doesn't redo the full asset → split → pack →
+ * assemble pipeline for every previously-seen block. Per-grid-size files mean
+ * switching {@code chunkGridSize} in config doesn't discard prior bakes —
+ * each size keeps its own state.
  *
- * <p>Schema mirrors {@code heads.json} (chunks + variants + skins) but the
+ * <p>Schema mirrors the bundled file (chunks + variants + skins) but the
  * block-key form is a {@link BakeKey} string ({@code "minecraft:oak_leaves#7fbf2e"}
  * for tinted entries) so different biome tints of the same block coexist.
+ * See {@link HeadsJsonCodec}.
  *
  * <p>Writes are atomic (temp + rename) and re-serialize the whole file each
  * call. With realistic counts (hundreds of blocks, kilobyte-scale JSON) this
@@ -61,79 +59,37 @@ public final class RuntimeHeadsStore implements HeadsRegistry.Persistence {
      * {@code registry} via {@link HeadsRegistry#registerSilently}. If the
      * stored {@code gridN} doesn't match the registry's, the file is
      * discarded (its chunk coordinates would render at the wrong resolution).
+     * The filename already encodes the grid size, so this check is
+     * defense-in-depth against a hand-edited or misnamed file.
      */
     public void loadInto(HeadsRegistry registry) {
         if (!Files.isRegularFile(file)) return;
         try {
             String json = Files.readString(file, StandardCharsets.UTF_8);
-            JsonObject root = JsonParser.parseString(json).getAsJsonObject();
-            int storedGrid = root.has("gridN") ? root.get("gridN").getAsInt() : gridN;
-            if (storedGrid != registry.gridN()) {
-                logger.warning("[runtime-heads] " + file + " was baked at gridN=" + storedGrid
+            HeadsJsonCodec.Document<BakeKey> doc = HeadsJsonCodec.read(
+                    json, BakeKey::parse, gridN, version, logger);
+            if (doc.gridN() != registry.gridN()) {
+                logger.warning("[heads-cache] " + file + " was baked at gridN=" + doc.gridN()
                         + " but current gridN=" + registry.gridN() + "; discarding");
                 return;
             }
 
-            Map<String, HeadsRegistry.Entry> skinByHash = new LinkedHashMap<>();
-            if (root.has("skins")) {
-                for (Map.Entry<String, JsonElement> e : root.getAsJsonObject("skins").entrySet()) {
-                    JsonObject sk = e.getValue().getAsJsonObject();
-                    skinByHash.put(e.getKey(), new HeadsRegistry.Entry(
-                            e.getKey(),
-                            sk.get("value").getAsString(),
-                            sk.get("signature").getAsString(),
-                            sk.has("mineskinUuid") ? sk.get("mineskinUuid").getAsString() : null));
-                }
-            }
-
             int loaded = 0;
-            if (root.has("blocks")) {
-                for (Map.Entry<String, JsonElement> blockEntry : root.getAsJsonObject("blocks").entrySet()) {
-                    BakeKey key;
-                    try {
-                        key = BakeKey.parse(blockEntry.getKey());
-                    } catch (RuntimeException re) {
-                        logger.warning("[runtime-heads] skipping malformed block key " + blockEntry.getKey());
-                        continue;
-                    }
-                    JsonObject obj = blockEntry.getValue().getAsJsonObject();
-                    Map<ChunkCoord, HeadsRegistry.Entry> chunks = new LinkedHashMap<>();
-                    if (obj.has("chunks")) {
-                        for (Map.Entry<String, JsonElement> ce : obj.getAsJsonObject("chunks").entrySet()) {
-                            ChunkCoord coord;
-                            try { coord = ChunkCoord.parseKey(ce.getKey()); }
-                            catch (RuntimeException ignored) { continue; }
-                            String hash = ce.getValue().getAsJsonObject().get("skinHash").getAsString();
-                            HeadsRegistry.Entry skin = skinByHash.get(hash);
-                            if (skin == null) {
-                                logger.warning("[runtime-heads] " + key + " " + coord.asKey()
-                                        + " references missing skin " + hash);
-                                continue;
-                            }
-                            chunks.put(coord, skin);
-                        }
-                    }
-                    Map<String, ModelResolver.VariantRotation> v = new LinkedHashMap<>();
-                    if (obj.has("variants")) {
-                        for (Map.Entry<String, JsonElement> ve : obj.getAsJsonObject("variants").entrySet()) {
-                            JsonObject vo = ve.getValue().getAsJsonObject();
-                            int xDeg = vo.has("x") ? vo.get("x").getAsInt() : 0;
-                            int yDeg = vo.has("y") ? vo.get("y").getAsInt() : 0;
-                            v.put(ve.getKey(), new ModelResolver.VariantRotation(xDeg, yDeg));
-                        }
-                    }
-                    if (chunks.isEmpty()) continue;
-                    blocks.put(key, Map.copyOf(chunks));
-                    if (!v.isEmpty()) variants.put(key.block(), Map.copyOf(v));
-                    registry.registerSilently(key, chunks, v);
-                    loaded++;
-                }
+            for (Map.Entry<BakeKey, HeadsJsonCodec.Block> e : doc.blocks().entrySet()) {
+                BakeKey key = e.getKey();
+                Map<ChunkCoord, HeadsRegistry.Entry> chunks = e.getValue().chunks();
+                Map<String, ModelResolver.VariantRotation> v = e.getValue().variants();
+                if (chunks.isEmpty()) continue;
+                blocks.put(key, Map.copyOf(chunks));
+                if (!v.isEmpty()) variants.put(key.block(), Map.copyOf(v));
+                registry.registerSilently(key, chunks, v);
+                loaded++;
             }
-            logger.info("[runtime-heads] loaded " + loaded + " block entries from " + file);
+            logger.info("[heads-cache] loaded " + loaded + " block entries from " + file);
         } catch (IOException io) {
-            logger.warning("[runtime-heads] failed to read " + file + ": " + io.getMessage());
+            logger.warning("[heads-cache] failed to read " + file + ": " + io.getMessage());
         } catch (RuntimeException re) {
-            logger.log(Level.WARNING, "[runtime-heads] malformed " + file, re);
+            logger.log(Level.WARNING, "[heads-cache] malformed " + file, re);
         }
     }
 
@@ -162,57 +118,21 @@ public final class RuntimeHeadsStore implements HeadsRegistry.Persistence {
     }
 
     private synchronized void write() {
-        JsonObject root = new JsonObject();
-        root.addProperty("version", version);
-        root.addProperty("gridN", gridN);
-
-        // Build skins table first so block entries reference by hash only.
-        JsonObject skins = new JsonObject();
-        for (Map<ChunkCoord, HeadsRegistry.Entry> per : blocks.values()) {
-            for (HeadsRegistry.Entry e : per.values()) {
-                if (skins.has(e.skinHash())) continue;
-                JsonObject sk = new JsonObject();
-                sk.addProperty("value", e.textureValue());
-                sk.addProperty("signature", e.textureSignature());
-                if (e.mineskinUuid() != null) sk.addProperty("mineskinUuid", e.mineskinUuid());
-                skins.add(e.skinHash(), sk);
-            }
-        }
-
-        JsonObject blocksJson = new JsonObject();
+        Map<BakeKey, HeadsJsonCodec.Block> docBlocks = new LinkedHashMap<>();
         for (Map.Entry<BakeKey, Map<ChunkCoord, HeadsRegistry.Entry>> be : blocks.entrySet()) {
-            JsonObject blockObj = new JsonObject();
-            JsonObject chunksObj = new JsonObject();
-            for (Map.Entry<ChunkCoord, HeadsRegistry.Entry> ce : be.getValue().entrySet()) {
-                JsonObject ch = new JsonObject();
-                ch.addProperty("skinHash", ce.getValue().skinHash());
-                chunksObj.add(ce.getKey().asKey(), ch);
-            }
-            blockObj.add("chunks", chunksObj);
-            Map<String, ModelResolver.VariantRotation> v = variants.get(be.getKey().block());
-            if (v != null && !v.isEmpty()) {
-                JsonObject vObj = new JsonObject();
-                for (Map.Entry<String, ModelResolver.VariantRotation> ve : v.entrySet()) {
-                    JsonObject r = new JsonObject();
-                    r.addProperty("x", ve.getValue().xDeg());
-                    r.addProperty("y", ve.getValue().yDeg());
-                    vObj.add(ve.getKey(), r);
-                }
-                blockObj.add("variants", vObj);
-            }
-            blocksJson.add(be.getKey().toString(), blockObj);
+            Map<String, ModelResolver.VariantRotation> v = variants.getOrDefault(be.getKey().block(), Map.of());
+            docBlocks.put(be.getKey(), new HeadsJsonCodec.Block(be.getValue(), v));
         }
-        root.add("blocks", blocksJson);
-        root.add("skins", skins);
-
-        Gson gson = new GsonBuilder().setPrettyPrinting().create();
+        String json = HeadsJsonCodec.write(
+                new HeadsJsonCodec.Document<>(version, gridN, docBlocks),
+                BakeKey::toString);
         try {
             Files.createDirectories(file.toAbsolutePath().getParent());
             Path tmp = file.resolveSibling(file.getFileName() + ".tmp");
-            Files.writeString(tmp, gson.toJson(root), StandardCharsets.UTF_8);
+            Files.writeString(tmp, json, StandardCharsets.UTF_8);
             Files.move(tmp, file, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
         } catch (IOException io) {
-            logger.log(Level.WARNING, "[runtime-heads] failed to write " + file, io);
+            logger.log(Level.WARNING, "[heads-cache] failed to write " + file, io);
         }
     }
 
