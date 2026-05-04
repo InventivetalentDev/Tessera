@@ -5,9 +5,9 @@ texture tuning. They mutate static rotation / flip state, invalidate the
 bake registry, or spawn diagnostic geometry. Server admins typically
 won't need them; they're documented here for completeness.
 
-All commands require the [`tessera.command`](/permissions) permission
-(default: `op`). There is currently no separate node for debug
-subcommands.
+All commands require the [`tessera.command`](/commands#permissions)
+permission (default: `op`). There is currently no separate node for
+debug subcommands.
 
 ## Conventions
 

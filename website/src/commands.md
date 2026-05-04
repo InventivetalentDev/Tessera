@@ -1,11 +1,21 @@
 # Commands
 
-All commands are subcommands of `/tessera` and gated by the
-[`tessera.command`](/permissions) permission (default: `op`).
+All commands are subcommands of `/tessera`. The bake-time and runtime
+tuning commands used during texture development live on the separate
+[Debug Commands](/debug-commands) page.
 
-This page documents the user-facing commands. The bake-time and
-runtime tuning commands used during texture development live on the
-separate [Debug Commands](/debug-commands) page.
+## Permissions
+
+Tessera registers a single permission node:
+
+| Node              | Default | Gates                                                  |
+| ----------------- | ------- | ------------------------------------------------------ |
+| `tessera.command` | `op`    | The entire `/tessera` command (all subcommands, including `debug`). |
+
+There is currently no finer-grained split between user and debug
+subcommands — anyone with `tessera.command` can run every subcommand,
+including the bake-time tuners that invalidate the registry. Restrict
+the node to operators or a tightly-scoped admin group accordingly.
 
 ## `/tessera test [material] [static]`
 

@@ -37,8 +37,8 @@ Folia is **not** supported.
 
 Once the plugin is loaded:
 
-1. Join the server as an op (or grant `tessera.command` via your permission
-   plugin — see [Permissions](/permissions)).
+1. Join the server as an op (the `tessera.command`
+   [permission](/commands#permissions) defaults to `op`).
 2. Look at a block.
 3. Run `/tessera test stone`. If `stone` is already baked you'll see a
    FakeBlock spawn instantly; otherwise Tessera will upload skins to
@@ -53,7 +53,5 @@ chunked animation (subject to the [configuration](/configuration)).
 
 - Tune `chunkGridSize`, animation timing, and the materials allowlist in
   [Configuration](/configuration).
-- Use the [Commands](/commands) reference to drive bake-time and runtime
-  debug overrides in-game.
-- Set up [Permissions](/permissions) for non-op staff who should be able
-  to run `/tessera`.
+- Browse the [Commands](/commands) reference for the available
+  `/tessera` subcommands and the permission node.

@@ -12,7 +12,6 @@ export default defineConfig({
       { text: 'Getting Started', link: '/getting-started' },
       { text: 'Configuration', link: '/configuration' },
       { text: 'Commands', link: '/commands' },
-      { text: 'Permissions', link: '/permissions' },
     ],
     sidebar: [
       {
@@ -24,7 +23,6 @@ export default defineConfig({
         items: [
           { text: 'Configuration', link: '/configuration' },
           { text: 'Commands', link: '/commands' },
-          { text: 'Permissions', link: '/permissions' },
         ],
       },
       {
