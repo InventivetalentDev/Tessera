@@ -73,12 +73,6 @@ public final class RuntimeHeadsStore implements HeadsRegistry.Persistence {
                         + " but current gridN=" + registry.gridN() + "; discarding");
                 return;
             }
-            if (!doc.version().equals(registry.version())) {
-                logger.warning("[heads-cache] " + file + " was baked for version=" + doc.version()
-                        + " but current version=" + registry.version()
-                        + "; discarding (asset textures may have changed)");
-                return;
-            }
 
             int loaded = 0;
             for (Map.Entry<BakeKey, HeadsJsonCodec.Block> e : doc.blocks().entrySet()) {
