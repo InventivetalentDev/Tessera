@@ -66,8 +66,7 @@ public final class BlockBreakProgressListener implements Listener {
 
     /**
      * Front-facing chunks pre-spawned while the player aims at a block.
-     * Only the half with wave-position t &lt; {@link FakeBlockFactory#PRELOAD_T_THRESHOLD}
-     * is pre-spawned; the remainder is spawned on click.
+     * Only the viewer-facing faces are pre-spawned; the back faces are spawned on click.
      */
     private record PreloadEntry(
             BlockPosKey posKey,

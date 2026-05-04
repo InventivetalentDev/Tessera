@@ -70,21 +70,6 @@ public final class FakeBlockFactory {
      * undoes the contraction in lockstep with the barrier swap.
      */
     public static final float INITIAL_SHELL_COMPRESSION = 0.99f;
-    /**
-     * Eager-preload only pre-spawns chunks whose normalised wave position t is
-     * below this threshold — the front-facing half of the block. The remaining
-     * chunks are spawned on the first left-click when the full block is
-     * assembled; by the time the wave reaches them the render lag has resolved.
-     */
-    public static final double PRELOAD_T_THRESHOLD = 0.5;
-    /**
-     * Outer shell chunks spawned immediately at consume time (sorted front-first by
-     * wave position t). Remaining outer chunks go to {@link PreloadPlan#pendingSpecs}
-     * and are batch-spawned by the progress listener as the wave advances, avoiding a
-     * tick spike at click time. Pre-spawned preload entities are always kept in the
-     * immediate set regardless of this limit.
-     */
-    public static final int OUTER_INITIAL_SPAWN = 128;
 
     /** Outer or interior chunk scheduled for lazy spawning as the wave front advances. */
     public record PendingChunkSpec(
@@ -199,8 +184,9 @@ public final class FakeBlockFactory {
     // ── Preload ───────────────────────────────────────────────────────────────
 
     /**
-     * Pre-spawn only the front-facing half of the outer shell (chunks with
-     * wave position t &lt; {@link #PRELOAD_T_THRESHOLD}) for eager preload. The
+     * Pre-spawn the viewer-facing faces of the outer shell for eager preload.
+     * A chunk is pre-spawned if any of its outward face normals opposes the eye
+     * direction (i.e. the face is visible from the player's viewpoint). The
      * returned {@link PreloadResult} contains both the spawned refs and the session
      * that owns them. The caller must pass the session to a subsequent {@link #create}
      * call or close it if the preload is discarded.
@@ -221,32 +207,19 @@ public final class FakeBlockFactory {
 
         Quaternionf canonicalRotation = HeadRotations.compose(
                 HeadFace.FRONT, FaceDir.SOUTH, FaceRotations.of(HeadFace.FRONT));
-        float shellFactor = INITIAL_SHELL_COMPRESSION;
 
         Vector3f dir = new Vector3f((float) eyeDir.getX(), (float) eyeDir.getY(),
                 (float) eyeDir.getZ()).normalize();
-        Vector3f blockCenter = new Vector3f(0.5f, 0.5f, 0.5f);
-        double minP = Double.POSITIVE_INFINITY, maxP = Double.NEGATIVE_INFINITY;
-        for (ChunkCoord coord : chunks.keySet()) {
-            Vector3f rel = geom.chunkLocalCenter(coord).sub(blockCenter);
-            new Quaternionf(blockRotation).transform(rel);
-            double p = rel.dot(dir);
-            if (p < minP) minP = p;
-            if (p > maxP) maxP = p;
-        }
-        double range = Math.max(1e-6, maxP - minP);
+        Vector3f localEyeDir = new Quaternionf(blockRotation).conjugate().transform(new Vector3f(dir));
 
         TransportSession session = transport.openSession(viewer, world);
         List<ChunkRef> refs = new ArrayList<>(chunks.size() / 2 + 1);
         for (Map.Entry<ChunkCoord, HeadsRegistry.Entry> entry : chunks.entrySet()) {
             ChunkCoord coord = entry.getKey();
-            Vector3f rel = geom.chunkLocalCenter(coord).sub(blockCenter);
-            new Quaternionf(blockRotation).transform(rel);
-            double t = (rel.dot(dir) - minP) / range;
-            if (t > PRELOAD_T_THRESHOLD) continue;
+            if (!isViewerFacing(coord, gridN, localEyeDir)) continue;
 
             ChunkRef ref = spawnChunk(session, origin, coord, entry.getValue(),
-                    blockRotation, canonicalRotation, geom, gridN, shellFactor);
+                    blockRotation, canonicalRotation, geom, gridN, INITIAL_SHELL_COMPRESSION);
             refs.add(ref);
         }
 
@@ -365,9 +338,9 @@ public final class FakeBlockFactory {
 
     /**
      * Internal: build a {@link PreloadPlan} using the given session. Outer chunks are
-     * partitioned into an immediate set (first {@link #OUTER_INITIAL_SPAWN} new spawns,
-     * plus all alive {@code existingRefs}) and a sorted pending list; interior chunks
-     * are all pending. t values are globally normalised across all outer coords.
+     * partitioned into a viewer-facing immediate set (plus all alive {@code existingRefs})
+     * and a pending list for back-facing chunks; interior chunks are all pending.
+     * t values are globally normalised across all outer coords.
      */
     private PreloadPlan buildPlan(TransportSession session, Location blockLocation, BakeKey bakeKey,
                                    Quaternionf blockRotation, boolean fillInterior, Vector eyeDir,
@@ -410,26 +383,22 @@ public final class FakeBlockFactory {
             allOuterT.put(e.getKey(), (e.getValue() - minP) / range);
         }
 
-        // 2. Keep alive preloaded entities; spawn only first OUTER_INITIAL_SPAWN new ones
-        // (sorted ascending by t); rest go into pendingSpecs.
-        Map<ChunkCoord, ChunkRef> frontRefs = new HashMap<>(OUTER_INITIAL_SPAWN + existingRefs.size());
+        // 2. Keep alive preloaded entities; spawn viewer-facing chunks immediately,
+        // defer back-facing chunks to pendingSpecs so they appear as the wave passes them.
+        Vector3f localEyeDir = new Quaternionf(blockRotation).conjugate().transform(new Vector3f(dir));
+        Map<ChunkCoord, ChunkRef> frontRefs = new HashMap<>(existingRefs.size() + chunks.size());
         List<PendingChunkSpec> pending = new ArrayList<>();
 
         for (Map.Entry<ChunkCoord, ChunkRef> e : existingRefs.entrySet()) {
             if (e.getValue().handle().isAlive()) frontRefs.put(e.getKey(), e.getValue());
         }
 
-        List<Map.Entry<ChunkCoord, HeadsRegistry.Entry>> sortedOuter = new ArrayList<>(chunks.entrySet());
-        sortedOuter.sort((a, b) -> Double.compare(allOuterT.get(a.getKey()), allOuterT.get(b.getKey())));
-
-        int newOuterSpawned = 0;
-        for (Map.Entry<ChunkCoord, HeadsRegistry.Entry> e : sortedOuter) {
+        for (Map.Entry<ChunkCoord, HeadsRegistry.Entry> e : chunks.entrySet()) {
             ChunkCoord c = e.getKey();
             if (frontRefs.containsKey(c)) continue;
-            if (newOuterSpawned < OUTER_INITIAL_SPAWN) {
+            if (isViewerFacing(c, gridN, localEyeDir)) {
                 frontRefs.put(c, spawnChunk(session, origin, c, e.getValue(),
                         blockRotation, canonicalRotation, geom, gridN, INITIAL_SHELL_COMPRESSION));
-                newOuterSpawned++;
             } else {
                 pending.add(new PendingChunkSpec(c, e.getValue(), allOuterT.get(c), false));
             }
@@ -547,6 +516,21 @@ public final class FakeBlockFactory {
             if (d.isOutwardAt(c.x(), c.y(), c.z(), gridN)) out.add(d);
         }
         return out;
+    }
+
+    /**
+     * Returns true if any outward face of the chunk at {@code c} has a normal that
+     * opposes {@code localEyeDir} (i.e. the face is visible from the viewer's side).
+     * {@code localEyeDir} must already be in block-local space.
+     */
+    private static boolean isViewerFacing(ChunkCoord c, int gridN, Vector3f localEyeDir) {
+        for (FaceDir d : FaceDir.values()) {
+            if (d.isOutwardAt(c.x(), c.y(), c.z(), gridN)
+                    && d.dx * localEyeDir.x + d.dy * localEyeDir.y + d.dz * localEyeDir.z < 0) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static PreloadPlan emptyPlan() {
