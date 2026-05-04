@@ -63,6 +63,12 @@ public final class BlockBreakProgressListener implements Listener {
     // via runTaskLater avoids tick spikes when large numbers of chunks become
     // eligible simultaneously (e.g. all interior chunks at gridN=16).
     private static final int PENDING_BATCH_SIZE = 128;
+    /**
+     * Min interval between replayed block-hit sounds. Vanilla plays a hit
+     * sound every 4 ticks (200ms) while mining; we match that so the
+     * barrier mask doesn't substitute its "stone hit" for the real block's.
+     */
+    private static final long HIT_SOUND_MIN_INTERVAL_MS = 200L;
 
     /**
      * Front-facing chunks pre-spawned while the player aims at a block.
@@ -203,6 +209,7 @@ public final class BlockBreakProgressListener implements Listener {
             return;
         }
 
+        playBlockHitSound(tb, player);
         applyForward(tb, progress, cfg);
     }
 
@@ -286,6 +293,7 @@ public final class BlockBreakProgressListener implements Listener {
                                 + " barrierSent=" + tb.barrierSent
                                 + " front=" + plan.frontRefs().size()
                                 + " pending=" + plan.pendingSpecs().size());
+                playBlockHitSound(tb, player);
                 applyForward(tb, STAGE_PER_EVENT, cfg);
                 return;
             }
@@ -301,6 +309,7 @@ public final class BlockBreakProgressListener implements Listener {
                 "[" + ts() + "] [debug-progress] speculative-spawn at " + posKey
                         + " player=" + player.getName()
                         + " initialGapMs=" + tb.initialGapEstimateMs);
+        playBlockHitSound(tb, player);
     }
 
     private static long staleThresholdFor(TrackedBreak tb, TesseraConfig cfg) {
@@ -687,6 +696,32 @@ public final class BlockBreakProgressListener implements Listener {
             try { tb.pendingSpawnTask.cancel(); } catch (RuntimeException ignored) {}
             tb.pendingSpawnTask = null;
         }
+    }
+
+    /**
+     * Replay the original block's mining-hit sound for the breaker. The
+     * client otherwise plays the BARRIER hit sound while the mask is up.
+     * Volume/pitch follow vanilla's {@code LevelRenderer.hitBlockEffect}:
+     * {@code (vol+1)/8}, {@code pitch*0.5}.
+     */
+    private void playBlockHitSound(TrackedBreak tb, Player player) {
+        if (!tb.barrierSent) return;
+        long now = System.currentTimeMillis();
+        if (now - tb.lastHitSoundMs < HIT_SOUND_MIN_INTERVAL_MS) return;
+        SoundGroup group;
+        try {
+            group = tb.originalBlockData.getSoundGroup();
+        } catch (RuntimeException re) {
+            return;
+        }
+        Sound hit = group.getHitSound();
+        if (hit == null) return;
+        Location at = tb.origin.clone().add(0.5, 0.5, 0.5);
+        try {
+            player.playSound(at, hit, SoundCategory.BLOCKS,
+                    (group.getVolume() + 1f) / 8f, group.getPitch() * 0.5f);
+            tb.lastHitSoundMs = now;
+        } catch (RuntimeException ignored) {}
     }
 
     private void sendBarrierNow(TrackedBreak tb, Player player, Location loc) {
