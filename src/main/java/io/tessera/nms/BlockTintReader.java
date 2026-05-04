@@ -2,10 +2,11 @@ package io.tessera.nms;
 
 import io.tessera.assets.fetch.McAssetClient;
 import net.minecraft.core.BlockPos;
-import net.minecraft.world.level.ColorResolver;
+import net.minecraft.core.Holder;
 import net.minecraft.world.level.FoliageColor;
 import net.minecraft.world.level.GrassColor;
 import net.minecraft.world.level.LevelReader;
+import net.minecraft.world.level.biome.Biome;
 import org.bukkit.block.Block;
 import org.bukkit.craftbukkit.CraftWorld;
 
@@ -34,15 +35,21 @@ import java.util.logging.Logger;
  * so the existing biome-color API works server-side. Call once during
  * plugin enable, before any block-break events register.
  *
- * <p><b>Main thread only.</b> {@code LevelReader.getBlockTint} reads chunk
- * biome storage, which races with chunk unloads off-thread. Callers must
- * invoke {@link #read} from the main server thread, capture the returned
- * int, and only then hop off to async work.
+ * <p><b>Main thread only.</b> Biome lookup reads chunk biome storage, which
+ * races with chunk unloads off-thread. Callers must invoke {@link #read}
+ * from the main server thread, capture the returned int, and only then hop
+ * off to async work.
  *
  * <p>Returns {@code 0} (the {@link io.tessera.core.BakeKey} sentinel for
- * "untinted") for: any block type we don't have a resolver for, and any
+ * "untinted") for: any block type we don't have a tint function for, and any
  * unexpected NMS linkage error (defensive — a Paper bump should not brick
  * block breaking).
+ *
+ * <p><b>Robustness note:</b> the old {@code LevelAccessor/LevelReader.getBlockTint(BlockPos, ColorResolver)}
+ * API was removed in MC 26.1. We now call {@code Biome.getGrassColor(x, z)}
+ * directly — a concrete method on the Biome class that's far less likely to
+ * move between interface reshuffles. {@code LevelReader.getBiome(BlockPos)}
+ * and {@code Holder.value()} are similarly stable.
  */
 public final class BlockTintReader {
 
@@ -50,11 +57,6 @@ public final class BlockTintReader {
 
     private static volatile boolean colormapsLoaded;
     private static final AtomicBoolean tintReadErrorLogged = new AtomicBoolean();
-
-    // ColorResolver lambdas mirror what net.minecraft.client.renderer.BiomeColors
-    // does on the client; that class isn't on the server classpath so we
-    // inline the equivalent server-side calls.
-    private static final ColorResolver GRASS = (biome, x, z) -> biome.getGrassColor(x, z);
 
     /**
      * Fetch the vanilla grass + foliage colormap PNGs (256×256 each) and
@@ -81,20 +83,19 @@ public final class BlockTintReader {
     }
 
     public static int read(Block block) {
-        ColorResolver resolver = pickResolver(block.getType().getKey().getKey());
-        if (resolver == null) return 0;
+        TintFunction fn = pickTintFunction(block.getType().getKey().getKey());
+        if (fn == null) return 0;
         try {
             LevelReader level = ((CraftWorld) block.getWorld()).getHandle();
             BlockPos pos = new BlockPos(block.getX(), block.getY(), block.getZ());
-            int rgb = level.getBlockTint(pos, resolver);
+            Holder<Biome> biomeHolder = level.getBiome(pos);
+            int rgb = fn.apply(biomeHolder.value(), block.getX(), block.getZ());
             // Treat 0 RGB as "no tint available" (e.g. colormap not loaded
-            // and biome has no override) and return the untinted sentinel
-            // so we don't bake a useless all-black variant.
+            // and biome has no explicit override) and return the untinted
+            // sentinel so we don't bake a useless all-black variant.
             if ((rgb & 0xFFFFFF) == 0) return 0;
-            // Force opaque alpha so the int is stable as a BakeKey identity:
-            // some resolvers may return 0xRRGGBB (alpha zero) and some
-            // 0xFFRRGGBB depending on sample path; either way the multiply
-            // we do downstream wants the alpha bit set.
+            // Force opaque alpha for a stable BakeKey identity — some
+            // biome methods return 0xRRGGBB (alpha=0), others 0xFFRRGGBB.
             return 0xFF000000 | (rgb & 0xFFFFFF);
         } catch (LinkageError | RuntimeException e) {
             if (tintReadErrorLogged.compareAndSet(false, true)) {
@@ -105,7 +106,12 @@ public final class BlockTintReader {
         }
     }
 
-    private static ColorResolver pickResolver(String path) {
+    @FunctionalInterface
+    private interface TintFunction {
+        int apply(Biome biome, double x, double z);
+    }
+
+    private static TintFunction pickTintFunction(String path) {
         return switch (path) {
             // Only solid-texture tinted blocks. Transparent-texture blocks
             // (leaves, water, vine) are excluded because player-head skins
@@ -115,7 +121,7 @@ public final class BlockTintReader {
             // full-cube element check in ModelResolver; listed here for
             // documentation.
             case "grass_block", "short_grass", "tall_grass", "fern", "large_fern",
-                 "sugar_cane", "potted_fern" -> GRASS;
+                 "sugar_cane", "potted_fern" -> Biome::getGrassColor;
             default -> null;
         };
     }
