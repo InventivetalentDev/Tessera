@@ -709,7 +709,6 @@ public final class BlockBreakProgressListener implements Listener {
         if (!tb.barrierSent) return;
         long now = System.currentTimeMillis();
         if (now - tb.lastHitSoundMs < HIT_SOUND_MIN_INTERVAL_MS) return;
-        tb.lastHitSoundMs = now;
         SoundGroup group;
         try {
             group = tb.originalBlockData.getSoundGroup();
@@ -722,6 +721,7 @@ public final class BlockBreakProgressListener implements Listener {
         try {
             player.playSound(at, hit, SoundCategory.BLOCKS,
                     (group.getVolume() + 1f) / 8f, group.getPitch() * 0.5f);
+            tb.lastHitSoundMs = now;
         } catch (RuntimeException ignored) {}
     }
 
