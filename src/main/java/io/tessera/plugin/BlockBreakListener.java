@@ -12,7 +12,6 @@ import org.bukkit.entity.Player;
 import io.tessera.plugin.ProgressTracker.BlockPosKey;
 import io.tessera.skin.HeadsRegistry;
 import io.tessera.skin.bake.BlockBaker;
-import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.block.data.BlockData;
@@ -23,7 +22,6 @@ import org.bukkit.event.block.BlockBreakEvent;
 import org.bukkit.util.Vector;
 import org.joml.Quaternionf;
 
-import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 
 public final class BlockBreakListener implements Listener {
@@ -83,7 +81,6 @@ public final class BlockBreakListener implements Listener {
         // so non-default variants render with the correct rotation.
         BlockData blockData = event.getBlock().getBlockData();
         Vector eyeDir = event.getPlayer().getEyeLocation().getDirection();
-        UUID world = event.getPlayer().getWorld().getUID();
 
         // Read biome tint synchronously on the main thread before any async
         // hop — getBlockTint touches chunk biome storage which races with
@@ -98,22 +95,16 @@ public final class BlockBreakListener implements Listener {
             return;
         }
 
-        // Not baked yet — kick off async runtime bake. The block is already
-        // gone (vanilla has run); when the bake completes (a few seconds
-        // typically) we spawn the FakeBlock at the now-air cell. The
-        // post-hoc effect is unusual but acceptable for v1.
-        if (cfg.debug()) plugin.getLogger().info("[debug] runtime-baking " + bakeKey);
-        baker.bake(bakeKey).whenComplete((ok, ex) -> {
-            if (ex != null) {
-                plugin.getLogger().warning("[runtime-bake] " + bakeKey + " threw: " + ex.getMessage());
-                return;
-            }
-            if (!ok) return;
-            // Re-check world is still loaded and player is still online.
-            if (Bukkit.getWorld(world) == null) return;
-            if (!player.isOnline()) return;
-            Bukkit.getScheduler().runTask(plugin, () -> spawn(player, bakeKey, blockData, breakLoc, eyeDir, cfg));
-        });
+        // Not baked yet — fire the runtime bake for next time (so a player
+        // breaking the same block again gets the effect) but don't spawn
+        // anything for *this* break. The post-hoc effect at an already-empty
+        // cell looked off, and silently dropping is preferable to a delayed
+        // surprise. BlockBaker.inflight dedupes simultaneous calls for the
+        // same key, so spam-breaking the same block won't pile up MineSkin
+        // requests; partial-failure bakes leave the registry empty so the
+        // next bake() retries only the missing chunks via SkinDiskCache.
+        if (cfg.debug()) plugin.getLogger().info("[debug] runtime-baking " + bakeKey + " (no spawn)");
+        baker.bake(bakeKey);
     }
 
     private void spawn(Player viewer, BakeKey bakeKey, BlockData blockData,
