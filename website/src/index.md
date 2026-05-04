@@ -30,3 +30,7 @@ features:
   - title: Debug command surface
     details: Built-in /tessera debug commands let server operators tune rotations, flips, and texture overrides live in-game.
 ---
+
+---
+
+Mosaikin and [MineSkin](https://mineskin.org) are both developed by [inventivetalent](https://inventivetalent.org).
