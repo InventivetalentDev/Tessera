@@ -18,3 +18,10 @@ test-server/
 gradlew
 gradlew.bat
 .gradle
+
+# VitePress documentation site
+website/node_modules/
+website/dist/
+website/src/.vitepress/cache/
+website/src/.vitepress/dist/
+website/.wrangler/

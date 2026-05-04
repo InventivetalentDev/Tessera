@@ -1,0 +1,17 @@
+{
+  "name": "tessera-docs",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Documentation site for the Tessera Minecraft plugin.",
+  "scripts": {
+    "dev": "vitepress dev src",
+    "build": "vitepress build src",
+    "preview": "vitepress preview src",
+    "deploy": "npm run build && wrangler deploy"
+  },
+  "devDependencies": {
+    "vitepress": "^1.5.0",
+    "wrangler": "^3.90.0"
+  }
+}
