@@ -7,7 +7,7 @@ import net.minecraft.world.level.FoliageColor;
 import net.minecraft.world.level.GrassColor;
 import net.minecraft.world.level.LevelAccessor;
 import org.bukkit.block.Block;
-import org.bukkit.craftbukkit.block.CraftBlock;
+import org.bukkit.craftbukkit.CraftWorld;
 
 import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
@@ -40,9 +40,9 @@ import java.util.logging.Logger;
  * int, and only then hop off to async work.
  *
  * <p>Returns {@code 0} (the {@link io.tessera.core.BakeKey} sentinel for
- * "untinted") for: any block type we don't have a resolver for, any block
- * that isn't a {@link CraftBlock}, and any unexpected NMS linkage error
- * (defensive — a Paper bump should not brick block breaking).
+ * "untinted") for: any block type we don't have a resolver for, and any
+ * unexpected NMS linkage error (defensive — a Paper bump should not brick
+ * block breaking).
  */
 public final class BlockTintReader {
 
@@ -81,12 +81,11 @@ public final class BlockTintReader {
     }
 
     public static int read(Block block) {
-        if (!(block instanceof CraftBlock craftBlock)) return 0;
         ColorResolver resolver = pickResolver(block.getType().getKey().getKey());
         if (resolver == null) return 0;
         try {
-            LevelAccessor level = craftBlock.getHandle();
-            BlockPos pos = craftBlock.getPosition();
+            LevelAccessor level = ((CraftWorld) block.getWorld()).getHandle();
+            BlockPos pos = new BlockPos(block.getX(), block.getY(), block.getZ());
             int rgb = level.getBlockTint(pos, resolver);
             // Treat 0 RGB as "no tint available" (e.g. colormap not loaded
             // and biome has no override) and return the untinted sentinel
