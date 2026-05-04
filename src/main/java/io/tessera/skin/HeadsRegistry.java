@@ -126,6 +126,15 @@ public final class HeadsRegistry {
     private static HeadsRegistry parse(Logger logger, String json, int defaultGridN, String defaultVersion) {
         HeadsJsonCodec.Document<BlockKey> doc = HeadsJsonCodec.read(
                 json, BlockKey::of, defaultGridN, defaultVersion, logger);
+        // The caller selects the file by gridN (e.g. /heads-4.json), so an
+        // embedded gridN that disagrees means the file was misnamed or
+        // hand-edited. Refuse rather than silently render at the wrong size.
+        if (doc.gridN() != defaultGridN) {
+            logger.warning("[heads-registry] expected gridN=" + defaultGridN
+                    + " but file declares gridN=" + doc.gridN() + "; ignoring");
+            return new HeadsRegistry(logger, defaultGridN, defaultVersion,
+                    Map.of(), Map.of());
+        }
 
         Map<BakeKey, Map<ChunkCoord, Entry>> blocks = new HashMap<>();
         Map<BlockKey, Map<String, ModelResolver.VariantRotation>> variantRotations = new HashMap<>();

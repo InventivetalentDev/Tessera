@@ -63,6 +63,11 @@ public final class BakeMain {
         Path cacheRoot  = Path.of(args.getOrDefault("cache",  "build/tessera-cache"));
         String version  = args.getOrDefault("version", "1.21.4");
         int gridN       = Integer.parseInt(args.getOrDefault("gridN", "4"));
+        if (gridN < 1 || gridN > 16 || 16 % gridN != 0) {
+            throw new IllegalArgumentException(
+                    "gridN must be one of 1, 2, 4, 8, 16; got " + gridN
+                            + " (TesseraConfig only loads heads-<N>.json for these sizes)");
+        }
         Path outPath    = Path.of(args.getOrDefault("out",
                 "src/main/resources/heads-" + gridN + ".json"));
 
