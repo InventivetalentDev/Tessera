@@ -31,6 +31,10 @@ export default defineConfig({
           { text: 'Permissions', link: '/permissions' },
         ],
       },
+      {
+        text: 'Development',
+        items: [{ text: 'Debug Commands', link: '/debug-commands' }],
+      },
     ],
     socialLinks: [
       {

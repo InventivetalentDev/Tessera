@@ -3,30 +3,16 @@
 All commands are subcommands of `/tessera` and gated by the
 [`tessera.command`](/permissions) permission (default: `op`).
 
-Conventions used below:
+This page documents the user-facing commands. The bake-time and
+runtime tuning commands used during texture development live on the
+separate [Debug Commands](/debug-commands) page.
 
-- `<face>` — a `HeadFace` slot: `TOP`, `BOTTOM`, `FRONT`, `BACK`, `RIGHT`, `LEFT`.
-- `<facedir>` — a world-axis `FaceDir`: `UP`, `DOWN`, `NORTH`, `SOUTH`, `EAST`, `WEST`.
-- `<material>` — a Bukkit material id, with or without the `minecraft:` prefix
-  (e.g. `stone`, `oak_log`, `minecraft:furnace`). When omitted, most commands
-  default to `stone`.
-
-The two scales of orientation knob:
-
-| Knob              | Scope          | When applied | Re-bake required |
-| ----------------- | -------------- | ------------ | ---------------- |
-| `headrot`         | per `HeadFace` | runtime spin | no               |
-| `tilerot` / `tileflip`     | per `HeadFace` | bake-time    | yes (auto-invalidates) |
-| `sourcerot` / `sourceflip` | per `FaceDir`  | bake-time    | yes (auto-invalidates) |
-
-## User commands
-
-### `/tessera test [material] [static]`
+## `/tessera test [material] [static]`
 
 Bake the requested material if it isn't already in the registry, then
 spawn a `FakeBlock` at the cell you're looking at.
 
-- `material` — defaults to `stone`.
+- `material` — defaults to `stone`. With or without `minecraft:` prefix.
 - `static` — optional flag. Spawns the FakeBlock without the shrink
   animation and keeps it alive for five minutes so you can walk around
   and inspect it.
@@ -34,125 +20,29 @@ spawn a `FakeBlock` at the cell you're looking at.
 If the material isn't in `heads.json` and `mineskin.apiKey` is unset,
 the command refuses with a hint to configure the key first.
 
-### `/tessera reload`
+## `/tessera bake <material> [tint:#RRGGBB]`
+
+Trigger a bake for `<material>` without spawning anything. Useful for
+warming the registry / disk cache (for example after editing
+`bake-blocks.txt` on a running server) without disturbing the world.
+
+Reports the upload count once the splitter/packer has decided how
+many MineSkin uploads are actually required, and a completion message
+when the bake finishes.
+
+- `material` — required. With or without `minecraft:` prefix.
+- `tint:#RRGGBB` — optional, required for biome-tinted blocks (grass,
+  leaves, water). The hex value is the resolved colour multiplier the
+  runtime listener would read off a player breaking the block in the
+  target biome. Without it the bake fails the same way the runtime
+  listener does for tinted blocks.
+
+If the bake key is already in the registry, the command reports it as
+a no-op and points at `/tessera debug rebake` for invalidating before
+re-uploading.
+
+## `/tessera reload`
 
 Reload `plugins/Tessera/config.yml`. The configuration is replaced as
 an immutable snapshot, so existing animations finish under their old
 settings and new breaks pick up the new values.
-
-## Debug commands
-
-`/tessera debug …` — the bake-time tuners (`tilerot`, `tileflip`,
-`sourcerot`, `sourceflip`, `debugtex`) automatically invalidate the
-registry, so the next `/tessera test` triggers a fresh upload to
-MineSkin. Runtime tuners (`headrot`) take effect on the next spawn
-without re-baking.
-
-### `/tessera debug status`
-
-Print every active rotation / flip / center override, with the
-current value alongside its default. Use this as a quick sanity check
-before tuning.
-
-### `/tessera debug grid [material]`
-
-Spawn a `BlockDisplay` lattice of the requested material (defaults to
-`DIAMOND_ORE`) at the looked-at cell. No skins or bakes required —
-purely a geometry preview useful for verifying `BlockGeometry.CUBE_CENTER_PRE`.
-Auto-removed after 30 seconds.
-
-### `/tessera debug debugtex on|off|toggle`
-
-Replace every chunk tile with a directional marker (face-color fill
-plus colored borders: red top, green right, blue bottom, yellow left).
-The single most useful tool for diagnosing orientation issues. Bake-time
-mode: enabling/disabling clears the registry so the next `/tessera test`
-re-bakes with markers.
-
-### `/tessera debug rebake [material]`
-
-Drop registry entries so the next `/tessera test` re-uploads.
-
-- With no argument: invalidates everything.
-- With a material: invalidates that one block id.
-
-### `/tessera debug headrot <face> <0|90|180|270>`
-
-Runtime spin around the visible face's outward axis. Per-`HeadFace`,
-no re-bake required. Use this to figure out whether textures are off
-because of cube rotation (in which case `headrot` fixes it) versus
-texture orientation (in which case `tilerot` is the right tool).
-
-`/tessera debug headrot reset [face]` resets one face or, with no
-face, all of them.
-
-### `/tessera debug tilerot <face> <0|90|180|270>`
-
-In-plane rotation of each chunk's tile within its head slot.
-Per-`HeadFace`, bake-time. Auto-invalidates the registry.
-
-`/tessera debug tilerot reset [face]` resets one face or all.
-
-### `/tessera debug tileflip <face> <none|h|v|hv>`
-
-Mirror each chunk's tile within its head slot. Per-`HeadFace`,
-bake-time. Auto-invalidates the registry.
-
-`/tessera debug tileflip reset [face]` resets one face or all.
-
-### `/tessera debug sourcerot <facedir> <0|90|180|270>`
-
-Rotate the entire block-face source texture before splitting.
-Per-`FaceDir`, bake-time. Use this when an entire face appears
-rotated as a unit (versus `tilerot`, which rotates individual
-chunks). Auto-invalidates the registry.
-
-`/tessera debug sourcerot reset [facedir]` resets one face or all.
-
-### `/tessera debug sourceflip <facedir> <none|h|v|hv>`
-
-Mirror the entire block-face source texture before splitting.
-Per-`FaceDir`, bake-time. Combine with `sourcerot` to express any of
-the eight dihedral orientations of a square. Auto-invalidates the
-registry.
-
-`/tessera debug sourceflip reset [facedir]` resets one face or all.
-
-### `/tessera debug face <face> <xDeg> <yDeg> <zDeg>`
-
-Override the Euler triple in `FaceRotations` for one `HeadFace`.
-Used by the canonical face-rotation pipeline; reach for this only
-when fine-tuning new texture conventions, otherwise `tilerot` /
-`sourcerot` are the right knobs.
-
-`/tessera debug face reset [face]` resets one face or all.
-
-### `/tessera debug center <x> <y> <z>`
-
-Override `BlockGeometry.CUBE_CENTER_PRE`, the pre-rotation pivot
-that all chunks share. Useful when cubes don't meet flush in a
-`debug grid` preview.
-
-`/tessera debug center reset` returns to the default vector.
-
-### `/tessera debug permutations <head|tile|source|all> <facedir> [material]`
-
-Sweep parameter combinations side by side, spawning a static
-`FakeBlock` per combo with a vanilla compare block beneath each.
-Cost depends on the kind:
-
-| Kind     | Combinations | Re-bakes |
-| -------- | ------------ | -------- |
-| `head`   | 4            | 0 (instant) |
-| `tile`   | 4            | 4        |
-| `source` | 16           | 16       |
-| `all`    | 64           | 64       |
-
-Run on a stone block first to sanity-check.
-
-### `/tessera debug dumppng <material>`
-
-Split + paint the block locally and write one PNG per chunk to
-`plugins/Tessera/dump-<material>/<x>-<y>-<z>.png`. Bypasses MineSkin
-entirely, so you can inspect exactly what's painted into each slot
-without uploading anything.
