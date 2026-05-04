@@ -612,6 +612,7 @@ public final class BlockBreakProgressListener implements Listener {
             if (p != null) {
                 try { p.sendBlockChange(tb.origin, Material.AIR.createBlockData()); }
                 catch (RuntimeException ignored) {}
+                playBlockBreakSound(tb, p);
             }
             tb.barrierSent = false;
         }
@@ -721,6 +722,31 @@ public final class BlockBreakProgressListener implements Listener {
             player.playSound(at, hit, SoundCategory.BLOCKS,
                     (group.getVolume() + 1f) / 8f, group.getPitch() * 0.5f);
             tb.lastHitSoundMs = now;
+        } catch (RuntimeException ignored) {}
+    }
+
+    /**
+     * Replay the original block's break sound for the breaker. Vanilla
+     * normally broadcasts LevelEvent 2001 with the original block's
+     * stateId on real-break, but the BARRIER mask we sent earlier can
+     * cause the client to dedupe / mispredict the sound; an explicit
+     * play guarantees the right one is heard. Volume/pitch follow
+     * vanilla's {@code Level.destroyBlock} → LevelEvent handler:
+     * {@code (vol+1)/2}, {@code pitch*0.8}.
+     */
+    private void playBlockBreakSound(TrackedBreak tb, Player player) {
+        SoundGroup group;
+        try {
+            group = tb.originalBlockData.getSoundGroup();
+        } catch (RuntimeException re) {
+            return;
+        }
+        Sound brk = group.getBreakSound();
+        if (brk == null) return;
+        Location at = tb.origin.clone().add(0.5, 0.5, 0.5);
+        try {
+            player.playSound(at, brk, SoundCategory.BLOCKS,
+                    (group.getVolume() + 1f) / 2f, group.getPitch() * 0.8f);
         } catch (RuntimeException ignored) {}
     }
 
