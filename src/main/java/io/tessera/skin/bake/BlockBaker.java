@@ -30,6 +30,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -55,6 +56,7 @@ import java.util.logging.Logger;
 public final class BlockBaker {
 
     private final Logger logger;
+    private final BooleanSupplier debug;
     private final ModelResolver resolver;
     private final TextureSplitter splitter;
     private final HeadSkinPacker packer;
@@ -77,6 +79,7 @@ public final class BlockBaker {
     public record Plan(int totalChunks, int uniqueHeads, int needUpload) {}
 
     public BlockBaker(Logger logger,
+                      BooleanSupplier debug,
                       McAssetClient assets,
                       String mcVersion,
                       HeadsRegistry registry,
@@ -85,6 +88,7 @@ public final class BlockBaker {
                       Path pngDir,
                       Executor executor) {
         this.logger = logger;
+        this.debug = debug;
         this.resolver = new ModelResolver(assets, logger, mcVersion);
         this.splitter = new TextureSplitter();
         this.packer = new HeadSkinPacker();
@@ -145,7 +149,7 @@ public final class BlockBaker {
 
         Optional<BlockModel> modelOpt = resolver.resolve(key.block());
         if (modelOpt.isEmpty()) {
-            logger.fine("[runtime-bake] " + key + " unsupported (non-cube or asset missing)");
+            if (debug.getAsBoolean()) logger.info("[runtime-bake] " + key + " unsupported (non-cube or asset missing)");
             return false;
         }
         BlockModel model = modelOpt.get();
@@ -154,7 +158,7 @@ public final class BlockBaker {
                 // Tinted block requested without a tint — caller (e.g.
                 // build-time) didn't resolve a biome color. Skip; the
                 // runtime listener will provide a tint when available.
-                logger.fine("[runtime-bake] " + key + " skipped (tinted block, no tint provided)");
+                if (debug.getAsBoolean()) logger.info("[runtime-bake] " + key + " skipped (tinted block, no tint provided)");
                 return false;
             }
             // Multiply all six face PNGs by the resolved tint. Downstream

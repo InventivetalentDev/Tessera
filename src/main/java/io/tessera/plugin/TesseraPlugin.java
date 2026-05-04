@@ -70,7 +70,7 @@ public final class TesseraPlugin extends JavaPlugin {
         runtimeHeads.loadInto(registry);
         registry.setPersistence(runtimeHeads);
         this.bakerExecutor = Executors.newFixedThreadPool(2, named("Tessera-Baker"));
-        this.baker = new BlockBaker(getLogger(), assets, mcVersion, registry, uploader, diskCache, pngDir, bakerExecutor);
+        this.baker = new BlockBaker(getLogger(), () -> this.config.debug(), assets, mcVersion, registry, uploader, diskCache, pngDir, bakerExecutor);
 
         // Inject the vanilla grass/foliage colormaps into NMS so server-side
         // Biome.getGrassColor() / getFoliageColor() return real per-biome

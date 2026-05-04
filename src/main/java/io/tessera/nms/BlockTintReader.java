@@ -13,6 +13,7 @@ import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -48,6 +49,7 @@ public final class BlockTintReader {
     private BlockTintReader() {}
 
     private static volatile boolean colormapsLoaded;
+    private static final AtomicBoolean tintReadErrorLogged = new AtomicBoolean();
 
     // ColorResolver lambdas mirror what net.minecraft.client.renderer.BiomeColors
     // does on the client; that class isn't on the server classpath so we
@@ -96,6 +98,10 @@ public final class BlockTintReader {
             // we do downstream wants the alpha bit set.
             return 0xFF000000 | (rgb & 0xFFFFFF);
         } catch (LinkageError | RuntimeException e) {
+            if (tintReadErrorLogged.compareAndSet(false, true)) {
+                Logger.getLogger("Tessera").log(Level.WARNING,
+                        "[Tessera] BlockTintReader.read failed (Paper API incompatibility?) — tinted blocks will skip baking", e);
+            }
             return 0;
         }
     }
