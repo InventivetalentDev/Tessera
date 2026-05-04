@@ -13,10 +13,6 @@ export default defineConfig({
       { text: 'Configuration', link: '/configuration' },
       { text: 'Commands', link: '/commands' },
       { text: 'Permissions', link: '/permissions' },
-      {
-        text: 'GitHub',
-        link: 'https://github.com/InventivetalentDev/BlockBreakPhysics',
-      },
     ],
     sidebar: [
       {
@@ -36,17 +32,10 @@ export default defineConfig({
         items: [{ text: 'Debug Commands', link: '/debug-commands' }],
       },
     ],
-    socialLinks: [
-      {
-        icon: 'github',
-        link: 'https://github.com/InventivetalentDev/BlockBreakPhysics',
-      },
-    ],
     search: {
       provider: 'local',
     },
     footer: {
-      message: 'Released under the MIT License.',
       copyright: 'Tessera plugin documentation',
     },
   },

@@ -13,8 +13,8 @@ hero:
       text: Configuration
       link: /configuration
     - theme: alt
-      text: View on GitHub
-      link: https://github.com/InventivetalentDev/BlockBreakPhysics
+      text: Commands
+      link: /commands
 
 features:
   - title: Per-chunk break animations
