@@ -70,7 +70,7 @@ animation:
   #   shrink - chunk uniformly scales toward 0 (smooth collapse).
   #   pop    - chunk stays at full size until the wave hits it, then
   #            disappears in one tick (crumble look).
-  style: shrink
+  style: pop
 
   # Total duration of the directional break animation in milliseconds.
   # Only used in 'post-break' animation mode (and as the instamine fallback).
@@ -154,4 +154,4 @@ interaction:
   # Fast blocks that are partially spawned before the break look worse than
   # vanilla — the lattice is half-filled and barely visible. 1000ms means
   # only blocks with a full-health break time ≥ 1 second get the animation.
-  minBreakDurationMs: 1000
+  minBreakDurationMs: 500

@@ -77,7 +77,7 @@ public record TesseraConfig(
         AnimationMode mode = parseAnimationMode(
                 readString(cfg, "animation.mode", "animationMode", "progress"));
         CollapseStyle style = parseCollapseStyle(
-                readString(cfg, "animation.style", "collapseStyle", "shrink"));
+                readString(cfg, "animation.style", "collapseStyle", "pop"));
 
         Transport transport = parseTransport(
                 readString(cfg, "transport", "transport", "packet"));
@@ -100,7 +100,7 @@ public record TesseraConfig(
                 readBool(cfg, "interaction.startOnLeftClick", "startOnLeftClick", true),
                 readLong(cfg, "interaction.leftClickGraceMs", "leftClickGraceMs", 500L),
                 readBool(cfg, "interaction.eagerPreload", "eagerPreload", false),
-                readInt(cfg, "interaction.minBreakDurationMs", "minBreakDurationMs", 1000),
+                readInt(cfg, "interaction.minBreakDurationMs", "minBreakDurationMs", 500),
                 cfg.getBoolean("enableTintedBlocks", true),
                 readBool(cfg, "debug", "debug", false),
                 transport
