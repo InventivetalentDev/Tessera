@@ -39,34 +39,26 @@ public final class TesseraPlugin extends JavaPlugin {
         this.config = TesseraConfig.from(getConfig());
 
         String mcVersion = Bukkit.getMinecraftVersion();
+        // Bundled heads file is per-grid-size: heads-4.json, heads-8.json, …
+        // If no file exists for the configured size, the registry starts
+        // empty and runtime baking populates it (requires mineskinApiKey).
+        int gridN = config.chunkGridSize();
         this.registry = HeadsRegistry.loadFromClasspath(
-                getLogger(), "/heads.json", config.chunkGridSize(), mcVersion);
-        if (registry.gridN() != config.chunkGridSize()) {
-            // Bundled heads.json was baked at a different chunk size than
-            // the current config — its chunk coordinates are at the wrong
-            // resolution to render. Drop the bundled entries; runtime
-            // baking will repopulate them at the configured size (each
-            // block gets re-uploaded to MineSkin on first use).
-            getLogger().warning("config.chunkGridSize=" + config.chunkGridSize()
-                    + " but bundled heads.json was baked at gridN=" + registry.gridN()
-                    + ". Discarding bundled entries; every block will be re-baked"
-                    + " at runtime via MineSkin (requires mineskinApiKey).");
-            this.registry = HeadsRegistry.empty(getLogger(), config.chunkGridSize(), mcVersion);
-        }
+                getLogger(), "/heads-" + gridN + ".json", gridN, mcVersion);
         this.itemFactory = new HeadItemFactory();
         DisplayTransport transport = pickTransport(config);
         this.blockFactory = new FakeBlockFactory(itemFactory, registry, transport);
 
         // Runtime baker: kicks in when a player breaks a block we don't
-        // have in heads.json yet. Uses a small thread pool so multiple
-        // concurrent first-time breaks don't block each other.
+        // have in the bundled heads file yet. Uses a small thread pool so
+        // multiple concurrent first-time breaks don't block each other.
         this.uploader = new SkinUploader(
                 getLogger(), "Tessera/" + getDescription().getVersion(), config.mineskinApiKey());
         Path cacheRoot = getDataFolder().toPath().resolve("cache");
         Path pngDir = cacheRoot.resolve("heads");
         Path assetsDir = cacheRoot.resolve("assets");
         Path skinCacheFile = cacheRoot.resolve("skins.json");
-        Path runtimeHeadsFile = cacheRoot.resolve("runtime-heads.json");
+        Path runtimeHeadsFile = cacheRoot.resolve("heads-" + gridN + ".json");
         McAssetClient assets = new McAssetClient(assetsDir, getLogger());
         this.diskCache = new SkinDiskCache(getLogger(), skinCacheFile);
 

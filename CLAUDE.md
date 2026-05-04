@@ -32,11 +32,13 @@ bytecode, so any JDK ≥21 can consume the artifact.
   yet; if you add one, use Jupiter and don't pull in JUnit 4. Run a single
   test class with `gradle test --tests <fqcn>`.
 - `MINESKIN_API_KEY=… gradle tesseraBake` — runs `io.tessera.skin.bake.BakeMain`
-  off-server. Reads `bake-blocks.txt`, writes `src/main/resources/heads.json`,
-  caches downloaded vanilla assets + intermediate PNGs in `build/tessera-cache/`.
-  Idempotent — re-running on the same input is a no-op once `heads.json` is
-  populated. Can run *without* `MINESKIN_API_KEY` to verify the asset →
-  split → pack → assemble pipeline, but skins won't be uploaded.
+  off-server. Reads `bake-blocks.txt`, writes
+  `src/main/resources/heads-<gridN>.json` (defaults to `heads-4.json`; pass
+  `-PgridN=<N>` to bake a different size), caches downloaded vanilla assets
+  + intermediate PNGs in `build/tessera-cache/`. Idempotent — re-running on
+  the same input is a no-op once the file is populated. Can run *without*
+  `MINESKIN_API_KEY` to verify the asset → split → pack → assemble pipeline,
+  but skins won't be uploaded. Multiple grid sizes coexist as separate files.
 
 `bake-blocks.txt` is the curated v1 fixture list of block IDs to pre-bake at
 build time so a freshly installed plugin handles those blocks with no network
@@ -57,10 +59,15 @@ Tessera has two largely independent halves wired together at startup by
 
 Block ID → MineSkin texture. Same code runs in two contexts:
 
-- **Build-time** via `BakeMain` (gradle `tesseraBake`), output is bundled
-  `heads.json`.
+- **Build-time** via `BakeMain` (gradle `tesseraBake`), output is the
+  bundled `heads-<gridN>.json` resource.
 - **Runtime** via `BlockBaker`, output is registered into the live
-  `HeadsRegistry` and persisted in `plugins/Tessera/cache/skins.json`.
+  `HeadsRegistry` and persisted in `plugins/Tessera/cache/heads-<gridN>.json`
+  (alongside the PNG-hash dedup cache `cache/skins.json`).
+
+Both files use the same JSON schema (see `HeadsJsonCodec`) and live one per
+grid size, so switching `chunkGridSize` in config doesn't discard previously
+uploaded skins — each size keeps its own state.
 
 Pipeline stages (`io.tessera.skin.bake.BlockBaker.doBake` / `BakeMain.bakeOne`):
 
@@ -125,11 +132,10 @@ FakeBlock at spawn time:
    blockstate JSON's `variants` map, picks the variant with `x=0,y=0` (or the
    first one as fallback) as the canonical model to extract textures from,
    and records each variant key's `(xDeg, yDeg)` as a
-   `ModelResolver.VariantRotation`. `BakeMain` writes those into
-   `heads.json` under `blocks.<id>.variants` (alongside `chunks`). The new
-   schema wraps each block as `{ "chunks": {…}, "variants": {…} }`; the
-   legacy flat schema (chunk keys at top level, no wrapper) is still parsed
-   by `HeadsRegistry.parseBlock` for backward compat.
+   `ModelResolver.VariantRotation`. `BakeMain` writes those into the per-
+   grid-size `heads-<N>.json` under `blocks.<id>.variants` (alongside
+   `chunks`). Both bundled and runtime files share the schema defined by
+   `HeadsJsonCodec`: each block wraps as `{ "chunks": {…}, "variants": {…} }`.
 2. **Spawn time** (`plugin.BlockBreakListener.spawn`):
    `VariantKey.fromBlockData(blockData)` produces a vanilla-format key (e.g.
    `axis=y`, `facing=west,lit=false`); `VariantKey.pickMatching` narrows it

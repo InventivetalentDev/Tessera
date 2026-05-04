@@ -1,12 +1,10 @@
 package io.tessera.skin;
 
-import com.google.gson.JsonElement;
-import com.google.gson.JsonObject;
-import com.google.gson.JsonParser;
 import io.tessera.assets.model.ModelResolver;
 import io.tessera.core.BakeKey;
 import io.tessera.core.BlockKey;
 import io.tessera.core.ChunkCoord;
+import io.tessera.skin.bake.HeadsJsonCodec;
 import org.joml.Quaternionf;
 
 import java.io.IOException;
@@ -16,7 +14,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Collections;
 import java.util.HashMap;
-import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -32,32 +29,11 @@ import java.util.logging.Logger;
  * vanilla animation. Server admins can extend the set by editing
  * {@code bake-blocks.txt} and re-running {@code ./gradlew tesseraBake}.
  *
- * <p>heads.json schema:
- * <pre>{@code
- * {
- *   "version": "1.21.4",
- *   "gridN": 4,
- *   "blocks": {
- *     "minecraft:stone": {
- *       "chunks": {
- *         "0,0,0": { "skinHash": "abc..." },
- *         "1,0,0": { "skinHash": "abc..." }
- *       },
- *       "variants": {
- *         "axis=y": { "x": 0, "y": 0 },
- *         "axis=x": { "x": 90, "y": 90 }
- *       }
- *     }
- *   },
- *   "skins": {
- *     "abc...": { "value": "ey...", "signature": "...", "mineskinUuid": "..." }
- *   }
- * }
- * }</pre>
- * The two-level structure (block→hash, hash→texture) means uniform blocks
- * inflate to ~1KB instead of ~50KB on disk. The legacy schema (chunk
- * coordinates as top-level keys under each block, no {@code chunks}/{@code variants}
- * wrapper) is also accepted for backward compat — see {@link #parseBlock}.
+ * <p>The on-disk schema is documented on {@link HeadsJsonCodec}. The bundled
+ * file is loaded from the classpath as {@code /heads-{gridN}.json} so multiple
+ * grid sizes can coexist; {@link io.tessera.skin.bake.RuntimeHeadsStore}
+ * persists runtime-baked entries to {@code cache/heads-{gridN}.json} under
+ * the same schema.
  *
  * <p>The optional {@code variants} map carries blockstate rotation hints
  * captured at bake time. Spawn-time lookup via {@link #rotationFor} returns
@@ -119,7 +95,7 @@ public final class HeadsRegistry {
         return new HeadsRegistry(logger, gridN, version, Collections.emptyMap(), Collections.emptyMap());
     }
 
-    /** Load from a classpath resource (e.g. {@code "/heads.json"}). Returns an empty registry on missing or invalid content. */
+    /** Load from a classpath resource (e.g. {@code "/heads-4.json"}). Returns an empty registry on missing or invalid content. */
     public static HeadsRegistry loadFromClasspath(Logger logger, String resource, int defaultGridN, String defaultVersion) {
         try (InputStream in = HeadsRegistry.class.getResourceAsStream(resource)) {
             if (in == null) {
@@ -148,79 +124,27 @@ public final class HeadsRegistry {
     }
 
     private static HeadsRegistry parse(Logger logger, String json, int defaultGridN, String defaultVersion) {
-        JsonObject root = JsonParser.parseString(json).getAsJsonObject();
-        int gridN = root.has("gridN") ? root.get("gridN").getAsInt() : defaultGridN;
-        String version = root.has("version") ? root.get("version").getAsString() : defaultVersion;
-
-        Map<String, Entry> skinByHash = new HashMap<>();
-        if (root.has("skins")) {
-            for (Map.Entry<String, JsonElement> e : root.getAsJsonObject("skins").entrySet()) {
-                JsonObject skin = e.getValue().getAsJsonObject();
-                skinByHash.put(e.getKey(), new Entry(
-                        e.getKey(),
-                        skin.get("value").getAsString(),
-                        skin.get("signature").getAsString(),
-                        skin.has("mineskinUuid") ? skin.get("mineskinUuid").getAsString() : null));
-            }
+        HeadsJsonCodec.Document<BlockKey> doc = HeadsJsonCodec.read(
+                json, BlockKey::of, defaultGridN, defaultVersion, logger);
+        // The caller selects the file by gridN (e.g. /heads-4.json), so an
+        // embedded gridN that disagrees means the file was misnamed or
+        // hand-edited. Refuse rather than silently render at the wrong size.
+        if (doc.gridN() != defaultGridN) {
+            logger.warning("[heads-registry] expected gridN=" + defaultGridN
+                    + " but file declares gridN=" + doc.gridN() + "; ignoring");
+            return new HeadsRegistry(logger, defaultGridN, defaultVersion,
+                    Map.of(), Map.of());
         }
 
         Map<BakeKey, Map<ChunkCoord, Entry>> blocks = new HashMap<>();
         Map<BlockKey, Map<String, ModelResolver.VariantRotation>> variantRotations = new HashMap<>();
-        if (root.has("blocks")) {
-            for (Map.Entry<String, JsonElement> blockEntry : root.getAsJsonObject("blocks").entrySet()) {
-                BlockKey key = BlockKey.of(blockEntry.getKey());
-                ParsedBlock parsed = parseBlock(logger, key, blockEntry.getValue().getAsJsonObject(), skinByHash);
-                blocks.put(BakeKey.untinted(key), parsed.chunks);
-                if (!parsed.variants.isEmpty()) variantRotations.put(key, parsed.variants);
-            }
+        for (Map.Entry<BlockKey, HeadsJsonCodec.Block> e : doc.blocks().entrySet()) {
+            HeadsJsonCodec.Block b = e.getValue();
+            blocks.put(BakeKey.untinted(e.getKey()), Map.copyOf(b.chunks()));
+            if (!b.variants().isEmpty()) variantRotations.put(e.getKey(), Map.copyOf(b.variants()));
         }
-        return new HeadsRegistry(logger, gridN, version, Map.copyOf(blocks), Map.copyOf(variantRotations));
-    }
-
-    private record ParsedBlock(Map<ChunkCoord, Entry> chunks, Map<String, ModelResolver.VariantRotation> variants) {}
-
-    /**
-     * Parse one block's JSON object. Accepts both the new schema
-     * ({@code {"chunks": {...}, "variants": {...}}}) and the legacy schema
-     * (chunk-coord keys directly at the top level, no wrapper). Variant
-     * entries are {@code {"x": deg, "y": deg}}; missing components default
-     * to 0.
-     */
-    private static ParsedBlock parseBlock(Logger logger, BlockKey key, JsonObject blockObj,
-                                          Map<String, Entry> skinByHash) {
-        Map<ChunkCoord, Entry> chunks = new LinkedHashMap<>();
-        Map<String, ModelResolver.VariantRotation> variants = new LinkedHashMap<>();
-
-        JsonObject chunksObj = blockObj.has("chunks") ? blockObj.getAsJsonObject("chunks") : blockObj;
-        for (Map.Entry<String, JsonElement> chunkEntry : chunksObj.entrySet()) {
-            String k = chunkEntry.getKey();
-            // Wrapper schema exposes "chunks" and "variants" siblings —
-            // skip those when iterating legacy-style.
-            if (chunksObj == blockObj && (k.equals("chunks") || k.equals("variants"))) continue;
-            ChunkCoord coord;
-            try {
-                coord = ChunkCoord.parseKey(k);
-            } catch (Exception e) {
-                continue;
-            }
-            String hash = chunkEntry.getValue().getAsJsonObject().get("skinHash").getAsString();
-            Entry skin = skinByHash.get(hash);
-            if (skin == null) {
-                logger.warning("[" + key + " " + coord.asKey() + "] references missing skin hash " + hash);
-                continue;
-            }
-            chunks.put(coord, skin);
-        }
-
-        if (blockObj.has("variants")) {
-            for (Map.Entry<String, JsonElement> ve : blockObj.getAsJsonObject("variants").entrySet()) {
-                JsonObject v = ve.getValue().getAsJsonObject();
-                int xDeg = v.has("x") ? v.get("x").getAsInt() : 0;
-                int yDeg = v.has("y") ? v.get("y").getAsInt() : 0;
-                variants.put(ve.getKey(), new ModelResolver.VariantRotation(xDeg, yDeg));
-            }
-        }
-        return new ParsedBlock(Map.copyOf(chunks), Map.copyOf(variants));
+        return new HeadsRegistry(logger, doc.gridN(), doc.version(),
+                Map.copyOf(blocks), Map.copyOf(variantRotations));
     }
 
     public int gridN() { return gridN; }

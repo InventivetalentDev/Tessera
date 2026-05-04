@@ -16,11 +16,11 @@ transport: packet
 #                non-uniform textures — set maxConcurrentFakeBlocks
 #                accordingly.
 #
-# WARNING: changing this invalidates every previously baked block.
-# Bundled heads.json entries baked at the old gridN are dropped on
-# startup, and every block has to be re-uploaded to MineSkin at the new
-# size on demand as players break blocks — set mineskin.apiKey below so
-# runtime baking can run.
+# Heads files are per-grid-size: bundled `heads-<N>.json` from the jar
+# and runtime cache `plugins/Tessera/cache/heads-<N>.json`. Switching
+# this value picks a different file — switching back later restores the
+# previous size's state. If no file exists for the new size, blocks are
+# re-baked at runtime on demand (set mineskin.apiKey below).
 chunkGridSize: 4
 
 # Bake biome-tinted blocks (grass, leaves, water, vines) on demand. The
@@ -36,9 +36,9 @@ debug: false
 
 mineskin:
   # API key — required for runtime uploads of blocks not in the bundled
-  # heads.json. Get one at https://account.mineskin.org/.
-  # Without a key the plugin only renders blocks present in heads.json
-  # and falls back to vanilla particles for anything else.
+  # heads-<N>.json. Get one at https://account.mineskin.org/.
+  # Without a key the plugin only renders blocks present in the bundled
+  # file and falls back to vanilla particles for anything else.
   apiKey: ""
 
 materials:
