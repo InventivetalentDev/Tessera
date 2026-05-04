@@ -51,7 +51,7 @@ class TesseraConfigTest {
         assertEquals(4, cfg.chunkGridSize());
         assertEquals(8, cfg.maxConcurrentFakeBlocks());
         assertEquals(AnimationMode.PROGRESS, cfg.animationMode());
-        assertEquals(CollapseStyle.SHRINK, cfg.collapseStyle());
+        assertEquals(CollapseStyle.POP, cfg.collapseStyle());
         assertEquals(600, cfg.effectDurationMs());
         assertEquals(0.25d, cfg.waveWindow());
         assertFalse(cfg.fillInterior());
