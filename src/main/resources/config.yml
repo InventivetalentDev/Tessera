@@ -30,6 +30,10 @@ chunkGridSize: 4
 # concern — tinted blocks then fall back to the vanilla particle animation.
 enableTintedBlocks: true
 
+# Send anonymous usage statistics to bStats (https://bstats.org/plugin/bukkit/Tessera/31093).
+# Disable to opt out.
+metrics: true
+
 # Verbose logging for asset resolution, skin packing, and progress-mode
 # state transitions (spawn / transfer / reverse / break / watchdog).
 debug: false

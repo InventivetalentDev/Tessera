@@ -11,12 +11,12 @@ import io.tessera.skin.bake.RuntimeHeadsStore;
 import io.tessera.transport.DisplayTransport;
 import io.tessera.transport.bukkit.BukkitDisplayTransport;
 import io.tessera.transport.packet.PacketDisplayTransport;
+import org.bstats.bukkit.Metrics;
 import org.bukkit.Bukkit;
 import org.bukkit.command.PluginCommand;
 import org.bukkit.plugin.java.JavaPlugin;
 
 import java.nio.file.Path;
-import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -94,6 +94,8 @@ public final class TesseraPlugin extends JavaPlugin {
         getLogger().info("Tessera enabled: gridN=" + config.chunkGridSize()
                 + ", mcVersion=" + mcVersion
                 + ", mineskin=" + (config.mineskinApiKey().isBlank() ? "off" : "configured"));
+
+        if (config.metrics()) new Metrics(this, 31093);
     }
 
     @Override

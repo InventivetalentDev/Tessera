@@ -44,6 +44,7 @@ dependencies {
     // and needs it on the classpath. Use implementation; the shadow jar will
     // include it but the runtime plugin just sees Paper's copy first.
     implementation("org.joml:joml:1.10.5")
+    implementation("org.bstats:bstats-bukkit:3.2.1")
 
     // MockBukkit boots a fake Bukkit runtime in-JVM so we can integration-test
     // listeners/commands without spinning up a real Paper server. We use the
@@ -75,6 +76,12 @@ tasks.shadowJar {
     archiveClassifier.set("")
     relocate("org.mineskin",    "io.tessera.shaded.mineskin")
     relocate("com.google.gson", "io.tessera.shaded.gson")
+
+    dependencies {
+        // Only merge bStats into the final jar, no other dependencies
+        exclude { it.moduleGroup != "org.bstats" }
+    }
+    relocate("org.bstats", project.group.toString())
 }
 
 tasks.assemble {

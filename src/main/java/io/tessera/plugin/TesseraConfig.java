@@ -35,6 +35,7 @@ public record TesseraConfig(
         boolean eagerPreload,
         int minBreakDurationMs,
         boolean enableTintedBlocks,
+        boolean metrics,
         boolean debug,
         Transport transport
 ) {
@@ -102,6 +103,7 @@ public record TesseraConfig(
                 readBool(cfg, "interaction.eagerPreload", "eagerPreload", false),
                 readInt(cfg, "interaction.minBreakDurationMs", "minBreakDurationMs", 500),
                 cfg.getBoolean("enableTintedBlocks", true),
+                cfg.getBoolean("metrics", true),
                 readBool(cfg, "debug", "debug", false),
                 transport
         );
