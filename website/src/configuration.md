@@ -12,6 +12,7 @@ old values).
 | `transport`           | enum    | `packet`  | Entity transport backend. `packet` sends raw clientbound packets directly to the breaking player only — no server-side entity tracking, best performance. `bukkit` uses the Paper `World.spawn()` API as a safer fallback if a Minecraft update renames the internal `Display` fields the packet path uses via reflection. |
 | `chunkGridSize`       | integer | `4`       | How many chunks per axis each block is split into. Must divide 16 (block textures are 16×16 px) — permitted values: `1`, `2`, `4`, `8`, `16`. See the warning below. |
 | `enableTintedBlocks`  | boolean | `true`    | Bake biome-tinted blocks (grass, leaves, water, vines) on demand. The resolved per-biome tint is read at break time and multiplied into the source texture, so each distinct biome tint produces a separate MineSkin upload the first time it's encountered. Disable to fall back to the vanilla particle animation for tinted blocks. |
+| `metrics`             | boolean | `true`    | Send anonymous usage statistics to [bStats](https://bstats.org/plugin/bukkit/Tessera/31093). Set to `false` to opt out. |
 | `debug`               | boolean | `false`   | Verbose logging for asset resolution, skin packing, and progress-mode state transitions (spawn / transfer / reverse / break / watchdog). |
 
 ::: warning chunkGridSize re-bakes everything
