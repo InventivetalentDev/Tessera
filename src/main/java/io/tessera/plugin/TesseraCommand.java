@@ -5,6 +5,7 @@ import io.tessera.assemble.DebugGridSpawner;
 import io.tessera.assemble.FaceRotations;
 import io.tessera.assemble.FakeBlockFactory;
 import io.tessera.assemble.HeadRotations;
+import io.tessera.core.BakeKey;
 import io.tessera.core.BlockKey;
 import io.tessera.core.FaceDir;
 import io.tessera.core.FakeBlock;
@@ -34,6 +35,10 @@ import java.util.Locale;
  *
  * <pre>
  *   /tessera test [material] [static]   bake (if needed) + spawn FakeBlock; "static" = no shrink
+ *   /tessera bake &lt;material&gt; [tint:#RRGGBB]
+ *                                       bake without spawning; reports upload count + completion.
+ *                                       Tint is required for biome-tinted blocks (grass, leaves,
+ *                                       water) — supply the resolved biome multiplier as 6 hex digits.
  *   /tessera reload                     reload config.yml
  *
  *   /tessera debug grid [material]      preview cube lattice with default Steve skin
@@ -97,11 +102,12 @@ public final class TesseraCommand implements CommandExecutor {
     @Override
     public boolean onCommand(CommandSender sender, Command cmd, String label, String[] args) {
         if (args.length == 0) {
-            sender.sendMessage("§7/tessera test [material] | reload | debug face|center …");
+            sender.sendMessage("§7/tessera test [material] | bake <material> | reload | debug face|center …");
             return true;
         }
         return switch (args[0].toLowerCase(Locale.ROOT)) {
             case "test"   -> handleTest(sender, args);
+            case "bake"   -> handleBake(sender, args);
             case "reload" -> handleReload(sender);
             case "debug"  -> handleDebug(sender, args);
             default -> {
@@ -189,6 +195,104 @@ public final class TesseraCommand implements CommandExecutor {
                 plugin);
         new DirectionalShrinkEffect(plugin.tesseraConfig().collapseStyle()).applyTimed(fb, ctx);
         sender.sendMessage("§aSpawned FakeBlock for " + key + " at " + formatLoc(target));
+    }
+
+    /**
+     * Trigger a bake for {@code <material>} without spawning anything. Useful
+     * for warming the registry / disk cache (e.g. after editing
+     * {@code bake-blocks.txt} on a running server) without disturbing the
+     * world. Reports the upload count once the splitter/packer has decided
+     * how many MineSkin uploads are actually required, and a completion
+     * message when the bake finishes (success or failure).
+     *
+     * <p>Biome-tinted blocks (grass, leaves, water) need a colour multiplier
+     * to bake — pass {@code tint:#RRGGBB} with the resolved hex (the same
+     * value {@code BlockTintReader} would read off a player breaking the
+     * block in the target biome). Without it the bake fails the same way the
+     * runtime listener does.
+     */
+    private boolean handleBake(CommandSender sender, String[] args) {
+        if (args.length < 2) {
+            sender.sendMessage("§c/tessera bake <material> [tint:#RRGGBB]");
+            return true;
+        }
+        Material mat = Material.matchMaterial(args[1]);
+        if (mat == null) {
+            sender.sendMessage("§cUnknown material: " + args[1]);
+            return true;
+        }
+        BlockKey block = BlockKey.of(mat.getKey().getNamespace() + ":" + mat.getKey().getKey());
+        int tintArgb = 0;
+        for (int i = 2; i < args.length; i++) {
+            String a = args[i];
+            String lower = a.toLowerCase(Locale.ROOT);
+            if (lower.startsWith("tint:")) {
+                String hex = a.substring(5);
+                if (hex.startsWith("#")) hex = hex.substring(1);
+                if (hex.length() != 6) {
+                    sender.sendMessage("§cInvalid tint '" + a + "': expected 6 hex digits (tint:#RRGGBB).");
+                    return true;
+                }
+                try {
+                    int rgb = Integer.parseInt(hex, 16);
+                    // Match BlockTintReader's stable-alpha convention so the
+                    // same biome colour produces the same BakeKey regardless
+                    // of whether the user typed the leading FF.
+                    tintArgb = 0xFF000000 | (rgb & 0xFFFFFF);
+                } catch (NumberFormatException nfe) {
+                    sender.sendMessage("§cInvalid tint '" + a + "': not a hex colour.");
+                    return true;
+                }
+            } else {
+                sender.sendMessage("§cUnknown argument: " + a);
+                return true;
+            }
+        }
+        BakeKey bakeKey = new BakeKey(block, tintArgb);
+        if (registry.has(bakeKey)) {
+            sender.sendMessage("§a" + bakeKey + " is already baked; nothing to do.");
+            sender.sendMessage("§7Use §f/tessera debug rebake " + mat.getKey().getKey()
+                    + "§7 to invalidate first if you want to re-upload.");
+            return true;
+        }
+        if (plugin.tesseraConfig().mineskinApiKey().isBlank()) {
+            sender.sendMessage("§c" + bakeKey + " not baked and no MineSkin API key configured.");
+            sender.sendMessage("§7Set §fmineskinApiKey§7 in config.yml, /tessera reload, then retry.");
+            return true;
+        }
+        sender.sendMessage("§eBaking " + bakeKey + " ...");
+        long start = System.currentTimeMillis();
+        baker.bake(bakeKey, plan -> Bukkit.getScheduler().runTask(plugin, () -> {
+            int cacheHits = plan.uniqueHeads() - plan.needUpload();
+            if (plan.needUpload() == 0) {
+                sender.sendMessage("§7" + bakeKey + ": " + plan.uniqueHeads() + " unique head"
+                        + (plan.uniqueHeads() == 1 ? "" : "s") + " across "
+                        + plan.totalChunks() + " chunks - all served from cache, no uploads.");
+            } else {
+                sender.sendMessage("§7" + bakeKey + ": uploading " + plan.needUpload() + " new skin"
+                        + (plan.needUpload() == 1 ? "" : "s") + " to MineSkin §8(" + plan.uniqueHeads()
+                        + " unique head" + (plan.uniqueHeads() == 1 ? "" : "s") + " across "
+                        + plan.totalChunks() + " chunks; " + cacheHits + " cache hit"
+                        + (cacheHits == 1 ? "" : "s") + ").");
+            }
+        })).whenComplete((ok, ex) -> Bukkit.getScheduler().runTask(plugin, () -> {
+            long elapsed = System.currentTimeMillis() - start;
+            if (ex != null) {
+                sender.sendMessage("§cBake threw: " + ex.getMessage());
+            } else if (ok == null || !ok) {
+                if (!bakeKey.isTinted()) {
+                    sender.sendMessage("§cBake failed for " + bakeKey
+                            + " (unsupported block, missing biome tint, partial upload, or error - see console).");
+                    sender.sendMessage("§7If this is a tinted block (grass, leaves, water), pass §ftint:#RRGGBB§7.");
+                } else {
+                    sender.sendMessage("§cBake failed for " + bakeKey
+                            + " (unsupported block, partial upload, or error - see console).");
+                }
+            } else {
+                sender.sendMessage("§aBake complete for " + bakeKey + " §8(" + elapsed + " ms)");
+            }
+        }));
+        return true;
     }
 
     private boolean handleReload(CommandSender sender) {

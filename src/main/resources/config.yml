@@ -16,11 +16,11 @@ transport: packet
 #                non-uniform textures — set maxConcurrentFakeBlocks
 #                accordingly.
 #
-# WARNING: changing this invalidates every previously baked block.
-# Bundled heads.json entries baked at the old gridN are dropped on
-# startup, and every block has to be re-uploaded to MineSkin at the new
-# size on demand as players break blocks — set mineskin.apiKey below so
-# runtime baking can run.
+# Heads files are per-grid-size: bundled `heads-<N>.json` from the jar
+# and runtime cache `plugins/Tessera/cache/heads-<N>.json`. Switching
+# this value picks a different file — switching back later restores the
+# previous size's state. If no file exists for the new size, blocks are
+# re-baked at runtime on demand (set mineskin.apiKey below).
 chunkGridSize: 4
 
 # Bake biome-tinted blocks (grass, leaves, water, vines) on demand. The
@@ -36,9 +36,9 @@ debug: false
 
 mineskin:
   # API key — required for runtime uploads of blocks not in the bundled
-  # heads.json. Get one at https://account.mineskin.org/.
-  # Without a key the plugin only renders blocks present in heads.json
-  # and falls back to vanilla particles for anything else.
+  # heads-<N>.json. Get one at https://account.mineskin.org/.
+  # Without a key the plugin only renders blocks present in the bundled
+  # file and falls back to vanilla particles for anything else.
   apiKey: ""
 
 materials:
@@ -142,3 +142,16 @@ interaction:
   # of extra entity traffic for every block the player looks at (~1 second
   # of extra entity lifetime per aimed-at block on average).
   eagerPreload: false
+
+  # Minimum estimated break duration in milliseconds for the animation to
+  # play. Blocks that break faster than this threshold fall back to the
+  # vanilla particle animation. The duration is estimated from
+  # Block.getBreakSpeed(player) at interaction time — it accounts for the
+  # player's tool, enchantments, and effects but not Haste/Mining Fatigue
+  # beacons on older Paper builds. Set to 0 to disable the check and always
+  # animate.
+  #
+  # Fast blocks that are partially spawned before the break look worse than
+  # vanilla — the lattice is half-filled and barely visible. 1000ms means
+  # only blocks with a full-health break time ≥ 1 second get the animation.
+  minBreakDurationMs: 1000
