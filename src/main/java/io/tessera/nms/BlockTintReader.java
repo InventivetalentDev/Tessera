@@ -5,7 +5,7 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.ColorResolver;
 import net.minecraft.world.level.FoliageColor;
 import net.minecraft.world.level.GrassColor;
-import net.minecraft.world.level.LevelAccessor;
+import net.minecraft.world.level.LevelReader;
 import org.bukkit.block.Block;
 import org.bukkit.craftbukkit.CraftWorld;
 
@@ -34,7 +34,7 @@ import java.util.logging.Logger;
  * so the existing biome-color API works server-side. Call once during
  * plugin enable, before any block-break events register.
  *
- * <p><b>Main thread only.</b> {@code LevelAccessor.getBlockTint} reads chunk
+ * <p><b>Main thread only.</b> {@code LevelReader.getBlockTint} reads chunk
  * biome storage, which races with chunk unloads off-thread. Callers must
  * invoke {@link #read} from the main server thread, capture the returned
  * int, and only then hop off to async work.
@@ -84,7 +84,7 @@ public final class BlockTintReader {
         ColorResolver resolver = pickResolver(block.getType().getKey().getKey());
         if (resolver == null) return 0;
         try {
-            LevelAccessor level = ((CraftWorld) block.getWorld()).getHandle();
+            LevelReader level = ((CraftWorld) block.getWorld()).getHandle();
             BlockPos pos = new BlockPos(block.getX(), block.getY(), block.getZ());
             int rgb = level.getBlockTint(pos, resolver);
             // Treat 0 RGB as "no tint available" (e.g. colormap not loaded
