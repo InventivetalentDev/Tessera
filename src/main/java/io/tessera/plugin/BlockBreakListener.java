@@ -68,6 +68,16 @@ public final class BlockBreakListener implements Listener {
         // (e.g. block broken by instamine, explosion, or another plugin).
         progressListener.clearPreloadsAt(posKey);
 
+        // Mirror the progress listener's fast-break gate: if the block would have
+        // been skipped there (estimated duration < minBreakDurationMs), don't spawn
+        // a post-break animation either — it would play on already-empty air.
+        int minDuration = cfg.minBreakDurationMs();
+        if (minDuration > 0
+                && BlockBreakProgressListener.estimateBreakDurationMs(event.getBlock(), event.getPlayer())
+                        < minDuration) {
+            return;
+        }
+
         if (!cfg.enables(key.asString())) {
             if (cfg.debug()) plugin.getLogger().info("[debug] skip " + key + " (not enabled)");
             return;
