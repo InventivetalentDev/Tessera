@@ -142,3 +142,16 @@ interaction:
   # of extra entity traffic for every block the player looks at (~1 second
   # of extra entity lifetime per aimed-at block on average).
   eagerPreload: false
+
+  # Minimum estimated break duration in milliseconds for the animation to
+  # play. Blocks that break faster than this threshold fall back to the
+  # vanilla particle animation. The duration is estimated from
+  # Block.getBreakSpeed(player) at interaction time — it accounts for the
+  # player's tool, enchantments, and effects but not Haste/Mining Fatigue
+  # beacons on older Paper builds. Set to 0 to disable the check and always
+  # animate.
+  #
+  # Fast blocks that are partially spawned before the break look worse than
+  # vanilla — the lattice is half-filled and barely visible. 1000ms means
+  # only blocks with a full-health break time ≥ 1 second get the animation.
+  minBreakDurationMs: 1000
