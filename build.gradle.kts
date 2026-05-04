@@ -77,11 +77,7 @@ tasks.shadowJar {
     relocate("org.mineskin",    "io.tessera.shaded.mineskin")
     relocate("com.google.gson", "io.tessera.shaded.gson")
 
-    dependencies {
-        // Only merge bStats into the final jar, no other dependencies
-        exclude { it.moduleGroup != "org.bstats" }
-    }
-    relocate("org.bstats", project.group.toString())
+    relocate("org.bstats", "io.tessera.shaded.bstats")
 }
 
 tasks.assemble {
