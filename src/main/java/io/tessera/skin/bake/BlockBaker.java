@@ -30,6 +30,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.function.Consumer;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -66,6 +67,15 @@ public final class BlockBaker {
 
     private final Map<BakeKey, CompletableFuture<Boolean>> inflight = new ConcurrentHashMap<>();
 
+    /**
+     * Bake-plan summary fired through the optional callback passed to
+     * {@link #bake(BlockKey, Consumer)} once the splitter and packer have
+     * decided what's actually going to happen. {@code needUpload} is the
+     * subset of {@code uniqueHeads} that missed both the in-memory registry
+     * and the persistent disk cache and will hit MineSkin.
+     */
+    public record Plan(int totalChunks, int uniqueHeads, int needUpload) {}
+
     public BlockBaker(Logger logger,
                       McAssetClient assets,
                       String mcVersion,
@@ -88,18 +98,34 @@ public final class BlockBaker {
 
     /** Untinted convenience overload — equivalent to {@code bake(BakeKey.untinted(key))}. */
     public CompletableFuture<Boolean> bake(BlockKey key) {
-        return bake(BakeKey.untinted(key));
+        return bake(BakeKey.untinted(key), null);
     }
 
     public CompletableFuture<Boolean> bake(BakeKey key) {
-        return inflight.computeIfAbsent(key, this::startBake);
+        return bake(key, null);
     }
 
-    private CompletableFuture<Boolean> startBake(BakeKey key) {
+    /**
+     * Same as {@link #bake(BlockKey)} but invokes {@code onPlan} as soon as
+     * the splitter/packer/cache lookup finishes and we know how many MineSkin
+     * uploads this bake actually needs. {@code onPlan} runs on the bake
+     * executor thread, so dispatch to the main thread inside it if it touches
+     * Bukkit state. Skipped entirely when an inflight bake for the same key
+     * is already running (the second caller just rides the existing future).
+     */
+    public CompletableFuture<Boolean> bake(BlockKey key, Consumer<Plan> onPlan) {
+        return bake(BakeKey.untinted(key), onPlan);
+    }
+
+    public CompletableFuture<Boolean> bake(BakeKey key, Consumer<Plan> onPlan) {
+        return inflight.computeIfAbsent(key, k -> startBake(k, onPlan));
+    }
+
+    private CompletableFuture<Boolean> startBake(BakeKey key, Consumer<Plan> onPlan) {
         boolean bypassCache = TileRotations.consumeStale();
         CompletableFuture<Boolean> f = CompletableFuture.supplyAsync(() -> {
             try {
-                return doBake(key, bypassCache);
+                return doBake(key, bypassCache, onPlan);
             } catch (Exception e) {
                 logger.log(Level.WARNING, "[runtime-bake] " + key + " failed", e);
                 return false;
@@ -109,7 +135,7 @@ public final class BlockBaker {
         return f;
     }
 
-    private boolean doBake(BakeKey key, boolean bypassCache)
+    private boolean doBake(BakeKey key, boolean bypassCache, Consumer<Plan> onPlan)
             throws IOException, ExecutionException, InterruptedException, TimeoutException {
 
         if (uploader == null || !uploader.isReady()) {
@@ -179,6 +205,14 @@ public final class BlockBaker {
             needUpload.add(head);
         }
 
+        if (onPlan != null) {
+            try {
+                onPlan.accept(new Plan(chunks.size(), packed.uniqueHeads().size(), needUpload.size()));
+            } catch (RuntimeException re) {
+                logger.warning("[runtime-bake] " + key + " onPlan callback threw: " + re.getMessage());
+            }
+        }
+
         if (!needUpload.isEmpty()) {
             logger.info("[runtime-bake] " + key + " uploading " + needUpload.size()
                     + " new skins ("
@@ -220,6 +254,19 @@ public final class BlockBaker {
 
         if (chunkMap.isEmpty()) {
             logger.warning("[runtime-bake] " + key + " produced 0 completed chunks");
+            return false;
+        }
+
+        // Don't register partial bakes: a half-populated registry entry
+        // would short-circuit the listener's `registry.has(...)` check and
+        // we'd never retry the failed chunks. The succeeded uploads are
+        // already in SkinDiskCache (keyed by post-paint PNG hash), so the
+        // next bake() call hits cache for the working subset and only
+        // re-attempts the failures — no duplicate MineSkin uploads.
+        if (chunkMap.size() < chunks.size()) {
+            logger.warning("[runtime-bake] " + key + " incomplete ("
+                    + chunkMap.size() + "/" + chunks.size()
+                    + " chunks); leaving unregistered so the next bake retries the failures.");
             return false;
         }
 

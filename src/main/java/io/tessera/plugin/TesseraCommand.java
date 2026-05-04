@@ -34,6 +34,7 @@ import java.util.Locale;
  *
  * <pre>
  *   /tessera test [material] [static]   bake (if needed) + spawn FakeBlock; "static" = no shrink
+ *   /tessera bake &lt;material&gt;            bake without spawning; reports upload count + completion
  *   /tessera reload                     reload config.yml
  *
  *   /tessera debug grid [material]      preview cube lattice with default Steve skin
@@ -97,11 +98,12 @@ public final class TesseraCommand implements CommandExecutor {
     @Override
     public boolean onCommand(CommandSender sender, Command cmd, String label, String[] args) {
         if (args.length == 0) {
-            sender.sendMessage("§7/tessera test [material] | reload | debug face|center …");
+            sender.sendMessage("§7/tessera test [material] | bake <material> | reload | debug face|center …");
             return true;
         }
         return switch (args[0].toLowerCase(Locale.ROOT)) {
             case "test"   -> handleTest(sender, args);
+            case "bake"   -> handleBake(sender, args);
             case "reload" -> handleReload(sender);
             case "debug"  -> handleDebug(sender, args);
             default -> {
@@ -189,6 +191,65 @@ public final class TesseraCommand implements CommandExecutor {
                 plugin);
         new DirectionalShrinkEffect(plugin.tesseraConfig().collapseStyle()).applyTimed(fb, ctx);
         sender.sendMessage("§aSpawned FakeBlock for " + key + " at " + formatLoc(target));
+    }
+
+    /**
+     * Trigger a bake for {@code <material>} without spawning anything. Useful
+     * for warming the registry / disk cache (e.g. after editing
+     * {@code bake-blocks.txt} on a running server) without disturbing the
+     * world. Reports the upload count once the splitter/packer has decided
+     * how many MineSkin uploads are actually required, and a completion
+     * message when the bake finishes (success or failure).
+     */
+    private boolean handleBake(CommandSender sender, String[] args) {
+        if (args.length < 2) {
+            sender.sendMessage("§c/tessera bake <material>");
+            return true;
+        }
+        Material mat = Material.matchMaterial(args[1]);
+        if (mat == null) {
+            sender.sendMessage("§cUnknown material: " + args[1]);
+            return true;
+        }
+        BlockKey key = BlockKey.of(mat.getKey().getNamespace() + ":" + mat.getKey().getKey());
+        if (registry.has(key)) {
+            sender.sendMessage("§a" + key + " is already baked; nothing to do.");
+            sender.sendMessage("§7Use §f/tessera debug rebake " + mat.getKey().getKey()
+                    + "§7 to invalidate first if you want to re-upload.");
+            return true;
+        }
+        if (plugin.tesseraConfig().mineskinApiKey().isBlank()) {
+            sender.sendMessage("§c" + key + " not baked and no MineSkin API key configured.");
+            sender.sendMessage("§7Set §fmineskinApiKey§7 in config.yml, /tessera reload, then retry.");
+            return true;
+        }
+        sender.sendMessage("§eBaking " + key + " ...");
+        long start = System.currentTimeMillis();
+        baker.bake(key, plan -> Bukkit.getScheduler().runTask(plugin, () -> {
+            int cacheHits = plan.uniqueHeads() - plan.needUpload();
+            if (plan.needUpload() == 0) {
+                sender.sendMessage("§7" + key + ": " + plan.uniqueHeads() + " unique head"
+                        + (plan.uniqueHeads() == 1 ? "" : "s") + " across "
+                        + plan.totalChunks() + " chunks - all served from cache, no uploads.");
+            } else {
+                sender.sendMessage("§7" + key + ": uploading " + plan.needUpload() + " new skin"
+                        + (plan.needUpload() == 1 ? "" : "s") + " to MineSkin §8(" + plan.uniqueHeads()
+                        + " unique head" + (plan.uniqueHeads() == 1 ? "" : "s") + " across "
+                        + plan.totalChunks() + " chunks; " + cacheHits + " cache hit"
+                        + (cacheHits == 1 ? "" : "s") + ").");
+            }
+        })).whenComplete((ok, ex) -> Bukkit.getScheduler().runTask(plugin, () -> {
+            long elapsed = System.currentTimeMillis() - start;
+            if (ex != null) {
+                sender.sendMessage("§cBake threw: " + ex.getMessage());
+            } else if (ok == null || !ok) {
+                sender.sendMessage("§cBake failed for " + key
+                        + " (unsupported block, partial upload, or error - see console).");
+            } else {
+                sender.sendMessage("§aBake complete for " + key + " §8(" + elapsed + " ms)");
+            }
+        }));
+        return true;
     }
 
     private boolean handleReload(CommandSender sender) {
