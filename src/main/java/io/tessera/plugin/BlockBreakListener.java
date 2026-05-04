@@ -103,7 +103,7 @@ public final class BlockBreakListener implements Listener {
         // same key, so spam-breaking the same block won't pile up MineSkin
         // requests; partial-failure bakes leave the registry empty so the
         // next bake() retries only the missing chunks via SkinDiskCache.
-        if (cfg.debug()) plugin.getLogger().info("[debug] runtime-baking " + bakeKey + " (no spawn)");
+        plugin.getLogger().info("[debug] runtime-baking " + bakeKey);
         baker.bake(bakeKey);
     }
 
