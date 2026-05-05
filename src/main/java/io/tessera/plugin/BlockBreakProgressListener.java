@@ -509,6 +509,14 @@ public final class BlockBreakProgressListener implements Listener {
         if (cfg.debug()) plugin.getLogger().info(
                 "[" + ts() + "] [debug-progress] force-break " + tb.key + " at " + worldBlock.getLocation()
                         + " by=" + player.getName());
+        // Play the original block's break sound to the breaker before invoking
+        // breakBlock. The breakBlock call destroys the world block and broadcasts
+        // LevelEvent 2001, but with the barrier mask up the breaker's client may
+        // mispredict / dedupe that sound; doing it explicitly here guarantees the
+        // breaker hears the right sound. Mark the flag so onRealBreak (invoked
+        // synchronously by breakBlock's BlockBreakEvent) doesn't double-play.
+        playBlockBreakSound(tb, player);
+        tb.breakSoundPlayed = true;
         if (!player.breakBlock(worldBlock)) {
             BlockPosKey posKey = BlockPosKey.of(tb.origin);
             TrackedBreak still = tracker.remove(posKey);
@@ -612,7 +620,10 @@ public final class BlockBreakProgressListener implements Listener {
             if (p != null) {
                 try { p.sendBlockChange(tb.origin, Material.AIR.createBlockData()); }
                 catch (RuntimeException ignored) {}
-                playBlockBreakSound(tb, p);
+                if (!tb.breakSoundPlayed) {
+                    playBlockBreakSound(tb, p);
+                    tb.breakSoundPlayed = true;
+                }
             }
             tb.barrierSent = false;
         }
