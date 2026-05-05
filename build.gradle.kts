@@ -5,7 +5,7 @@ plugins {
     id("com.gradleup.shadow")           version "8.3.10"
 }
 
-group = "io.tessera"
+group = "org.inventivetalent.tessera"
 version = "0.1.0-SNAPSHOT"
 
 java {
@@ -74,10 +74,10 @@ tasks.runServer {
 
 tasks.shadowJar {
     archiveClassifier.set("")
-    relocate("org.mineskin",    "io.tessera.shaded.mineskin")
-    relocate("com.google.gson", "io.tessera.shaded.gson")
+    relocate("org.mineskin",    "org.inventivetalent.tessera.shaded.mineskin")
+    relocate("com.google.gson", "org.inventivetalent.tessera.shaded.gson")
 
-    relocate("org.bstats", "io.tessera.shaded.bstats")
+    relocate("org.bstats", "org.inventivetalent.tessera.shaded.bstats")
 }
 
 tasks.assemble {
@@ -87,9 +87,9 @@ tasks.assemble {
 val tesseraBake by tasks.registering(JavaExec::class) {
     group = "tessera"
     description = "Pre-bake MineSkin player-head textures for blocks listed in bake-blocks.txt. Output goes to heads-<N>.json (override chunk size with -PgridN=<N>)."
-    mainClass.set("io.tessera.skin.bake.BakeMain")
+    mainClass.set("org.inventivetalent.tessera.skin.bake.BakeMain")
     classpath = sourceSets["main"].runtimeClasspath
-    val gridN = (project.findProperty("gridN") as? String) ?: "4"
+    val gridN = (project.findProperty("gridN") as? String) ?: "8"
     args = listOf(
         "--input", "bake-blocks.txt",
         "--out",   "src/main/resources/heads-$gridN.json",

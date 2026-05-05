@@ -1,6 +1,6 @@
 name: Tessera
 version: 0.1.0-SNAPSHOT
-main: io.tessera.plugin.TesseraPlugin
+main: org.inventivetalent.tessera.plugin.TesseraPlugin
 api-version: '1.21'
 authors: [inventivetalent]
 description: Splits Minecraft blocks into chunk-sized player-head display entities for break animations and effects.

@@ -9,7 +9,7 @@ vanilla block-break animation by spawning a lattice of player-head `ItemDisplay`
 entities ("FakeBlock") whose textures are baked from the block's actual textures
 and uploaded to MineSkin. The `gridN` config (default 4) controls the lattice
 density: a 4×4×4 cube = 64 chunks per block (56 visible). Plugin id is `Tessera`,
-gradle root project is `tessera`, package root is `io.tessera`.
+gradle root project is `tessera`, package root is `org.inventivetalent.tessera`.
 
 ## Build / Run / Bake
 
@@ -31,7 +31,7 @@ bytecode, so any JDK ≥21 can consume the artifact.
 - `gradle test` — JUnit 5 (`junit-jupiter`). There are no tests in `src/test`
   yet; if you add one, use Jupiter and don't pull in JUnit 4. Run a single
   test class with `gradle test --tests <fqcn>`.
-- `MINESKIN_API_KEY=… gradle tesseraBake` — runs `io.tessera.skin.bake.BakeMain`
+- `MINESKIN_API_KEY=… gradle tesseraBake` — runs `org.inventivetalent.tessera.skin.bake.BakeMain`
   off-server. Reads `bake-blocks.txt`, writes
   `src/main/resources/heads-<gridN>.json` (defaults to `heads-4.json`; pass
   `-PgridN=<N>` to bake a different size), caches downloaded vanilla assets
@@ -45,15 +45,15 @@ build time so a freshly installed plugin handles those blocks with no network
 calls. Anything else is baked on demand at runtime via `BlockBaker` (requires
 the server admin to set `mineskinApiKey` in `config.yml`).
 
-Shadow relocates `org.mineskin` → `io.tessera.shaded.mineskin` and
-`com.google.gson` → `io.tessera.shaded.gson`. JOML is bundled by Paper at
+Shadow relocates `org.mineskin` → `org.inventivetalent.tessera.shaded.mineskin` and
+`com.google.gson` → `org.inventivetalent.tessera.shaded.gson`. JOML is bundled by Paper at
 runtime, declared `implementation` only so `tesseraBake` (which doesn't load
 Paper) can find it on the classpath.
 
 ## Architecture
 
 Tessera has two largely independent halves wired together at startup by
-`io.tessera.plugin.TesseraPlugin`:
+`org.inventivetalent.tessera.plugin.TesseraPlugin`:
 
 ### 1. Bake pipeline (offline → MineSkin)
 
@@ -69,7 +69,7 @@ Both files use the same JSON schema (see `HeadsJsonCodec`) and live one per
 grid size, so switching `chunkGridSize` in config doesn't discard previously
 uploaded skins — each size keeps its own state.
 
-Pipeline stages (`io.tessera.skin.bake.BlockBaker.doBake` / `BakeMain.bakeOne`):
+Pipeline stages (`org.inventivetalent.tessera.skin.bake.BlockBaker.doBake` / `BakeMain.bakeOne`):
 
 1. `assets.fetch.McAssetClient` downloads vanilla model + texture JSON/PNGs from
    `mcasset.cloud` for the requested MC version, caches under `assets/`.
