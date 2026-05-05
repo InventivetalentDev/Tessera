@@ -2,7 +2,6 @@ package org.inventivetalent.tessera.plugin;
 
 import org.inventivetalent.tessera.assemble.FakeBlockFactory;
 import org.inventivetalent.tessera.core.BlockKey;
-import org.inventivetalent.tessera.core.ChunkCoord;
 import org.inventivetalent.tessera.core.FakeBlock;
 import org.bukkit.Location;
 import org.bukkit.block.data.BlockData;
@@ -63,12 +62,10 @@ public final class ProgressTracker {
         public long lastHitSoundMs;            // throttle for replayed block-hit sounds while the barrier mask is up
         public boolean breakSoundPlayed;       // we already replayed the original break sound for this break
         public BukkitTask reverseTask;         // non-null only while REVERSING
-        public BukkitTask barrierSwapTask;     // non-null between spawn and the deferred sendBlockChange(BARRIER)
         public BukkitTask pendingSpawnTask;    // non-null while a scheduler-spread spawn-continuation is queued
         public BukkitTask smoothAdvanceTask;   // non-null while smooth-interp is ticking between events
         // Lazy-spawn support: null on legacy paths; set right after tracker.put().
         public List<FakeBlockFactory.PendingChunkSpec> pendingChunks;
-        public Map<ChunkCoord, Double> allOuterT;
 
         public TrackedBreak(UUID playerId, BlockKey key, Location origin,
                             BlockData originalBlockData, Vector eyeDir,
@@ -95,11 +92,9 @@ public final class ProgressTracker {
             this.lastHitSoundMs = 0L;
             this.breakSoundPlayed = false;
             this.reverseTask = null;
-            this.barrierSwapTask = null;
             this.pendingSpawnTask = null;
             this.smoothAdvanceTask = null;
             this.pendingChunks = null;
-            this.allOuterT = null;
         }
     }
 

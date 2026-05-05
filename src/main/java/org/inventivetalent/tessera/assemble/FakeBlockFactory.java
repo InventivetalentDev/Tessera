@@ -1,7 +1,6 @@
 package org.inventivetalent.tessera.assemble;
 
 import org.inventivetalent.tessera.core.*;
-import org.inventivetalent.tessera.core.*;
 import org.inventivetalent.tessera.skin.HeadSkin;
 import org.inventivetalent.tessera.skin.HeadsRegistry;
 import org.inventivetalent.tessera.transport.DisplayHandle;

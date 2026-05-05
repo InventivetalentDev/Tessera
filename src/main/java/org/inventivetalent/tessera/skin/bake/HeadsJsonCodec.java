@@ -100,7 +100,23 @@ public final class HeadsJsonCodec {
                         ChunkCoord coord;
                         try { coord = ChunkCoord.parseKey(ce.getKey()); }
                         catch (RuntimeException ignored) { continue; }
-                        String hash = ce.getValue().getAsJsonObject().get("skinHash").getAsString();
+                        // Defensive read: a corrupt cache file shouldn't brick startup.
+                        // Skip chunks whose value isn't an object, lacks skinHash,
+                        // or has skinHash as a non-string / null.
+                        if (!ce.getValue().isJsonObject()) {
+                            logger.warning("[heads-json] " + key + " " + coord.asKey()
+                                    + " is not a JSON object; skipping");
+                            continue;
+                        }
+                        JsonObject chunkObj = ce.getValue().getAsJsonObject();
+                        JsonElement hashEl = chunkObj.get("skinHash");
+                        if (hashEl == null || hashEl.isJsonNull() || !hashEl.isJsonPrimitive()
+                                || !hashEl.getAsJsonPrimitive().isString()) {
+                            logger.warning("[heads-json] " + key + " " + coord.asKey()
+                                    + " missing or malformed skinHash; skipping");
+                            continue;
+                        }
+                        String hash = hashEl.getAsString();
                         HeadsRegistry.Entry skin = skinByHash.get(hash);
                         if (skin == null) {
                             logger.warning("[heads-json] " + key + " " + coord.asKey()

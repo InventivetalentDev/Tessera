@@ -392,8 +392,11 @@ public final class ModelResolver {
         // Block textures live under textures/<path>.png with leading "block/"
         // already part of the path (e.g. "block/stone").
         byte[] png = client.fetch(version, "textures/" + path + ".png");
-        BufferedImage full = normalizeToArgb(ImageIO.read(new ByteArrayInputStream(stripColorChunks(png))));
-        if (full == null) throw new IOException("failed to decode " + ref);
+        // ImageIO.read returns null for unrecognised formats; null-check before
+        // normalizeToArgb dereferences it.
+        BufferedImage decoded = ImageIO.read(new ByteArrayInputStream(stripColorChunks(png)));
+        if (decoded == null) throw new IOException("failed to decode " + ref);
+        BufferedImage full = normalizeToArgb(decoded);
         // Animated textures are tall (e.g. 16×64 for 4 frames). Take frame 0.
         if (full.getHeight() > full.getWidth()) {
             return full.getSubimage(0, 0, full.getWidth(), full.getWidth());

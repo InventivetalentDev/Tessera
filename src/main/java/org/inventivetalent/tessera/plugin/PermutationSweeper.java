@@ -2,6 +2,7 @@ package org.inventivetalent.tessera.plugin;
 
 import org.inventivetalent.tessera.assemble.FakeBlockFactory;
 import org.inventivetalent.tessera.assemble.HeadRotations;
+import org.inventivetalent.tessera.core.BakeKey;
 import org.inventivetalent.tessera.core.BlockKey;
 import org.inventivetalent.tessera.core.FaceDir;
 import org.inventivetalent.tessera.core.FakeBlock;
@@ -123,7 +124,7 @@ public final class PermutationSweeper {
                 if (rebakeNeeded) {
                     registry.invalidate(key);
                     try {
-                        Boolean ok = baker.bake(key).get(2, TimeUnit.MINUTES);
+                        Boolean ok = baker.bake(BakeKey.untinted(key)).get(2, TimeUnit.MINUTES);
                         if (ok == null || !ok) {
                             plugin.getLogger().warning("[sweep] bake failed at " + c.label());
                             continue;
