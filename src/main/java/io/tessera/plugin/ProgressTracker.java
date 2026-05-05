@@ -61,6 +61,7 @@ public final class ProgressTracker {
         public boolean speculative;            // spawned from PlayerInteractEvent; awaiting first real progress
         public boolean shellExpanded;          // true once the spawn-time INITIAL_SHELL_COMPRESSION has been undone
         public long lastHitSoundMs;            // throttle for replayed block-hit sounds while the barrier mask is up
+        public boolean breakSoundPlayed;       // we already replayed the original break sound for this break
         public BukkitTask reverseTask;         // non-null only while REVERSING
         public BukkitTask barrierSwapTask;     // non-null between spawn and the deferred sendBlockChange(BARRIER)
         public BukkitTask pendingSpawnTask;    // non-null while a scheduler-spread spawn-continuation is queued
@@ -92,6 +93,7 @@ public final class ProgressTracker {
             this.speculative = false;
             this.shellExpanded = false;
             this.lastHitSoundMs = 0L;
+            this.breakSoundPlayed = false;
             this.reverseTask = null;
             this.barrierSwapTask = null;
             this.pendingSpawnTask = null;
