@@ -216,14 +216,16 @@ public final class FakeBlockFactory {
 
         TransportSession session = transport.openSession(viewer, world);
         List<ChunkRef> refs = new ArrayList<>(chunks.size() / 2 + 1);
-        for (Map.Entry<ChunkCoord, HeadsRegistry.Entry> entry : chunks.entrySet()) {
-            ChunkCoord coord = entry.getKey();
-            if (!isViewerFacing(coord, gridN, localEyeDir)) continue;
+        session.runBundled(() -> {
+            for (Map.Entry<ChunkCoord, HeadsRegistry.Entry> entry : chunks.entrySet()) {
+                ChunkCoord coord = entry.getKey();
+                if (!isViewerFacing(coord, gridN, localEyeDir)) continue;
 
-            ChunkRef ref = spawnChunk(session, origin, coord, entry.getValue(),
-                    blockRotation, canonicalRotation, geom, gridN, INITIAL_SHELL_COMPRESSION);
-            refs.add(ref);
-        }
+                ChunkRef ref = spawnChunk(session, origin, coord, entry.getValue(),
+                        blockRotation, canonicalRotation, geom, gridN, INITIAL_SHELL_COMPRESSION);
+                refs.add(ref);
+            }
+        });
 
         Map<ChunkCoord, ChunkRef> result = new HashMap<>(refs.size() * 2);
         for (ChunkRef r : refs) result.put(r.coord(), r);
@@ -327,13 +329,15 @@ public final class FakeBlockFactory {
                 HeadFace.FRONT, FaceDir.SOUTH, FaceRotations.of(HeadFace.FRONT));
 
         float shellFactor = compressShell ? INITIAL_SHELL_COMPRESSION : 1f;
-        populateOuterChunks(session, origin, geom, chunks, blockRotation, canonicalRotation,
-                gridN, shellFactor, existingRefs, refs);
+        session.runBundled(() -> {
+            populateOuterChunks(session, origin, geom, chunks, blockRotation, canonicalRotation,
+                    gridN, shellFactor, existingRefs, refs);
 
-        if (fillInterior && gridN >= 3 && !chunks.isEmpty()) {
-            spawnInteriorChunks(session, origin, geom, chunks, blockRotation,
-                    canonicalRotation, gridN, refs, shellFactor);
-        }
+            if (fillInterior && gridN >= 3 && !chunks.isEmpty()) {
+                spawnInteriorChunks(session, origin, geom, chunks, blockRotation,
+                        canonicalRotation, gridN, refs, shellFactor);
+            }
+        });
 
         return new FakeBlock(origin, bakeKey.block(), gridN, refs, blockRotation, session);
     }
@@ -395,16 +399,18 @@ public final class FakeBlockFactory {
             if (e.getValue().handle().isAlive()) frontRefs.put(e.getKey(), e.getValue());
         }
 
-        for (Map.Entry<ChunkCoord, HeadsRegistry.Entry> e : chunks.entrySet()) {
-            ChunkCoord c = e.getKey();
-            if (frontRefs.containsKey(c)) continue;
-            if (isViewerFacing(c, gridN, localEyeDir)) {
-                frontRefs.put(c, spawnChunk(session, origin, c, e.getValue(),
-                        blockRotation, canonicalRotation, geom, gridN, INITIAL_SHELL_COMPRESSION));
-            } else {
-                pending.add(new PendingChunkSpec(c, e.getValue(), allOuterT.get(c), false));
+        session.runBundled(() -> {
+            for (Map.Entry<ChunkCoord, HeadsRegistry.Entry> e : chunks.entrySet()) {
+                ChunkCoord c = e.getKey();
+                if (frontRefs.containsKey(c)) continue;
+                if (isViewerFacing(c, gridN, localEyeDir)) {
+                    frontRefs.put(c, spawnChunk(session, origin, c, e.getValue(),
+                            blockRotation, canonicalRotation, geom, gridN, INITIAL_SHELL_COMPRESSION));
+                } else {
+                    pending.add(new PendingChunkSpec(c, e.getValue(), allOuterT.get(c), false));
+                }
             }
-        }
+        });
 
         // 3. Interior chunks: all pending, using the same global t scale.
         if (fillInterior && gridN >= 3) {
