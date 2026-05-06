@@ -1,6 +1,6 @@
 # Tessera  
 
-**Tessera** replaces the vanilla block-breaking animation with a 3D voxel-shatter effect - entirely server-side, with no client mods or resource packs required.
+**Tessera** replaces the vanilla block-breaking animation with a 3D voxel-shatter effect - **entirely server-side, with no client mods or resource packs required**.
 
 ![Example of breaking oak planks](https://imagedelivery.net/3uwxrP7hx2SHdBFF5lTuXg/d191cbd1-138f-4a8f-7a64-7e20f9134800/w=800)
 
