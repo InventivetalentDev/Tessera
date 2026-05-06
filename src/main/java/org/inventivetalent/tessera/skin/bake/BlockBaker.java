@@ -100,27 +100,20 @@ public final class BlockBaker {
         this.executor = executor;
     }
 
-    /** Untinted convenience overload — equivalent to {@code bake(BakeKey.untinted(key))}. */
-    public CompletableFuture<Boolean> bake(BlockKey key) {
-        return bake(BakeKey.untinted(key), null);
-    }
-
     public CompletableFuture<Boolean> bake(BakeKey key) {
         return bake(key, null);
     }
 
     /**
-     * Same as {@link #bake(BlockKey)} but invokes {@code onPlan} as soon as
-     * the splitter/packer/cache lookup finishes and we know how many MineSkin
+     * Like {@link #bake(BakeKey)} but invokes {@code onPlan} as soon as the
+     * splitter/packer/cache lookup finishes and we know how many MineSkin
      * uploads this bake actually needs. {@code onPlan} runs on the bake
      * executor thread, so dispatch to the main thread inside it if it touches
      * Bukkit state. Skipped entirely when an inflight bake for the same key
      * is already running (the second caller just rides the existing future).
+     *
+     * <p>For untinted blocks, callers should pass {@link BakeKey#untinted(BlockKey)}.
      */
-    public CompletableFuture<Boolean> bake(BlockKey key, Consumer<Plan> onPlan) {
-        return bake(BakeKey.untinted(key), onPlan);
-    }
-
     public CompletableFuture<Boolean> bake(BakeKey key, Consumer<Plan> onPlan) {
         return inflight.computeIfAbsent(key, k -> startBake(k, onPlan));
     }

@@ -4,7 +4,6 @@ import io.papermc.paper.event.block.BlockBreakProgressUpdateEvent;
 import org.inventivetalent.tessera.assemble.BlockGeometry;
 import org.inventivetalent.tessera.assemble.FakeBlockFactory;
 import org.inventivetalent.tessera.core.*;
-import org.inventivetalent.tessera.core.*;
 import org.inventivetalent.tessera.effect.ChunkWaveSampler;
 import org.inventivetalent.tessera.effect.builtin.DirectionalShrinkEffect;
 import org.inventivetalent.tessera.nms.BlockTintReader;
@@ -906,7 +905,6 @@ public final class BlockBreakProgressListener implements Listener {
         TrackedBreak tb = new TrackedBreak(playerId, key, fb.origin(),
                 blockData, eyeDir, fb, chunkT, base, current);
         tb.pendingChunks = new ArrayList<>(plan.pendingSpecs());
-        tb.allOuterT = new HashMap<>(plan.allOuterT());
         return tb;
     }
 

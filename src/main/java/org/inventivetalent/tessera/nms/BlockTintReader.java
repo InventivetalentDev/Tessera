@@ -58,6 +58,9 @@ public final class BlockTintReader {
 
     private static volatile boolean colormapsLoaded;
     private static final AtomicBoolean tintReadErrorLogged = new AtomicBoolean();
+    // Stashed by prepareColormaps so the static read() error path can log
+    // through the plugin logger instead of resolving "Tessera" by name.
+    private static volatile Logger logger;
 
     /**
      * Fetch the vanilla grass + foliage colormap PNGs (256×256 each) and
@@ -71,6 +74,7 @@ public final class BlockTintReader {
      * fallback.
      */
     public static synchronized void prepareColormaps(McAssetClient assets, String mcVersion, Logger log) {
+        logger = log;
         if (colormapsLoaded) return;
         try {
             GrassColor.init(loadColormap(assets.fetch(mcVersion, "textures/colormap/grass.png")));
@@ -100,7 +104,8 @@ public final class BlockTintReader {
             return 0xFF000000 | (rgb & 0xFFFFFF);
         } catch (LinkageError | RuntimeException e) {
             if (tintReadErrorLogged.compareAndSet(false, true)) {
-                Logger.getLogger("Tessera").log(Level.WARNING,
+                Logger log = logger != null ? logger : Logger.getLogger("Tessera");
+                log.log(Level.WARNING,
                         "[Tessera] BlockTintReader.read failed (Paper API incompatibility?) — tinted blocks will skip baking", e);
             }
             return 0;

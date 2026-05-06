@@ -145,7 +145,7 @@ public final class TesseraCommand implements CommandExecutor {
                 return true;
             }
             sender.sendMessage("§e" + key + " not yet baked - uploading skins to MineSkin (a few seconds)...");
-            baker.bake(key).whenComplete((ok, ex) -> Bukkit.getScheduler().runTask(plugin, () -> {
+            baker.bake(BakeKey.untinted(key)).whenComplete((ok, ex) -> Bukkit.getScheduler().runTask(plugin, () -> {
                 if (ex != null) {
                     sender.sendMessage("§cBake threw: " + ex.getMessage());
                     return;
