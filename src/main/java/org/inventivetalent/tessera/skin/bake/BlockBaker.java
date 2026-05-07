@@ -71,7 +71,7 @@ public final class BlockBaker {
 
     /**
      * Bake-plan summary fired through the optional callback passed to
-     * {@link #bake(BlockKey, Consumer)} once the splitter and packer have
+     * {@link #bake(BakeKey, Consumer)} once the splitter and packer have
      * decided what's actually going to happen. {@code needUpload} is the
      * subset of {@code uniqueHeads} that missed both the in-memory registry
      * and the persistent disk cache and will hit MineSkin.

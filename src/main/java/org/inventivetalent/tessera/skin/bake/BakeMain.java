@@ -90,7 +90,7 @@ public final class BakeMain {
         Path pngDir = cacheRoot.resolve("heads");
         Files.createDirectories(pngDir);
 
-        McAssetClient assets = new McAssetClient(cacheRoot.resolve("assets"), logger);
+        McAssetClient assets = new McAssetClient(cacheRoot.resolve("assets"));
         ModelResolver resolver = new ModelResolver(assets, logger, version);
         TextureSplitter splitter = new TextureSplitter();
         HeadSkinPacker packer = new HeadSkinPacker();
@@ -117,7 +117,7 @@ public final class BakeMain {
 
         for (BlockKey key : blocks) {
             try {
-                bakeOne(key, version, gridN, resolver, splitter, packer, assembler, uploader, pngDir, state, logger);
+                bakeOne(key, gridN, resolver, splitter, packer, assembler, uploader, pngDir, state, logger);
                 state.write(outPath);
             } catch (Exception e) {
                 logger.log(Level.WARNING, "Failed to bake " + key, e);
@@ -128,7 +128,7 @@ public final class BakeMain {
         logger.info("Done. " + outPath.getFileName() + " written to " + outPath.toAbsolutePath());
     }
 
-    private static void bakeOne(BlockKey key, String version, int gridN,
+    private static void bakeOne(BlockKey key, int gridN,
                                 ModelResolver resolver, TextureSplitter splitter,
                                 HeadSkinPacker packer, SkinAssembler assembler,
                                 SkinUploader uploader, Path pngDir,

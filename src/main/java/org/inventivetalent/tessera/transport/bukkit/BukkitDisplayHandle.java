@@ -2,7 +2,6 @@ package org.inventivetalent.tessera.transport.bukkit;
 
 import org.inventivetalent.tessera.transport.DisplayHandle;
 import org.bukkit.entity.ItemDisplay;
-import org.bukkit.inventory.ItemStack;
 import org.bukkit.util.Transformation;
 
 final class BukkitDisplayHandle implements DisplayHandle {
@@ -31,11 +30,6 @@ final class BukkitDisplayHandle implements DisplayHandle {
         display.setInterpolationDelay(delayTicks);
         display.setInterpolationDuration(durationTicks);
         display.setTransformation(tx);
-    }
-
-    @Override
-    public void setItemStack(ItemStack item) {
-        display.setItemStack(item);
     }
 
     @Override

@@ -29,7 +29,6 @@ final class PacketTransportSession implements TransportSession {
     }
 
     @Override
-    @SuppressWarnings({"rawtypes", "unchecked"})
     public DisplayHandle spawn(Location origin, ItemStack item, Transformation initial, float viewRange) {
         int entityId = DisplayDataAccessors.nextEntityId();
 

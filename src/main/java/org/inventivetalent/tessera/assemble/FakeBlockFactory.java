@@ -18,6 +18,7 @@ import org.joml.Vector3f;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.List;
@@ -53,9 +54,9 @@ import java.util.Map;
  *
  * <p>All display entities share the entity location at the block's
  * lower-NW-down corner; per-chunk offsets live entirely in the
- * Transformation translation. This lets a single
- * {@link Location#teleport} on the parent location move the whole
- * FakeBlock, which v2 physics will exploit.
+ * Transformation translation. This lets a single teleport of the
+ * parent location move the whole FakeBlock, which v2 physics will
+ * exploit.
  */
 public final class FakeBlockFactory {
 
@@ -162,8 +163,8 @@ public final class FakeBlockFactory {
         if (world == null) throw new IllegalArgumentException("Location has no world");
 
         TransportSession session = transport.openSession(viewer, world);
-        return buildFakeBlock(session, viewer, blockLocation, bakeKey, blockRotation,
-                fillInterior, eyeDir, compressShell, Collections.emptyMap());
+        return buildFakeBlock(session, blockLocation, bakeKey, blockRotation,
+                fillInterior, compressShell, Collections.emptyMap());
     }
 
     /**
@@ -178,8 +179,8 @@ public final class FakeBlockFactory {
                             boolean compressShell, Map<ChunkCoord, ChunkRef> existingRefs,
                             TransportSession existingSession) {
         if (blockLocation.getWorld() == null) throw new IllegalArgumentException("Location has no world");
-        return buildFakeBlock(existingSession, viewer, blockLocation, bakeKey, blockRotation,
-                fillInterior, eyeDir, compressShell, existingRefs);
+        return buildFakeBlock(existingSession, blockLocation, bakeKey, blockRotation,
+                fillInterior, compressShell, existingRefs);
     }
 
     // ── Preload ───────────────────────────────────────────────────────────────
@@ -249,7 +250,7 @@ public final class FakeBlockFactory {
      * that are already spawned (eager-preload consume path) and adopts the
      * {@code existingSession} as the plan's session so all entities share one session.
      */
-    public PreloadPlan completePlan(Player viewer, Location blockLocation, BakeKey bakeKey,
+    public PreloadPlan completePlan(Location blockLocation, BakeKey bakeKey,
                                      Quaternionf blockRotation, boolean fillInterior, Vector eyeDir,
                                      Map<ChunkCoord, ChunkRef> existingRefs,
                                      TransportSession existingSession) {
@@ -305,10 +306,10 @@ public final class FakeBlockFactory {
 
     // ── Internal build helpers ────────────────────────────────────────────────
 
-    private FakeBlock buildFakeBlock(TransportSession session, Player viewer,
+    private FakeBlock buildFakeBlock(TransportSession session,
                                      Location blockLocation, BakeKey bakeKey,
                                      Quaternionf blockRotation, boolean fillInterior,
-                                     Vector eyeDir, boolean compressShell,
+                                     boolean compressShell,
                                      Map<ChunkCoord, ChunkRef> existingRefs) {
         World world = blockLocation.getWorld();
         int gridN = registry.gridN();
@@ -424,7 +425,7 @@ public final class FakeBlockFactory {
             }
         }
 
-        pending.sort((a, b) -> Double.compare(a.t(), b.t()));
+        pending.sort(Comparator.comparingDouble(PendingChunkSpec::t));
         return new PreloadPlan(frontRefs, pending, allOuterT, session);
     }
 

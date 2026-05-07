@@ -254,7 +254,7 @@ public final class BlockBreakProgressListener implements Listener {
                 Vector eyeDir = player.getEyeLocation().getDirection();
                 FakeBlockFactory.PreloadPlan plan;
                 try {
-                    plan = factory.completePlan(player, breakLoc, preload.bakeKey(),
+                    plan = factory.completePlan(breakLoc, preload.bakeKey(),
                             preload.blockRotation(), cfg.fillInterior(), eyeDir,
                             preload.prespawnedChunks(), preload.session());
                 } catch (RuntimeException re) {
@@ -321,8 +321,7 @@ public final class BlockBreakProgressListener implements Listener {
         if (tb.avgEventGapMs == 0L) return WATCHDOG_STALE_BOOTSTRAP_MS;
         long base = tb.avgEventGapMs * 3L + 200L;
         if (base < WATCHDOG_STALE_MIN_MS) return WATCHDOG_STALE_MIN_MS;
-        if (base > WATCHDOG_STALE_MAX_MS) return WATCHDOG_STALE_MAX_MS;
-        return base;
+        return Math.min(base, WATCHDOG_STALE_MAX_MS);
     }
 
     private static long estimateInitialGapMs(Block block, Player player, TesseraConfig cfg) {
@@ -331,11 +330,10 @@ public final class BlockBreakProgressListener implements Listener {
             if (perTick > 0f) {
                 long perStageMs = (long) Math.ceil(STAGE_PER_EVENT / perTick * MS_PER_TICK);
                 if (perStageMs < MS_PER_TICK) return MS_PER_TICK;
-                if (perStageMs > MAX_INTERP_MS) return MAX_INTERP_MS;
-                return perStageMs;
+                return Math.min(perStageMs, MAX_INTERP_MS);
             }
         } catch (NoSuchMethodError | RuntimeException ignored) {}
-        return Math.max(MS_PER_TICK, Math.min(MAX_INTERP_MS, cfg.leftClickGraceMs()));
+        return Math.clamp(cfg.leftClickGraceMs(), MS_PER_TICK, MAX_INTERP_MS);
     }
 
     /**
@@ -360,14 +358,14 @@ public final class BlockBreakProgressListener implements Listener {
     public void onQuit(PlayerQuitEvent event) {
         UUID id = event.getPlayer().getUniqueId();
         clearPreload(id);
-        teardownPlayer(id, /*restoreBlock=*/ false);
+        teardownPlayer(id);
     }
 
     @EventHandler(priority = EventPriority.MONITOR)
     public void onWorldChange(PlayerChangedWorldEvent event) {
         UUID id = event.getPlayer().getUniqueId();
         clearPreload(id);
-        teardownPlayer(id, /*restoreBlock=*/ false);
+        teardownPlayer(id);
     }
 
     private void spawnAndRegister(Player player, Block block, Location breakLoc,
@@ -567,7 +565,7 @@ public final class BlockBreakProgressListener implements Listener {
         tb.state = State.REVERSING;
         final double startProgress = tb.lastAppliedProgress;
         final long startMs = System.currentTimeMillis();
-        final int durationMs = (int) Math.max(50L, Math.min(300L, Math.round(startProgress * 300d)));
+        final int durationMs = (int) Math.clamp(Math.round(startProgress * 300d), 50L, 300L);
 
         if (tb.barrierSent) {
             Player p = Bukkit.getPlayer(tb.currentPlayerId);
@@ -637,13 +635,13 @@ public final class BlockBreakProgressListener implements Listener {
         return tracker.get(posKey) != null;
     }
 
-    private void teardownPlayer(UUID playerId, boolean restoreBlock) {
+    private void teardownPlayer(UUID playerId) {
         BlockPosKey posKey = tracker.activeBlockFor(playerId);
         if (posKey == null) return;
         TrackedBreak tb = tracker.remove(posKey);
         if (tb == null) return;
         cancelReverseTask(tb);
-        disposeImmediate(tb, restoreBlock);
+        disposeImmediate(tb, false);
         if (plugin.tesseraConfig().debug()) plugin.getLogger().info(
                 "[" + ts() + "] [debug-progress] teardown player=" + playerId + " posKey=" + posKey);
     }
@@ -806,7 +804,7 @@ public final class BlockBreakProgressListener implements Listener {
 
             PreloadEntry existing = preloads.get(player.getUniqueId());
             if (existing != null) {
-                if (targetKey != null && existing.posKey.equals(targetKey)) {
+                if (existing.posKey.equals(targetKey)) {
                     if (tracker.get(targetKey) == null) continue;
                     clearPreload(player.getUniqueId());
                 } else {
@@ -916,7 +914,7 @@ public final class BlockBreakProgressListener implements Listener {
     private void spawnPendingChunks(TrackedBreak tb, double targetProgress, double window) {
         if (tb.pendingChunks == null || tb.pendingChunks.isEmpty()) return;
         if (tb.fakeBlock.despawned()) return;
-        if (tb.pendingChunks.get(0).t() > targetProgress + window) return;
+        if (tb.pendingChunks.getFirst().t() > targetProgress + window) return;
 
         float shellFactor = tb.shellExpanded ? 1.0f : FakeBlockFactory.INITIAL_SHELL_COMPRESSION;
         int gridN = tb.fakeBlock.gridN();
@@ -969,7 +967,7 @@ public final class BlockBreakProgressListener implements Listener {
         }
 
         if (tb.pendingSpawnTask == null && !tb.pendingChunks.isEmpty()
-                && tb.pendingChunks.get(0).t() <= targetProgress + window) {
+                && tb.pendingChunks.getFirst().t() <= targetProgress + window) {
             final double capturedTarget = targetProgress;
             final double capturedWindow = window;
             tb.pendingSpawnTask = Bukkit.getScheduler().runTaskLater(plugin, () -> {
@@ -1031,7 +1029,7 @@ public final class BlockBreakProgressListener implements Listener {
                         (proj[aliveCount + i] - minP) / range,
                         old.interior()));
             }
-            rebuilt.sort((a, b) -> Double.compare(a.t(), b.t()));
+            rebuilt.sort(Comparator.comparingDouble(FakeBlockFactory.PendingChunkSpec::t));
             tb.pendingChunks = rebuilt;
             for (int i = 0; i < pendingCount; i++) {
                 tb.chunkT[aliveCount + i] = rebuilt.get(i).t();

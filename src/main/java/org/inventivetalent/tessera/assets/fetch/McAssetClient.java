@@ -8,8 +8,6 @@ import java.net.http.HttpResponse;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
-import java.util.logging.Level;
-import java.util.logging.Logger;
 
 /**
  * HTTP client for the mcasset.cloud raw-asset host with a per-version
@@ -29,11 +27,9 @@ public final class McAssetClient {
 
     private final HttpClient http;
     private final Path cacheRoot;
-    private final Logger logger;
 
-    public McAssetClient(Path cacheRoot, Logger logger) {
+    public McAssetClient(Path cacheRoot) {
         this.cacheRoot = cacheRoot;
-        this.logger = logger;
         this.http = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(15))
                 .followRedirects(HttpClient.Redirect.NORMAL)
