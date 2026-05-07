@@ -26,6 +26,7 @@ import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
+import org.jetbrains.annotations.NotNull;
 import org.joml.Vector3f;
 
 import java.util.Locale;
@@ -100,7 +101,7 @@ public final class TesseraCommand implements CommandExecutor {
     }
 
     @Override
-    public boolean onCommand(CommandSender sender, Command cmd, String label, String[] args) {
+    public boolean onCommand(@NotNull CommandSender sender, @NotNull Command cmd, @NotNull String label, @NotNull String[] args) {
         if (args.length == 0) {
             sender.sendMessage("§7/tessera test [material] | bake <material> | reload | debug face|center …");
             return true;
@@ -132,7 +133,10 @@ public final class TesseraCommand implements CommandExecutor {
         // for STATIC_LIFETIME_TICKS so you can rotate around and inspect.
         boolean staticMode = false;
         for (int i = 2; i < args.length; i++) {
-            if (args[i].equalsIgnoreCase("static")) staticMode = true;
+            if (args[i].equalsIgnoreCase("static")) {
+                staticMode = true;
+                break;
+            }
         }
         BlockKey key = BlockKey.of(mat.getKey().getNamespace() + ":" + mat.getKey().getKey());
         Location target = pickTargetLocation(p);
@@ -316,7 +320,7 @@ public final class TesseraCommand implements CommandExecutor {
             case "sourcerot"    -> handleDebugSourcerot(sender, args);
             case "sourceflip"   -> handleDebugSourceflip(sender, args);
             case "rebake"       -> handleDebugRebake(sender, args);
-            case "status"       -> handleDebugStatus(sender, args);
+            case "status"       -> handleDebugStatus(sender);
             case "debugtex"     -> handleDebugTex(sender, args);
             case "permutations" -> handleDebugPermutations(sender, args);
             case "dumppng"      -> handleDebugDumpPng(sender, args);
@@ -327,7 +331,7 @@ public final class TesseraCommand implements CommandExecutor {
         };
     }
 
-    private boolean handleDebugStatus(CommandSender sender, String[] args) {
+    private boolean handleDebugStatus(CommandSender sender) {
         sender.sendMessage("§6Tessera debug status");
         sender.sendMessage("§7Debug texture mode: §f" + (FaceDebugTint.isEnabled() ? "ON" : "off"));
         sender.sendMessage("§7BlockGeometry.CUBE_CENTER_PRE = §f" + formatVec(BlockGeometry.cubeCenterPre()));

@@ -63,10 +63,6 @@ public final class SkinUploader {
         rebuildClient(apiKey);
     }
 
-    public synchronized void reconfigure(String apiKey) {
-        rebuildClient(apiKey);
-    }
-
     public boolean isReady() {
         return client != null;
     }
@@ -169,7 +165,7 @@ public final class SkinUploader {
         return client.queue().submit(request)
                 .thenCompose(qr -> {
                     if (run.cancelled.get()) {
-                        return CompletableFuture.<SkinInfo>failedFuture(
+                        return CompletableFuture.failedFuture(
                                 new CancellationException("cancelled"));
                     }
                     return onSubmitted(head, qr);
@@ -249,7 +245,5 @@ public final class SkinUploader {
                 for (CompletableFuture<Void> f : futures) f.cancel(true);
             }
         }
-
-        public boolean isCancelled() { return cancelled.get(); }
     }
 }

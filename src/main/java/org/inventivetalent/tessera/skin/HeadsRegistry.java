@@ -12,8 +12,6 @@ import org.joml.Quaternionf;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
@@ -108,19 +106,6 @@ public final class HeadsRegistry {
             return parse(logger, json, defaultGridN, defaultVersion);
         } catch (IOException io) {
             logger.warning("Failed to read " + resource + ": " + io.getMessage());
-            return empty(logger, defaultGridN, defaultVersion);
-        }
-    }
-
-    public static HeadsRegistry loadFromFile(Logger logger, Path file, int defaultGridN, String defaultVersion) {
-        if (!Files.isRegularFile(file)) {
-            return empty(logger, defaultGridN, defaultVersion);
-        }
-        try {
-            String json = Files.readString(file, StandardCharsets.UTF_8);
-            return parse(logger, json, defaultGridN, defaultVersion);
-        } catch (IOException io) {
-            logger.warning("Failed to read " + file + ": " + io.getMessage());
             return empty(logger, defaultGridN, defaultVersion);
         }
     }

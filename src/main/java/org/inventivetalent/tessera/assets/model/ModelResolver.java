@@ -162,8 +162,6 @@ public final class ModelResolver {
      * {@code facing=east}/{@code west}.
      */
     public record VariantRotation(int xDeg, int yDeg) {
-        public static final VariantRotation IDENTITY = new VariantRotation(0, 0);
-
         public Quaternionf toQuat() {
             return new Quaternionf()
                     .rotateY((float) Math.toRadians(-yDeg))
@@ -206,7 +204,7 @@ public final class ModelResolver {
         }
         if (blockstate.has("multipart")) {
             JsonArray arr = blockstate.getAsJsonArray("multipart");
-            if (arr.size() > 0) {
+            if (!arr.isEmpty()) {
                 JsonElement applied = arr.get(0).getAsJsonObject().get("apply");
                 JsonObject obj = applied.isJsonArray() ? applied.getAsJsonArray().get(0).getAsJsonObject() : applied.getAsJsonObject();
                 return new BlockstateVariants(obj.get("model").getAsString(), Collections.emptyMap());

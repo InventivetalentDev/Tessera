@@ -13,7 +13,7 @@ public enum SkinState {
     PENDING,
     /** Job submitted to MineSkin; {@code jobId} is set; awaiting completion. */
     SUBMITTED,
-    /** MineSkin returned a texture value/signature; {@link HeadSkin#textureValue} / {@code .textureSignature} populated. */
+    /** MineSkin returned a texture value/signature; {@code HeadSkin.textureValue} / {@code .textureSignature} populated. */
     COMPLETED,
     /** MineSkin rejected the upload, or local I/O failed. Eligible for retry. */
     ERRORED

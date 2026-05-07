@@ -53,10 +53,6 @@ public final class TileRotations {
         return STALE.getAndSet(false);
     }
 
-    public static boolean isStale() {
-        return STALE.get();
-    }
-
     /** Visible to sibling knobs (e.g. {@link TileFlips}) so they can share the
      *  cache-busting signal with TileRotations changes. */
     static void markStale() {

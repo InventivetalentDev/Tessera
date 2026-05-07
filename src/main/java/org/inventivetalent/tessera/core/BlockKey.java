@@ -1,5 +1,7 @@
 package org.inventivetalent.tessera.core;
 
+import org.jetbrains.annotations.NotNull;
+
 import java.util.Locale;
 import java.util.Objects;
 
@@ -32,7 +34,7 @@ public record BlockKey(String namespace, String path) {
     }
 
     @Override
-    public String toString() {
+    public @NotNull String toString() {
         return asString();
     }
 }

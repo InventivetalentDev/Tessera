@@ -70,7 +70,7 @@ public final class VariantKey {
         }
         StringBuilder sb = new StringBuilder();
         for (Map.Entry<String, String> e : kv.entrySet()) {
-            if (sb.length() > 0) sb.append(',');
+            if (!sb.isEmpty()) sb.append(',');
             sb.append(e.getKey()).append('=').append(e.getValue());
         }
         return sb.toString();
@@ -121,7 +121,7 @@ public final class VariantKey {
     private static String serialize(TreeMap<String, String> kv) {
         StringBuilder sb = new StringBuilder();
         for (Map.Entry<String, String> e : kv.entrySet()) {
-            if (sb.length() > 0) sb.append(',');
+            if (!sb.isEmpty()) sb.append(',');
             sb.append(e.getKey()).append('=').append(e.getValue());
         }
         return sb.toString();

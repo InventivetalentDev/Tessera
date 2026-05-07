@@ -1,5 +1,7 @@
 package org.inventivetalent.tessera.core;
 
+import org.jetbrains.annotations.NotNull;
+
 import java.util.Objects;
 
 /**
@@ -30,7 +32,7 @@ public record BakeKey(BlockKey block, int tintArgb) {
     }
 
     @Override
-    public String toString() {
+    public @NotNull String toString() {
         if (tintArgb == 0) return block.toString();
         return block + "#" + String.format("%06x", tintArgb & 0xFFFFFF);
     }

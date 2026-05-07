@@ -42,8 +42,8 @@ public final class FaceDebugTint {
 
     /**
      * Build a {@code size×size} debug marker for the given HeadFace. Called
-     * from {@link SkinAssembler#paintFace} when debug-tint mode is on,
-     * immediately before scaling onto the head's UV slot.
+     * from {@link SkinAssembler} when debug-tint mode is on, immediately
+     * before scaling onto the head's UV slot.
      */
     public static BufferedImage marker(HeadFace face, int size) {
         BufferedImage out = new BufferedImage(size, size, BufferedImage.TYPE_INT_ARGB);

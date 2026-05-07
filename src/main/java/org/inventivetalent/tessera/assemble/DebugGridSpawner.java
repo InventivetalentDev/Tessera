@@ -80,16 +80,15 @@ public final class DebugGridSpawner {
                     if (!isVisible(x, y, z, gridN)) continue;
 
                     ChunkCoord c = new ChunkCoord(x, y, z);
-                    Quaternionf faceRot = canonicalRotation;
 
-                    Vector3f translation = geom.translationFor(c, faceRot);
+                    Vector3f translation = geom.translationFor(c, canonicalRotation);
                     float scale = geom.chunkScale();
 
                     Transformation tx = new Transformation(
                             translation,
                             new Quaternionf(),
                             new Vector3f(scale, scale, scale),
-                            faceRot);
+                            canonicalRotation);
 
                     ItemDisplay display = world.spawn(origin, ItemDisplay.class, d -> {
                         d.setItemStack(head);

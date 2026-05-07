@@ -60,7 +60,7 @@ public final class TesseraPlugin extends JavaPlugin {
         Path assetsDir = cacheRoot.resolve("assets");
         Path skinCacheFile = cacheRoot.resolve("skins.json");
         Path runtimeHeadsFile = cacheRoot.resolve("heads-" + gridN + ".json");
-        McAssetClient assets = new McAssetClient(assetsDir, getLogger());
+        McAssetClient assets = new McAssetClient(assetsDir);
         this.diskCache = new SkinDiskCache(getLogger(), skinCacheFile);
 
         // Rehydrate runtime-baked entries from previous sessions, then attach
@@ -86,7 +86,7 @@ public final class TesseraPlugin extends JavaPlugin {
         this.progressListener = new BlockBreakProgressListener(this, blockFactory, registry, active, tracker);
         getServer().getPluginManager().registerEvents(progressListener, this);
         getServer().getPluginManager().registerEvents(
-                new BlockBreakListener(this, blockFactory, registry, baker, active, tracker, progressListener), this);
+                new BlockBreakListener(this, blockFactory, registry, baker, active, progressListener), this);
         progressListener.start();
 
         PluginCommand cmd = getCommand("tessera");

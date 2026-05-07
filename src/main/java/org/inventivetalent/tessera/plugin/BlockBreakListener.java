@@ -31,19 +31,17 @@ public final class BlockBreakListener implements Listener {
     private final HeadsRegistry registry;
     private final BlockBaker baker;
     private final AtomicInteger active;
-    private final ProgressTracker tracker;
     private final BlockBreakProgressListener progressListener;
 
     public BlockBreakListener(TesseraPlugin plugin, FakeBlockFactory factory,
                               HeadsRegistry registry, BlockBaker baker,
-                              AtomicInteger active, ProgressTracker tracker,
+                              AtomicInteger active,
                               BlockBreakProgressListener progressListener) {
         this.plugin = plugin;
         this.factory = factory;
         this.registry = registry;
         this.baker = baker;
         this.active = active;
-        this.tracker = tracker;
         this.progressListener = progressListener;
     }
 

@@ -78,10 +78,9 @@ public final class ChunkWaveSampler {
      * - Window 1.0 = uniform shrink (all chunks collapse together).
      */
     public static double shrunkFraction(double t, double progress, double window) {
-        double w = Math.max(1e-6, Math.min(1.0, window));
+        double w = Math.clamp(window, 1e-6, 1.0);
         double s = (progress - t * (1.0 - w)) / w;
         if (s < 0.0) return 0.0;
-        if (s > 1.0) return 1.0;
-        return s;
+        return Math.min(s, 1.0);
     }
 }

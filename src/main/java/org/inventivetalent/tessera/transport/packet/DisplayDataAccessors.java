@@ -17,23 +17,14 @@ final class DisplayDataAccessors {
 
     static final boolean available;
 
-    @SuppressWarnings("rawtypes")
     static final EntityDataAccessor<Integer> INTERP_START_DELTA_TICKS;
-    @SuppressWarnings("rawtypes")
     static final EntityDataAccessor<Integer> INTERP_DURATION;
-    @SuppressWarnings("rawtypes")
     static final EntityDataAccessor<Vector3f> TRANSLATION;
-    @SuppressWarnings("rawtypes")
     static final EntityDataAccessor<Vector3f> SCALE;
-    @SuppressWarnings("rawtypes")
     static final EntityDataAccessor<Quaternionf> LEFT_ROTATION;
-    @SuppressWarnings("rawtypes")
     static final EntityDataAccessor<Quaternionf> RIGHT_ROTATION;
-    @SuppressWarnings("rawtypes")
     static final EntityDataAccessor<Float> VIEW_RANGE;
-    @SuppressWarnings("rawtypes")
     static final EntityDataAccessor<net.minecraft.world.item.ItemStack> ITEM_STACK;
-    @SuppressWarnings("rawtypes")
     static final EntityDataAccessor<Byte> ITEM_DISPLAY;
 
     // Fake entity IDs descend from MAX_VALUE; real server entity IDs ascend from 0.

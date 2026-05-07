@@ -35,10 +35,6 @@ public final class HeadItemFactory {
         return cache.computeIfAbsent(head.id(), id -> create(head)).clone();
     }
 
-    public void invalidate(HeadSkin head) {
-        cache.remove(head.id());
-    }
-
     public void clear() {
         cache.clear();
     }

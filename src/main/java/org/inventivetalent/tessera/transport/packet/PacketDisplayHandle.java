@@ -5,9 +5,7 @@ import net.minecraft.network.protocol.game.ClientboundRemoveEntitiesPacket;
 import net.minecraft.network.protocol.game.ClientboundSetEntityDataPacket;
 import net.minecraft.network.syncher.SynchedEntityData;
 import org.bukkit.craftbukkit.entity.CraftPlayer;
-import org.bukkit.craftbukkit.inventory.CraftItemStack;
 import org.bukkit.entity.Player;
-import org.bukkit.inventory.ItemStack;
 import org.bukkit.util.Transformation;
 
 import java.util.List;
@@ -41,7 +39,6 @@ final class PacketDisplayHandle implements DisplayHandle {
     }
 
     @Override
-    @SuppressWarnings({"rawtypes", "unchecked"})
     public void setTransformation(Transformation tx, int delayTicks, int durationTicks) {
         this.lastTx = tx;
         if (!isAlive()) return;
@@ -54,17 +51,6 @@ final class PacketDisplayHandle implements DisplayHandle {
                 SynchedEntityData.DataValue.create(DisplayDataAccessors.SCALE, tx.getScale()),
                 SynchedEntityData.DataValue.create(DisplayDataAccessors.LEFT_ROTATION, tx.getLeftRotation()),
                 SynchedEntityData.DataValue.create(DisplayDataAccessors.RIGHT_ROTATION, tx.getRightRotation())
-        ));
-        send(packet);
-    }
-
-    @Override
-    @SuppressWarnings({"rawtypes", "unchecked"})
-    public void setItemStack(ItemStack item) {
-        if (!isAlive()) return;
-        net.minecraft.world.item.ItemStack nmsItem = CraftItemStack.asNMSCopy(item);
-        var packet = new ClientboundSetEntityDataPacket(entityId, List.of(
-                SynchedEntityData.DataValue.create(DisplayDataAccessors.ITEM_STACK, nmsItem)
         ));
         send(packet);
     }
