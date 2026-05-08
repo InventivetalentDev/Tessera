@@ -90,7 +90,11 @@ public final class TesseraPlugin extends JavaPlugin {
         progressListener.start();
 
         PluginCommand cmd = getCommand("tessera");
-        if (cmd != null) cmd.setExecutor(new TesseraCommand(this, blockFactory, registry, baker));
+        if (cmd != null) {
+            TesseraCommand tc = new TesseraCommand(this, blockFactory, registry, baker);
+            cmd.setExecutor(tc);
+            cmd.setTabCompleter(tc);
+        }
 
         getLogger().info("Tessera enabled: gridN=" + config.chunkGridSize()
                 + ", mcVersion=" + mcVersion
