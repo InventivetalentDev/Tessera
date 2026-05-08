@@ -159,3 +159,20 @@ interaction:
   # vanilla — the lattice is half-filled and barely visible. 1000ms means
   # only blocks with a full-health break time ≥ 1 second get the animation.
   minBreakDurationMs: 500
+
+  # Trigger a runtime bake as soon as the player starts breaking a block
+  # (left-click in PROGRESS mode, BlockBreakEvent in POST_BREAK mode), giving
+  # the upload more time to complete before the block finishes breaking.
+  # Requires mineskin.apiKey. Bakes are idempotent — firing early is safe.
+  bakeOnBreakStart: true
+
+placeholder:
+  # Show a uniform-color player-head lattice for blocks that aren't baked yet.
+  # Gives visual feedback on the very first break of a new block type.
+  # Requires mineskin.apiKey — the placeholder skin is uploaded once and
+  # cached in plugins/Tessera/cache/skins.json by its PNG hash.
+  enabled: true
+
+  # Hex color (#RRGGBB or #AARRGGBB) for the placeholder lattice.
+  # Defaults to white. Changing this value causes a new one-time upload.
+  color: "#FFFFFF"

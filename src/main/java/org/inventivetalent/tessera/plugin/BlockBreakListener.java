@@ -10,7 +10,9 @@ import org.inventivetalent.tessera.effect.builtin.DirectionalShrinkEffect;
 import org.inventivetalent.tessera.nms.BlockTintReader;
 import org.bukkit.entity.Player;
 import org.inventivetalent.tessera.plugin.ProgressTracker.BlockPosKey;
+import org.inventivetalent.tessera.skin.HeadSkin;
 import org.inventivetalent.tessera.skin.HeadsRegistry;
+import org.inventivetalent.tessera.skin.PlaceholderSkinManager;
 import org.inventivetalent.tessera.skin.bake.BlockBaker;
 import org.bukkit.Location;
 import org.bukkit.Material;
@@ -30,17 +32,20 @@ public final class BlockBreakListener implements Listener {
     private final FakeBlockFactory factory;
     private final HeadsRegistry registry;
     private final BlockBaker baker;
+    private final PlaceholderSkinManager placeholderSkins;
     private final AtomicInteger active;
     private final BlockBreakProgressListener progressListener;
 
     public BlockBreakListener(TesseraPlugin plugin, FakeBlockFactory factory,
                               HeadsRegistry registry, BlockBaker baker,
+                              PlaceholderSkinManager placeholderSkins,
                               AtomicInteger active,
                               BlockBreakProgressListener progressListener) {
         this.plugin = plugin;
         this.factory = factory;
         this.registry = registry;
         this.baker = baker;
+        this.placeholderSkins = placeholderSkins;
         this.active = active;
         this.progressListener = progressListener;
     }
@@ -103,16 +108,41 @@ public final class BlockBreakListener implements Listener {
             return;
         }
 
-        // Not baked yet — fire the runtime bake for next time (so a player
-        // breaking the same block again gets the effect) but don't spawn
-        // anything for *this* break. The post-hoc effect at an already-empty
-        // cell looked off, and silently dropping is preferable to a delayed
-        // surprise. BlockBaker.inflight dedupes simultaneous calls for the
-        // same key, so spam-breaking the same block won't pile up MineSkin
-        // requests; partial-failure bakes leave the registry empty so the
-        // next bake() retries only the missing chunks via SkinDiskCache.
+        // Not baked yet — fire the runtime bake so the next break gets the effect.
+        // inflight dedupes simultaneous calls for the same key.
         if (cfg.debug()) plugin.getLogger().info("[debug] runtime-baking " + bakeKey);
         baker.bake(bakeKey);
+
+        // Show a placeholder lattice so this break isn't completely invisible.
+        if (cfg.placeholderEnabled() && placeholderSkins != null) {
+            HeadSkin ph = placeholderSkins.currentHead();
+            if (ph != null) spawnPlaceholder(player, bakeKey, breakLoc, eyeDir, cfg);
+        }
+    }
+
+    private void spawnPlaceholder(Player viewer, BakeKey bakeKey,
+                                   Location breakLoc, Vector eyeDir, TesseraConfig cfg) {
+        if (active.get() >= cfg.maxConcurrentFakeBlocks()) return;
+        active.incrementAndGet();
+        HeadSkin ph = placeholderSkins.currentHead();
+        if (ph == null) { active.decrementAndGet(); return; }
+
+        // Use identity rotation — block hasn't been baked yet so no variant data exists.
+        Quaternionf blockRotation = new Quaternionf();
+        FakeBlock fb;
+        try {
+            fb = factory.createPlaceholder(viewer, breakLoc, blockRotation, ph);
+        } catch (RuntimeException re) {
+            active.decrementAndGet();
+            plugin.getLogger().warning("Failed to spawn placeholder for " + bakeKey + ": " + re.getMessage());
+            return;
+        }
+
+        EffectContext ctx = new EffectContext(eyeDir, System.currentTimeMillis(), cfg.effectDurationMs(), plugin);
+        new DirectionalShrinkEffect(cfg.collapseStyle()).applyTimed(fb, ctx);
+
+        long despawnTicks = (cfg.effectDurationMs() / 50L) + 5L;
+        plugin.getServer().getScheduler().runTaskLater(plugin, active::decrementAndGet, despawnTicks);
     }
 
     private void spawn(Player viewer, BakeKey bakeKey, BlockData blockData,

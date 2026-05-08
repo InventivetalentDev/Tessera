@@ -113,10 +113,11 @@ public final class TesseraCommand implements CommandExecutor, TabCompleter {
     private static final List<String> CONFIG_KEYS = List.of(
             "animation.durationMs", "animation.fillInterior", "animation.mode",
             "animation.style", "animation.waveWindow", "chunkGridSize", "debug",
-            "interaction.eagerPreload", "interaction.leftClickGraceMs",
-            "interaction.minBreakDurationMs", "interaction.startOnLeftClick",
-            "limits.maxConcurrentFakeBlocks", "progress.clientHideRealBlock",
-            "progress.smoothInterpolation", "transport");
+            "interaction.bakeOnBreakStart", "interaction.eagerPreload",
+            "interaction.leftClickGraceMs", "interaction.minBreakDurationMs",
+            "interaction.startOnLeftClick", "limits.maxConcurrentFakeBlocks",
+            "placeholder.color", "placeholder.enabled",
+            "progress.clientHideRealBlock", "progress.smoothInterpolation", "transport");
     private static final List<String> DEGREES = List.of("0", "90", "180", "270");
     private static final List<String> FLIPS = List.of("none", "h", "v", "hv");
     private static final List<String> ON_OFF = List.of("on", "off", "toggle");
@@ -386,6 +387,9 @@ public final class TesseraCommand implements CommandExecutor, TabCompleter {
             sender.sendMessage("§f  interaction.eagerPreload        §7true|false");
             sender.sendMessage("§f  interaction.minBreakDurationMs  §7int (ms)");
             sender.sendMessage("§f  interaction.leftClickGraceMs    §7int (ms)");
+            sender.sendMessage("§f  interaction.bakeOnBreakStart    §7true|false");
+            sender.sendMessage("§f  placeholder.enabled            §7true|false");
+            sender.sendMessage("§f  placeholder.color              §7#RRGGBB hex");
             return true;
         }
 
@@ -441,6 +445,9 @@ public final class TesseraCommand implements CommandExecutor, TabCompleter {
             case "interaction.eagerpreload"         -> String.valueOf(cfg.eagerPreload());
             case "interaction.minbreakdurationms"   -> String.valueOf(cfg.minBreakDurationMs());
             case "interaction.leftclickgracems"     -> String.valueOf(cfg.leftClickGraceMs());
+            case "interaction.bakeonbreakstart"     -> String.valueOf(cfg.bakeOnBreakStart());
+            case "placeholder.enabled"              -> String.valueOf(cfg.placeholderEnabled());
+            case "placeholder.color"                -> cfg.placeholderColor();
             default                                 -> null;
         };
     }
@@ -496,6 +503,21 @@ public final class TesseraCommand implements CommandExecutor, TabCompleter {
                 long v = cfgParseLong(value, "interaction.leftClickGraceMs");
                 if (v < 0) throw new IllegalArgumentException("interaction.leftClickGraceMs must be ≥ 0");
                 yaml.set("interaction.leftClickGraceMs", v);
+            }
+            case "interaction.bakeonbreakstart" -> yaml.set("interaction.bakeOnBreakStart",
+                    cfgParseBool(value, "interaction.bakeOnBreakStart"));
+            case "placeholder.enabled"          -> yaml.set("placeholder.enabled",
+                    cfgParseBool(value, "placeholder.enabled"));
+            case "placeholder.color" -> {
+                // Validate hex color: 6 or 8 hex digits, optional leading #
+                String hex = value.trim();
+                String digits = hex.startsWith("#") ? hex.substring(1) : hex;
+                if ((digits.length() != 6 && digits.length() != 8)
+                        || !digits.chars().allMatch(c -> "0123456789abcdefABCDEF".indexOf(c) >= 0)) {
+                    throw new IllegalArgumentException(
+                            "placeholder.color must be a 6- or 8-digit hex color (e.g. #FFFFFF); got: " + value);
+                }
+                yaml.set("placeholder.color", "#" + digits.toUpperCase(Locale.ROOT));
             }
             default -> throw new IllegalArgumentException(
                     "Unknown config key: " + key + ". Run /tessera config to list all options.");

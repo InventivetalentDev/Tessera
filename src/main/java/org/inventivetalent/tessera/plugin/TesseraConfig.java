@@ -37,7 +37,10 @@ public record TesseraConfig(
         boolean enableTintedBlocks,
         boolean metrics,
         boolean debug,
-        Transport transport
+        Transport transport,
+        boolean bakeOnBreakStart,
+        boolean placeholderEnabled,
+        String placeholderColor
 ) {
 
     public enum AnimationMode { PROGRESS, POST_BREAK }
@@ -105,8 +108,24 @@ public record TesseraConfig(
                 cfg.getBoolean("enableTintedBlocks", true),
                 cfg.getBoolean("metrics", true),
                 readBool(cfg, "debug", "debug", false),
-                transport
+                transport,
+                readBool(cfg, "interaction.bakeOnBreakStart", "bakeOnBreakStart", true),
+                readBool(cfg, "placeholder.enabled", "placeholderEnabled", true),
+                parseHexColor(readString(cfg, "placeholder.color", "placeholderColor", "#FFFFFF"))
         );
+    }
+
+    /** Validates and normalises a hex color string; returns "#FFFFFF" on bad input. */
+    private static String parseHexColor(String raw) {
+        if (raw == null) return "#FFFFFF";
+        String s = raw.trim().startsWith("#") ? raw.trim().substring(1) : raw.trim();
+        if (s.length() == 6 || s.length() == 8) {
+            try {
+                Long.parseLong(s, 16);
+                return "#" + s.toUpperCase(Locale.ROOT);
+            } catch (NumberFormatException ignored) {}
+        }
+        return "#FFFFFF";
     }
 
     public boolean enables(String materialKey) {

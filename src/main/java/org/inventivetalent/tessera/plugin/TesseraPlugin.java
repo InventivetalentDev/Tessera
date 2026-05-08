@@ -5,6 +5,7 @@ import org.inventivetalent.tessera.assemble.HeadItemFactory;
 import org.inventivetalent.tessera.assets.fetch.McAssetClient;
 import org.inventivetalent.tessera.nms.BlockTintReader;
 import org.inventivetalent.tessera.skin.HeadsRegistry;
+import org.inventivetalent.tessera.skin.PlaceholderSkinManager;
 import org.inventivetalent.tessera.skin.SkinDiskCache;
 import org.inventivetalent.tessera.skin.SkinUploader;
 import org.inventivetalent.tessera.skin.bake.BlockBaker;
@@ -31,6 +32,7 @@ public final class TesseraPlugin extends JavaPlugin {
     private SkinUploader uploader;
     private SkinDiskCache diskCache;
     private BlockBaker baker;
+    private PlaceholderSkinManager placeholderSkins;
     private java.util.concurrent.ExecutorService bakerExecutor;
     private BlockBreakProgressListener progressListener;
 
@@ -72,6 +74,8 @@ public final class TesseraPlugin extends JavaPlugin {
         registry.setPersistence(runtimeHeads);
         this.bakerExecutor = Executors.newFixedThreadPool(2, named("Tessera-Baker"));
         this.baker = new BlockBaker(getLogger(), () -> this.config.debug(), assets, mcVersion, registry, uploader, diskCache, pngDir, bakerExecutor);
+        this.placeholderSkins = new PlaceholderSkinManager(getLogger(), uploader, diskCache, pngDir, bakerExecutor);
+        if (config.placeholderEnabled()) placeholderSkins.update(config.placeholderColor());
 
         // Inject the vanilla grass/foliage colormaps into NMS so server-side
         // Biome.getGrassColor() / getFoliageColor() return real per-biome
@@ -83,10 +87,11 @@ public final class TesseraPlugin extends JavaPlugin {
 
         AtomicInteger active = new AtomicInteger();
         ProgressTracker tracker = new ProgressTracker();
-        this.progressListener = new BlockBreakProgressListener(this, blockFactory, registry, active, tracker);
+        this.progressListener = new BlockBreakProgressListener(this, blockFactory, registry, baker,
+                placeholderSkins, active, tracker);
         getServer().getPluginManager().registerEvents(progressListener, this);
         getServer().getPluginManager().registerEvents(
-                new BlockBreakListener(this, blockFactory, registry, baker, active, progressListener), this);
+                new BlockBreakListener(this, blockFactory, registry, baker, placeholderSkins, active, progressListener), this);
         progressListener.start();
 
         PluginCommand cmd = getCommand("tessera");
@@ -128,6 +133,9 @@ public final class TesseraPlugin extends JavaPlugin {
     public void reloadTesseraConfig() {
         reloadConfig();
         this.config = TesseraConfig.from(getConfig());
+        if (placeholderSkins != null && config.placeholderEnabled()) {
+            placeholderSkins.update(config.placeholderColor());
+        }
     }
 
     private DisplayTransport pickTransport(TesseraConfig cfg) {

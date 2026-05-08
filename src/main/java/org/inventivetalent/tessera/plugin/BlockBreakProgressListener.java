@@ -11,7 +11,10 @@ import org.inventivetalent.tessera.plugin.ProgressTracker.BlockPosKey;
 import org.inventivetalent.tessera.plugin.ProgressTracker.State;
 import org.inventivetalent.tessera.plugin.ProgressTracker.TrackedBreak;
 import org.inventivetalent.tessera.plugin.TesseraConfig.AnimationMode;
+import org.inventivetalent.tessera.skin.HeadSkin;
 import org.inventivetalent.tessera.skin.HeadsRegistry;
+import org.inventivetalent.tessera.skin.PlaceholderSkinManager;
+import org.inventivetalent.tessera.skin.bake.BlockBaker;
 import org.inventivetalent.tessera.transport.TransportSession;
 import org.bukkit.*;
 import org.bukkit.block.Block;
@@ -85,6 +88,8 @@ public final class BlockBreakProgressListener implements Listener {
     private final TesseraPlugin plugin;
     private final FakeBlockFactory factory;
     private final HeadsRegistry registry;
+    private final BlockBaker baker;
+    private final PlaceholderSkinManager placeholderSkins;
     private final AtomicInteger active;
     private final ProgressTracker tracker;
     private BukkitTask watchdog;
@@ -92,11 +97,14 @@ public final class BlockBreakProgressListener implements Listener {
     private final Map<UUID, PreloadEntry> preloads = new ConcurrentHashMap<>();
 
     public BlockBreakProgressListener(TesseraPlugin plugin, FakeBlockFactory factory,
-                                      HeadsRegistry registry, AtomicInteger active,
-                                      ProgressTracker tracker) {
+                                      HeadsRegistry registry, BlockBaker baker,
+                                      PlaceholderSkinManager placeholderSkins,
+                                      AtomicInteger active, ProgressTracker tracker) {
         this.plugin = plugin;
         this.factory = factory;
         this.registry = registry;
+        this.baker = baker;
+        this.placeholderSkins = placeholderSkins;
         this.active = active;
         this.tracker = tracker;
     }
@@ -225,6 +233,32 @@ public final class BlockBreakProgressListener implements Listener {
     public void onInteract(PlayerInteractEvent event) {
         if (event.getAction() != Action.LEFT_CLICK_BLOCK) return;
         TesseraConfig cfg = plugin.tesseraConfig();
+
+        // In POST_BREAK mode trigger an early bake on left-click so the skin upload
+        // gets a head start before the block actually breaks.
+        if (cfg.animationMode() == AnimationMode.POST_BREAK) {
+            if (cfg.bakeOnBreakStart()) {
+                Block b = event.getClickedBlock();
+                if (b != null && !b.getType().isAir()) {
+                    Player p = event.getPlayer();
+                    if (!tooFast(b, p, cfg)) {
+                        Material bMat = b.getType();
+                        BlockKey bKey = BlockKey.of(bMat.getKey().getNamespace() + ":" + bMat.getKey().getKey());
+                        if (cfg.enables(bKey.asString())) {
+                            int bTint = cfg.enableTintedBlocks() ? BlockTintReader.read(b) : 0;
+                            BakeKey bBakeKey = new BakeKey(bKey, bTint);
+                            if (!registry.has(bBakeKey)) {
+                                if (cfg.debug()) plugin.getLogger().info(
+                                        "[debug-progress] bake-on-click (post-break) " + bBakeKey);
+                                baker.bake(bBakeKey);
+                            }
+                        }
+                    }
+                }
+            }
+            return;
+        }
+
         if (cfg.animationMode() != AnimationMode.PROGRESS) return;
         if (!cfg.startOnLeftClick()) return;
 
@@ -376,7 +410,20 @@ public final class BlockBreakProgressListener implements Listener {
         if (tooFast(block, player, cfg)) return;
         int tint = cfg.enableTintedBlocks() ? BlockTintReader.read(block) : 0;
         BakeKey bakeKey = new BakeKey(key, tint);
-        if (!registry.has(bakeKey)) return;
+        if (!registry.has(bakeKey)) {
+            // Trigger bake now so it gets a head start for the next break.
+            if (cfg.bakeOnBreakStart()) {
+                if (cfg.debug()) plugin.getLogger().info(
+                        "[debug-progress] bake-on-start " + bakeKey);
+                baker.bake(bakeKey);
+            }
+            // Show a placeholder lattice so this break isn't completely invisible.
+            if (cfg.placeholderEnabled() && placeholderSkins != null) {
+                HeadSkin ph = placeholderSkins.currentHead();
+                if (ph != null) spawnPlaceholderAndRegister(player, block, breakLoc, posKey, progress, key, bakeKey, ph, cfg);
+            }
+            return;
+        }
         if (active.get() >= cfg.maxConcurrentFakeBlocks()) {
             if (cfg.debug()) plugin.getLogger().info(
                     "[debug-progress] skip " + bakeKey + " at " + posKey + " (concurrency cap)");
@@ -428,6 +475,60 @@ public final class BlockBreakProgressListener implements Listener {
                         + " barrierSent=" + tb.barrierSent
                         + " front=" + plan.frontRefs().size()
                         + " pending=" + plan.pendingSpecs().size());
+
+        applyForward(tb, progress > 0d ? progress : STAGE_PER_EVENT, cfg);
+    }
+
+    private void spawnPlaceholderAndRegister(Player player, Block block, Location breakLoc,
+                                              BlockPosKey posKey, double progress, BlockKey key,
+                                              BakeKey bakeKey, HeadSkin placeholderHead,
+                                              TesseraConfig cfg) {
+        if (active.get() >= cfg.maxConcurrentFakeBlocks()) {
+            if (cfg.debug()) plugin.getLogger().info(
+                    "[debug-progress] placeholder skip " + bakeKey + " at " + posKey + " (concurrency cap)");
+            return;
+        }
+
+        BlockPosKey prev = tracker.activeBlockFor(player.getUniqueId());
+        if (prev != null && !prev.equals(posKey)) {
+            TrackedBreak old = tracker.remove(prev);
+            if (old != null) disposeImmediate(old, /*restoreBlock=*/ true);
+        }
+
+        BlockData blockData = block.getBlockData();
+        // Use identity rotation for unregistered blocks (no baked variant data yet).
+        Quaternionf blockRotation = new Quaternionf();
+        Vector eyeDir = player.getEyeLocation().getDirection();
+        active.incrementAndGet();
+
+        FakeBlockFactory.PreloadPlan plan;
+        try {
+            plan = factory.preloadPlaceholderAndPending(player, breakLoc, blockRotation,
+                    cfg.fillInterior(), eyeDir, placeholderHead);
+        } catch (RuntimeException re) {
+            active.decrementAndGet();
+            plugin.getLogger().warning("Failed to spawn placeholder for " + bakeKey + ": " + re.getMessage());
+            return;
+        }
+
+        int gridN = registry.gridN();
+        Location origin = new Location(breakLoc.getWorld(),
+                Math.floor(breakLoc.getX()), Math.floor(breakLoc.getY()), Math.floor(breakLoc.getZ()));
+        FakeBlock fb = new FakeBlock(origin, key, gridN,
+                new ArrayList<>(plan.frontRefs().values()), blockRotation, plan.session());
+
+        TrackedBreak tb = buildTrackedBreak(player.getUniqueId(), key, fb, blockData, eyeDir, plan);
+        tracker.put(posKey, tb);
+        clearPreloadsAt(posKey);
+
+        if (cfg.clientHideRealBlock()) {
+            sendBarrierNow(tb, player, breakLoc);
+        }
+
+        if (cfg.debug()) plugin.getLogger().info(
+                "[" + ts() + "] [debug-progress] placeholder-spawn " + bakeKey + " at " + posKey
+                        + " player=" + player.getName() + " progress=" + fmt(progress)
+                        + " front=" + plan.frontRefs().size());
 
         applyForward(tb, progress > 0d ? progress : STAGE_PER_EVENT, cfg);
     }

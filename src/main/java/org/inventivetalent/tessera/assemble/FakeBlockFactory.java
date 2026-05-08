@@ -260,6 +260,127 @@ public final class FakeBlockFactory {
                 eyeDir, existingRefs);
     }
 
+    // ── Placeholder spawn (no registry) ──────────────────────────────────────
+
+    /**
+     * Like {@link #preloadAndPending} but uses a single fixed {@code placeholderHead}
+     * for every chunk instead of per-chunk registry entries. All outer chunks are
+     * spawned immediately (no pending list) so the result is compatible with
+     * {@code BlockBreakProgressListener.buildTrackedBreak} without requiring null
+     * registry entries in {@link PendingChunkSpec}.
+     *
+     * <p>The returned {@link PreloadPlan} has all outer chunks in {@code frontRefs},
+     * an empty {@code pendingSpecs} list, and a populated {@code allOuterT} map so
+     * the directional shrink wave still advances correctly.
+     */
+    public PreloadPlan preloadPlaceholderAndPending(Player viewer, Location blockLocation,
+                                                     Quaternionf blockRotation, boolean fillInterior,
+                                                     Vector eyeDir, HeadSkin placeholderHead) {
+        World world = blockLocation.getWorld();
+        if (world == null) return emptyPlan();
+        int gridN = registry.gridN();
+        BlockGeometry geom = new BlockGeometry(gridN, blockRotation);
+        Location origin = new Location(world,
+                Math.floor(blockLocation.getX()),
+                Math.floor(blockLocation.getY()),
+                Math.floor(blockLocation.getZ()));
+
+        Quaternionf canonicalRotation = HeadRotations.compose(
+                HeadFace.FRONT, FaceDir.SOUTH, FaceRotations.of(HeadFace.FRONT));
+
+        ItemStack placeholderStack = itemFactory.build(placeholderHead);
+
+        Vector3f dir = new Vector3f((float) eyeDir.getX(), (float) eyeDir.getY(),
+                (float) eyeDir.getZ()).normalize();
+        Vector3f blockCenter = new Vector3f(0.5f, 0.5f, 0.5f);
+
+        // Project all outer coords and build t map for the directional wave.
+        Map<ChunkCoord, Double> rawProj = new HashMap<>();
+        double minP = Double.POSITIVE_INFINITY, maxP = Double.NEGATIVE_INFINITY;
+        for (int x = 0; x < gridN; x++) {
+            for (int y = 0; y < gridN; y++) {
+                for (int z = 0; z < gridN; z++) {
+                    ChunkCoord c = new ChunkCoord(x, y, z);
+                    if (outwardFacesAt(c, gridN).isEmpty()) continue;
+                    Vector3f rel = geom.chunkLocalCenter(c).sub(blockCenter);
+                    new Quaternionf(blockRotation).transform(rel);
+                    double p = rel.dot(dir);
+                    rawProj.put(c, p);
+                    if (p < minP) minP = p;
+                    if (p > maxP) maxP = p;
+                }
+            }
+        }
+        double range = Math.max(1e-6, maxP - minP);
+        Map<ChunkCoord, Double> allOuterT = new HashMap<>(rawProj.size() * 2);
+        for (var e : rawProj.entrySet()) allOuterT.put(e.getKey(), (e.getValue() - minP) / range);
+
+        TransportSession session = transport.openSession(viewer, world);
+        Map<ChunkCoord, ChunkRef> frontRefs = new HashMap<>(rawProj.size() * 2);
+
+        for (ChunkCoord c : rawProj.keySet()) {
+            ChunkRef ref = spawnPlaceholderChunk(session, origin, c, placeholderStack,
+                    blockRotation, canonicalRotation, geom, gridN);
+            frontRefs.put(c, ref);
+        }
+
+        return new PreloadPlan(frontRefs, Collections.emptyList(), allOuterT, session);
+    }
+
+    /**
+     * Spawn a full placeholder lattice and return it as a {@link FakeBlock}.
+     * Used by the POST_BREAK path in {@code BlockBreakListener} where there is no
+     * progress-tracking context — the effect is applied via
+     * {@link org.inventivetalent.tessera.effect.builtin.DirectionalShrinkEffect#applyTimed}.
+     */
+    public FakeBlock createPlaceholder(Player viewer, Location blockLocation,
+                                       Quaternionf blockRotation, HeadSkin placeholderHead) {
+        World world = blockLocation.getWorld();
+        if (world == null) throw new IllegalArgumentException("Location has no world");
+        int gridN = registry.gridN();
+        BlockGeometry geom = new BlockGeometry(gridN, blockRotation);
+        Location origin = new Location(world,
+                Math.floor(blockLocation.getX()),
+                Math.floor(blockLocation.getY()),
+                Math.floor(blockLocation.getZ()));
+
+        Quaternionf canonicalRotation = HeadRotations.compose(
+                HeadFace.FRONT, FaceDir.SOUTH, FaceRotations.of(HeadFace.FRONT));
+
+        ItemStack placeholderStack = itemFactory.build(placeholderHead);
+        TransportSession session = transport.openSession(viewer, world);
+        List<ChunkRef> refs = new ArrayList<>();
+
+        for (int x = 0; x < gridN; x++) {
+            for (int y = 0; y < gridN; y++) {
+                for (int z = 0; z < gridN; z++) {
+                    ChunkCoord c = new ChunkCoord(x, y, z);
+                    if (outwardFacesAt(c, gridN).isEmpty()) continue;
+                    refs.add(spawnPlaceholderChunk(session, origin, c, placeholderStack,
+                            blockRotation, canonicalRotation, geom, gridN));
+                }
+            }
+        }
+
+        return new FakeBlock(origin, BlockKey.of("tessera:placeholder"), gridN, refs,
+                blockRotation, session);
+    }
+
+    private ChunkRef spawnPlaceholderChunk(TransportSession session, Location origin, ChunkCoord coord,
+                                            ItemStack placeholderStack, Quaternionf blockRotation,
+                                            Quaternionf canonicalRotation, BlockGeometry geom, int gridN) {
+        float scale = geom.chunkScale() * INITIAL_SHELL_COMPRESSION;
+        Vector3f translation = geom.translationFor(coord, canonicalRotation, scale);
+        Transformation tx = new Transformation(
+                translation,
+                new Quaternionf(blockRotation),
+                new Vector3f(scale, scale, scale),
+                canonicalRotation);
+        DisplayHandle handle = session.spawn(origin, placeholderStack.clone(), tx, 1.0f);
+        return new ChunkRef(handle, coord, geom.chunkLocalCenter(coord),
+                outwardFacesAt(coord, gridN));
+    }
+
     /**
      * Build a {@link PendingSpawnContext} for a batch of pending chunk spawns.
      * Pass any interior spec as {@code donorSpec} so the donor ItemStack is built once
