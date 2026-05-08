@@ -1,5 +1,5 @@
 name: Tessera
-version: 1.0.0-SNAPSHOT
+version: ${version}
 main: org.inventivetalent.tessera.plugin.TesseraPlugin
 api-version: '1.21'
 authors: [inventivetalent]
