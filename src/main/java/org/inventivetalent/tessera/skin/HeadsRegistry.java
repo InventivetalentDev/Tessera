@@ -74,6 +74,8 @@ public final class HeadsRegistry {
     // biome), so this map stays keyed by BlockKey.
     private final Map<BlockKey, Map<String, ModelResolver.VariantRotation>> variantRotations;
     private final Map<String, Entry> hashIndex;
+    // Add-only: blocks are never removed on invalidate so tab-completion sees a superset,
+    // which is fine — invalidated blocks get re-baked on next use.
     private final Set<BlockKey> knownBlocks = java.util.concurrent.ConcurrentHashMap.newKeySet();
 
     private HeadsRegistry(Logger logger, int gridN, String version,
@@ -264,7 +266,6 @@ public final class HeadsRegistry {
     public boolean invalidate(BlockKey block) {
         variantRotations.remove(block);
         boolean removed = blocks.keySet().removeIf(k -> k.block().equals(block));
-        if (removed) knownBlocks.remove(block);
         Persistence p = persistence;
         if (p != null) {
             try { p.remove(block); }
@@ -282,7 +283,6 @@ public final class HeadsRegistry {
     public int invalidateAll() {
         int n = blocks.size();
         blocks.clear();
-        knownBlocks.clear();
         variantRotations.clear();
         // hashIndex stays — its only consumer is BlockBaker.findByHash,
         // which is bypassed when TileRotations.consumeStale is true.

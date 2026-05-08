@@ -164,6 +164,10 @@ public final class TesseraCommand implements CommandExecutor, TabCompleter {
         return List.copyOf(out);
     }
 
+    private static BlockKey blockKeyOf(Material mat) {
+        return BlockKey.of(mat.getKey().toString());
+    }
+
     @Override
     public boolean onCommand(@NotNull CommandSender sender, @NotNull Command cmd, @NotNull String label, @NotNull String[] args) {
         if (args.length == 0) {
@@ -203,7 +207,7 @@ public final class TesseraCommand implements CommandExecutor, TabCompleter {
                 break;
             }
         }
-        BlockKey key = BlockKey.of(mat.getKey().getNamespace() + ":" + mat.getKey().getKey());
+        BlockKey key = blockKeyOf(mat);
         Location target = pickTargetLocation(p);
         boolean st = staticMode;
 
@@ -290,7 +294,7 @@ public final class TesseraCommand implements CommandExecutor, TabCompleter {
             sender.sendMessage("§cUnknown material: " + args[1]);
             return true;
         }
-        BlockKey block = BlockKey.of(mat.getKey().getNamespace() + ":" + mat.getKey().getKey());
+        BlockKey block = blockKeyOf(mat);
         int tintArgb = 0;
         for (int i = 2; i < args.length; i++) {
             String a = args[i];
@@ -451,11 +455,11 @@ public final class TesseraCommand implements CommandExecutor, TabCompleter {
                 yaml.set("chunkGridSize", v);
             }
             case "animation.mode" -> {
-                cfgValidateOneOf(value, "animation.mode", "progress", "post-break");
+                cfgValidateOneOf(value, "animation.mode", "progress", "post-break", "post_break", "postbreak");
                 yaml.set("animation.mode", value.toLowerCase(Locale.ROOT));
             }
             case "animation.style" -> {
-                cfgValidateOneOf(value, "animation.style", "shrink", "pop");
+                cfgValidateOneOf(value, "animation.style", "shrink", "pop", "instant", "disappear");
                 yaml.set("animation.style", value.toLowerCase(Locale.ROOT));
             }
             case "animation.durationms" -> {
@@ -470,7 +474,7 @@ public final class TesseraCommand implements CommandExecutor, TabCompleter {
             }
             case "animation.fillinterior"           -> yaml.set("animation.fillInterior",                cfgParseBool(value, "animation.fillInterior"));
             case "transport" -> {
-                cfgValidateOneOf(value, "transport", "packet", "bukkit");
+                cfgValidateOneOf(value, "transport", "packet", "nms", "bukkit", "api");
                 yaml.set("transport", value.toLowerCase(Locale.ROOT));
             }
             case "debug"                            -> yaml.set("debug",                                 cfgParseBool(value, "debug"));
@@ -626,7 +630,7 @@ public final class TesseraCommand implements CommandExecutor, TabCompleter {
         if (mat == null || !mat.isBlock()) {
             sender.sendMessage("§cNot a block material: " + args[4]); return true;
         }
-        BlockKey key = BlockKey.of(mat.getKey().getNamespace() + ":" + mat.getKey().getKey());
+        BlockKey key = blockKeyOf(mat);
         Location anchor = pickTargetLocation(p);
         new PermutationSweeper(plugin, factory, registry, baker)
                 .sweep(p, sender, key, mat, face, anchor, kind);
@@ -859,10 +863,12 @@ public final class TesseraCommand implements CommandExecutor, TabCompleter {
         if (args.length < 3 || args[2].equalsIgnoreCase("toggle")) {
             on = !FaceDebugTint.isEnabled();
         } else {
-            String v = args[2].toLowerCase(Locale.ROOT);
-            if (v.equals("on") || v.equals("true") || v.equals("1")) on = true;
-            else if (v.equals("off") || v.equals("false") || v.equals("0")) on = false;
-            else { sender.sendMessage("§c/tessera debug debugtex on|off|toggle"); return true; }
+            try {
+                on = cfgParseBool(args[2], "debugtex");
+            } catch (IllegalArgumentException e) {
+                sender.sendMessage("§c/tessera debug debugtex on|off|toggle");
+                return true;
+            }
         }
         FaceDebugTint.setEnabled(on);
         int cleared = registry.invalidateAll();
@@ -883,7 +889,7 @@ public final class TesseraCommand implements CommandExecutor, TabCompleter {
         }
         Material mat = Material.matchMaterial(args[2]);
         if (mat == null) { sender.sendMessage("§cUnknown material: " + args[2]); return true; }
-        BlockKey key = BlockKey.of(mat.getKey().getNamespace() + ":" + mat.getKey().getKey());
+        BlockKey key = blockKeyOf(mat);
         boolean removed = registry.invalidate(key);
         sender.sendMessage(removed
                 ? "§aCleared " + key + " from registry; next /tessera test will re-bake."
@@ -902,7 +908,7 @@ public final class TesseraCommand implements CommandExecutor, TabCompleter {
         }
         Material mat = Material.matchMaterial(args[2]);
         if (mat == null) { sender.sendMessage("§cUnknown material: " + args[2]); return true; }
-        BlockKey key = BlockKey.of(mat.getKey().getNamespace() + ":" + mat.getKey().getKey());
+        BlockKey key = blockKeyOf(mat);
         java.nio.file.Path outDir = plugin.getDataFolder().toPath()
                 .resolve("dump-" + mat.getKey().getKey());
         try {
