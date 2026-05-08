@@ -40,6 +40,7 @@
  - Generating the skin signatures for player heads takes time. Paid MineSkin plans make this much faster, but will still take somewhere between a few seconds to a couple of minutes.
  - The plugin ships with a handful of pre-baked skin signatures for the most common blocks (at default grid size 4) - everything else will have to go through MineSkin first.
  - Block break sounds may sound off due to the block being replaced with a barrier while breaking.
+ - Currently only supports cube-blocks - support for e.g. stairs, slabs and other block shapes may be added in the future.
 
 
 > Creation of this plugin was heavily AI-assisted.
