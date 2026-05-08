@@ -40,6 +40,17 @@ import java.util.Locale;
  *                                       bake without spawning; reports upload count + completion.
  *                                       Tint is required for biome-tinted blocks (grass, leaves,
  *                                       water) — supply the resolved biome multiplier as 6 hex digits.
+ *   /tessera config                     list all editable config options
+ *   /tessera config &lt;key&gt;               show current value of a config option
+ *   /tessera config &lt;key&gt; &lt;value&gt;       set a config option, save to disk, and reload immediately.
+ *                                       Keys: chunkGridSize, animation.mode, animation.style,
+ *                                       animation.durationMs, animation.waveWindow,
+ *                                       animation.fillInterior, transport, debug,
+ *                                       limits.maxConcurrentFakeBlocks,
+ *                                       progress.clientHideRealBlock, progress.smoothInterpolation,
+ *                                       interaction.startOnLeftClick, interaction.eagerPreload,
+ *                                       interaction.minBreakDurationMs, interaction.leftClickGraceMs.
+ *                                       chunkGridSize and transport require a server restart.
  *   /tessera reload                     reload config.yml
  *
  *   /tessera debug grid [material]      preview cube lattice with default Steve skin
@@ -103,12 +114,13 @@ public final class TesseraCommand implements CommandExecutor {
     @Override
     public boolean onCommand(@NotNull CommandSender sender, @NotNull Command cmd, @NotNull String label, @NotNull String[] args) {
         if (args.length == 0) {
-            sender.sendMessage("§7/tessera test [material] | bake <material> | reload | debug face|center …");
+            sender.sendMessage("§7/tessera test [material] | bake <material> | config <key> [value] | reload | debug …");
             return true;
         }
         return switch (args[0].toLowerCase(Locale.ROOT)) {
             case "test"   -> handleTest(sender, args);
             case "bake"   -> handleBake(sender, args);
+            case "config" -> handleConfig(sender, args);
             case "reload" -> handleReload(sender);
             case "debug"  -> handleDebug(sender, args);
             default -> {
@@ -297,6 +309,170 @@ public final class TesseraCommand implements CommandExecutor {
             }
         }));
         return true;
+    }
+
+    private boolean handleConfig(CommandSender sender, String[] args) {
+        if (args.length < 2) {
+            sender.sendMessage("§6Tessera config options §8(§7/tessera config <key> [value]§8):");
+            sender.sendMessage("§f  chunkGridSize              §71|2|4|8|16  §8(restart required)");
+            sender.sendMessage("§f  animation.mode             §7progress|post-break");
+            sender.sendMessage("§f  animation.style            §7shrink|pop");
+            sender.sendMessage("§f  animation.durationMs       §7int (ms)");
+            sender.sendMessage("§f  animation.waveWindow       §70.0–1.0");
+            sender.sendMessage("§f  animation.fillInterior     §7true|false");
+            sender.sendMessage("§f  transport                  §7packet|bukkit  §8(restart required)");
+            sender.sendMessage("§f  debug                      §7true|false");
+            sender.sendMessage("§f  limits.maxConcurrentFakeBlocks  §7int");
+            sender.sendMessage("§f  progress.clientHideRealBlock    §7true|false");
+            sender.sendMessage("§f  progress.smoothInterpolation    §7true|false");
+            sender.sendMessage("§f  interaction.startOnLeftClick    §7true|false");
+            sender.sendMessage("§f  interaction.eagerPreload        §7true|false");
+            sender.sendMessage("§f  interaction.minBreakDurationMs  §7int (ms)");
+            sender.sendMessage("§f  interaction.leftClickGraceMs    §7int (ms)");
+            return true;
+        }
+
+        String key = args[1].toLowerCase(Locale.ROOT);
+        TesseraConfig cfg = plugin.tesseraConfig();
+
+        if (args.length < 3) {
+            String current = configCurrentValue(key, cfg);
+            if (current == null) {
+                sender.sendMessage("§cUnknown config key: " + args[1]);
+                sender.sendMessage("§7Run §f/tessera config§7 to list all options.");
+                return true;
+            }
+            sender.sendMessage("§7" + args[1] + " §8= §f" + current);
+            return true;
+        }
+
+        String value = args[2];
+        try {
+            applyConfigValue(key, value);
+        } catch (IllegalArgumentException e) {
+            sender.sendMessage("§c" + e.getMessage());
+            return true;
+        }
+        plugin.saveConfig();
+        try {
+            plugin.reloadTesseraConfig();
+        } catch (IllegalArgumentException e) {
+            sender.sendMessage("§cValue saved but config reload failed: " + e.getMessage());
+            return true;
+        }
+        sender.sendMessage("§aSet §f" + args[1] + " §a= §f" + value + "§a, config reloaded.");
+        if (key.equals("chunkgridsize") || key.equals("transport")) {
+            sender.sendMessage("§e" + args[1] + " requires a server restart to fully take effect.");
+        }
+        return true;
+    }
+
+    private String configCurrentValue(String key, TesseraConfig cfg) {
+        return switch (key) {
+            case "chunkgridsize"                    -> String.valueOf(cfg.chunkGridSize());
+            case "animation.mode"                   -> cfg.animationMode().name().toLowerCase(Locale.ROOT);
+            case "animation.style"                  -> cfg.collapseStyle().name().toLowerCase(Locale.ROOT);
+            case "animation.durationms"             -> String.valueOf(cfg.effectDurationMs());
+            case "animation.wavewindow"             -> String.valueOf(cfg.waveWindow());
+            case "animation.fillinterior"           -> String.valueOf(cfg.fillInterior());
+            case "transport"                        -> cfg.transport().name().toLowerCase(Locale.ROOT);
+            case "debug"                            -> String.valueOf(cfg.debug());
+            case "limits.maxconcurrentfakeblocks"   -> String.valueOf(cfg.maxConcurrentFakeBlocks());
+            case "progress.clienthiderealblock"     -> String.valueOf(cfg.clientHideRealBlock());
+            case "progress.smoothinterpolation"     -> String.valueOf(cfg.smoothInterpolation());
+            case "interaction.startonleftclick"     -> String.valueOf(cfg.startOnLeftClick());
+            case "interaction.eagerpreload"         -> String.valueOf(cfg.eagerPreload());
+            case "interaction.minbreakdurationms"   -> String.valueOf(cfg.minBreakDurationMs());
+            case "interaction.leftclickgracems"     -> String.valueOf(cfg.leftClickGraceMs());
+            default                                 -> null;
+        };
+    }
+
+    private void applyConfigValue(String key, String value) {
+        var yaml = plugin.getConfig();
+        switch (key) {
+            case "chunkgridsize" -> {
+                int v = cfgParseInt(value, "chunkGridSize");
+                if (v < 1 || v > 16 || 16 % v != 0)
+                    throw new IllegalArgumentException("chunkGridSize must be one of 1, 2, 4, 8, 16; got " + v);
+                yaml.set("chunkGridSize", v);
+            }
+            case "animation.mode" -> {
+                cfgValidateOneOf(value, "animation.mode", "progress", "post-break");
+                yaml.set("animation.mode", value.toLowerCase(Locale.ROOT));
+            }
+            case "animation.style" -> {
+                cfgValidateOneOf(value, "animation.style", "shrink", "pop");
+                yaml.set("animation.style", value.toLowerCase(Locale.ROOT));
+            }
+            case "animation.durationms" -> {
+                int v = cfgParseInt(value, "animation.durationMs");
+                if (v < 0) throw new IllegalArgumentException("animation.durationMs must be ≥ 0");
+                yaml.set("animation.durationMs", v);
+            }
+            case "animation.wavewindow" -> {
+                double v = cfgParseDouble(value, "animation.waveWindow");
+                if (v < 0 || v > 1) throw new IllegalArgumentException("animation.waveWindow must be between 0.0 and 1.0");
+                yaml.set("animation.waveWindow", v);
+            }
+            case "animation.fillinterior"           -> yaml.set("animation.fillInterior",                cfgParseBool(value, "animation.fillInterior"));
+            case "transport" -> {
+                cfgValidateOneOf(value, "transport", "packet", "bukkit");
+                yaml.set("transport", value.toLowerCase(Locale.ROOT));
+            }
+            case "debug"                            -> yaml.set("debug",                                 cfgParseBool(value, "debug"));
+            case "limits.maxconcurrentfakeblocks" -> {
+                int v = cfgParseInt(value, "limits.maxConcurrentFakeBlocks");
+                if (v < 1) throw new IllegalArgumentException("limits.maxConcurrentFakeBlocks must be ≥ 1");
+                yaml.set("limits.maxConcurrentFakeBlocks", v);
+            }
+            case "progress.clienthiderealblock"     -> yaml.set("progress.clientHideRealBlock",          cfgParseBool(value, "progress.clientHideRealBlock"));
+            case "progress.smoothinterpolation"     -> yaml.set("progress.smoothInterpolation",          cfgParseBool(value, "progress.smoothInterpolation"));
+            case "interaction.startonleftclick"     -> yaml.set("interaction.startOnLeftClick",          cfgParseBool(value, "interaction.startOnLeftClick"));
+            case "interaction.eagerpreload"         -> yaml.set("interaction.eagerPreload",              cfgParseBool(value, "interaction.eagerPreload"));
+            case "interaction.minbreakdurationms" -> {
+                int v = cfgParseInt(value, "interaction.minBreakDurationMs");
+                if (v < 0) throw new IllegalArgumentException("interaction.minBreakDurationMs must be ≥ 0");
+                yaml.set("interaction.minBreakDurationMs", v);
+            }
+            case "interaction.leftclickgracems" -> {
+                long v = cfgParseLong(value, "interaction.leftClickGraceMs");
+                if (v < 0) throw new IllegalArgumentException("interaction.leftClickGraceMs must be ≥ 0");
+                yaml.set("interaction.leftClickGraceMs", v);
+            }
+            default -> throw new IllegalArgumentException(
+                    "Unknown config key: " + key + ". Run /tessera config to list all options.");
+        }
+    }
+
+    private static int cfgParseInt(String s, String key) {
+        try { return Integer.parseInt(s); }
+        catch (NumberFormatException e) { throw new IllegalArgumentException(key + " must be an integer; got: " + s); }
+    }
+
+    private static long cfgParseLong(String s, String key) {
+        try { return Long.parseLong(s); }
+        catch (NumberFormatException e) { throw new IllegalArgumentException(key + " must be an integer; got: " + s); }
+    }
+
+    private static double cfgParseDouble(String s, String key) {
+        try { return Double.parseDouble(s); }
+        catch (NumberFormatException e) { throw new IllegalArgumentException(key + " must be a number; got: " + s); }
+    }
+
+    private static boolean cfgParseBool(String s, String key) {
+        return switch (s.toLowerCase(Locale.ROOT)) {
+            case "true", "yes", "1", "on"   -> true;
+            case "false", "no", "0", "off"  -> false;
+            default -> throw new IllegalArgumentException(key + " must be true or false; got: " + s);
+        };
+    }
+
+    private static void cfgValidateOneOf(String value, String key, String... options) {
+        String lower = value.toLowerCase(Locale.ROOT);
+        for (String opt : options) if (lower.equals(opt)) return;
+        throw new IllegalArgumentException(key + " must be one of: "
+                + String.join(", ", options) + "; got: " + value);
     }
 
     private boolean handleReload(CommandSender sender) {
