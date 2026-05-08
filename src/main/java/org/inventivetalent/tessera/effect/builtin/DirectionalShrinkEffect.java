@@ -114,8 +114,6 @@ public final class DirectionalShrinkEffect implements ChunkEffect {
             float target;
             if (style == CollapseStyle.POP) {
                 target = s >= 1.0 ? 0f : baseScales[i];
-            } else if (chunk.outwardFaces().isEmpty()) {
-                target = (float) (baseScales[i] * 4.0 * s * (1.0 - s));
             } else {
                 target = (float) (baseScales[i] * (1.0 - s));
             }
