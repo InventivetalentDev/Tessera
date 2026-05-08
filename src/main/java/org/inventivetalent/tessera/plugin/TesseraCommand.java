@@ -37,7 +37,6 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
-import java.util.TreeSet;
 
 /**
  * v1 command surface for testing the splitting/effect pipeline. Subcommands:
@@ -106,17 +105,26 @@ import java.util.TreeSet;
  */
 public final class TesseraCommand implements CommandExecutor, TabCompleter {
 
-    private static final List<String> TOP = List.of("test", "bake", "reload", "debug");
+    private static final List<String> TOP = List.of("bake", "config", "debug", "reload", "test");
     private static final List<String> DEBUG_SUBS = List.of(
-            "face", "center", "grid", "tilerot", "tileflip", "headrot",
-            "sourcerot", "sourceflip", "rebake", "status", "debugtex",
-            "permutations", "dumppng");
+            "center", "debugtex", "dumppng", "face", "grid", "headrot",
+            "permutations", "rebake", "sourceflip", "sourcerot", "status",
+            "tileflip", "tilerot");
+    private static final List<String> CONFIG_KEYS = List.of(
+            "animation.durationMs", "animation.fillInterior", "animation.mode",
+            "animation.style", "animation.waveWindow", "chunkGridSize", "debug",
+            "interaction.eagerPreload", "interaction.leftClickGraceMs",
+            "interaction.minBreakDurationMs", "interaction.startOnLeftClick",
+            "limits.maxConcurrentFakeBlocks", "progress.clientHideRealBlock",
+            "progress.smoothInterpolation", "transport");
     private static final List<String> DEGREES = List.of("0", "90", "180", "270");
     private static final List<String> FLIPS = List.of("none", "h", "v", "hv");
     private static final List<String> ON_OFF = List.of("on", "off", "toggle");
-    private static final List<String> PERM_KINDS = List.of("head", "tile", "source", "all");
-    private static final List<String> CENTER_HINTS = List.of("0", "0.5", "-0.5", "reset");
-    private static final List<String> FLOAT_HINTS = List.of("0", "90", "180", "270", "-90");
+    private static final List<String> PERM_KINDS = List.of("all", "head", "source", "tile");
+    private static final List<String> CENTER_HINTS = List.of("-0.5", "0", "0.5", "reset");
+    private static final List<String> FLOAT_HINTS = List.of("-90", "0", "90", "180", "270");
+    private static final List<String> STATIC_FLAG = List.of("static");
+    private static final List<String> TINT_HINT = List.of("tint:#");
 
     private static final List<String> HEAD_FACES = lower(HeadFace.values());
     private static final List<String> FACE_DIRS = lower(FaceDir.values());
@@ -1028,14 +1036,15 @@ public final class TesseraCommand implements CommandExecutor, TabCompleter {
         return switch (sub) {
             case "test" -> {
                 if (args.length == 2) yield matchMaterials(args[1]);
-                if (args.length == 3) yield match(args[2], List.of("static"));
+                if (args.length == 3) yield match(args[2], STATIC_FLAG);
                 yield Collections.emptyList();
             }
             case "bake" -> {
                 if (args.length == 2) yield matchMaterials(args[1]);
-                if (args.length == 3) yield match(args[2], List.of("tint:#"));
+                if (args.length == 3) yield match(args[2], TINT_HINT);
                 yield Collections.emptyList();
             }
+            case "config" -> args.length == 2 ? match(args[1], CONFIG_KEYS) : Collections.emptyList();
             case "debug" -> debugComplete(args);
             default -> Collections.emptyList();
         };
@@ -1048,13 +1057,12 @@ public final class TesseraCommand implements CommandExecutor, TabCompleter {
             case "grid", "rebake", "dumppng" -> args.length == 3 ? matchMaterials(args[2]) : Collections.emptyList();
             case "debugtex" -> args.length == 3 ? match(args[2], ON_OFF) : Collections.emptyList();
 
-            case "tilerot", "headrot" -> rotComplete(args, HEAD_FACES_WITH_RESET, HEAD_FACES);
-            case "sourcerot" -> rotComplete(args, FACE_DIRS_WITH_RESET, FACE_DIRS);
-            case "tileflip" -> flipComplete(args, HEAD_FACES_WITH_RESET, HEAD_FACES);
-            case "sourceflip" -> flipComplete(args, FACE_DIRS_WITH_RESET, FACE_DIRS);
+            case "tilerot", "headrot" -> paramComplete(args, HEAD_FACES_WITH_RESET, HEAD_FACES, DEGREES);
+            case "sourcerot" -> paramComplete(args, FACE_DIRS_WITH_RESET, FACE_DIRS, DEGREES);
+            case "tileflip" -> paramComplete(args, HEAD_FACES_WITH_RESET, HEAD_FACES, FLIPS);
+            case "sourceflip" -> paramComplete(args, FACE_DIRS_WITH_RESET, FACE_DIRS, FLIPS);
 
             case "face" -> {
-                // /tessera debug face <headface> <x> <y> <z>  |  reset [headface]
                 if (args.length == 3) yield match(args[2], HEAD_FACES_WITH_RESET);
                 if (args[2].equalsIgnoreCase("reset")) {
                     yield args.length == 4 ? match(args[3], HEAD_FACES) : Collections.emptyList();
@@ -1063,7 +1071,6 @@ public final class TesseraCommand implements CommandExecutor, TabCompleter {
                 yield Collections.emptyList();
             }
             case "center" -> {
-                // /tessera debug center <x> <y> <z>  |  reset
                 if (args.length == 3) yield match(args[2], CENTER_HINTS);
                 if (args[2].equalsIgnoreCase("reset")) yield Collections.emptyList();
                 if (args.length >= 4 && args.length <= 5) yield match(args[args.length - 1], CENTER_HINTS);
@@ -1079,21 +1086,13 @@ public final class TesseraCommand implements CommandExecutor, TabCompleter {
         };
     }
 
-    private static List<String> rotComplete(String[] args, List<String> firstSlot, List<String> resetTargets) {
+    private static List<String> paramComplete(String[] args, List<String> firstSlot,
+                                              List<String> resetTargets, List<String> values) {
         if (args.length == 3) return match(args[2], firstSlot);
         if (args[2].equalsIgnoreCase("reset")) {
             return args.length == 4 ? match(args[3], resetTargets) : Collections.emptyList();
         }
-        if (args.length == 4) return match(args[3], DEGREES);
-        return Collections.emptyList();
-    }
-
-    private static List<String> flipComplete(String[] args, List<String> firstSlot, List<String> resetTargets) {
-        if (args.length == 3) return match(args[2], firstSlot);
-        if (args[2].equalsIgnoreCase("reset")) {
-            return args.length == 4 ? match(args[3], resetTargets) : Collections.emptyList();
-        }
-        if (args.length == 4) return match(args[3], FLIPS);
+        if (args.length == 4) return match(args[3], values);
         return Collections.emptyList();
     }
 
@@ -1111,10 +1110,17 @@ public final class TesseraCommand implements CommandExecutor, TabCompleter {
      * type the bare form because Material.matchMaterial accepts both.
      */
     private List<String> matchMaterials(String prefix) {
-        Set<String> all = new TreeSet<>(bukkitBlockMaterials);
-        for (var key : registry.knownBlockKeys()) all.add(key.asString());
         List<String> out = new ArrayList<>();
-        StringUtil.copyPartialMatches(prefix, all, out);
+        StringUtil.copyPartialMatches(prefix, bukkitBlockMaterials, out);
+        Set<BlockKey> registered = registry.knownBlockKeys();
+        if (!registered.isEmpty()) {
+            List<String> extras = new ArrayList<>();
+            for (BlockKey key : registered) {
+                String s = key.asString();
+                if (Collections.binarySearch(bukkitBlockMaterials, s) < 0) extras.add(s);
+            }
+            StringUtil.copyPartialMatches(prefix, extras, out);
+        }
         Collections.sort(out);
         return out;
     }

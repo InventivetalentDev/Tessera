@@ -16,6 +16,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.logging.Logger;
 
@@ -73,6 +74,7 @@ public final class HeadsRegistry {
     // biome), so this map stays keyed by BlockKey.
     private final Map<BlockKey, Map<String, ModelResolver.VariantRotation>> variantRotations;
     private final Map<String, Entry> hashIndex;
+    private final Set<BlockKey> knownBlocks = java.util.concurrent.ConcurrentHashMap.newKeySet();
 
     private HeadsRegistry(Logger logger, int gridN, String version,
                           Map<BakeKey, Map<ChunkCoord, Entry>> blocks,
@@ -86,8 +88,9 @@ public final class HeadsRegistry {
         this.blocks = new java.util.concurrent.ConcurrentHashMap<>(blocks);
         this.variantRotations = new java.util.concurrent.ConcurrentHashMap<>(variantRotations);
         this.hashIndex = new java.util.concurrent.ConcurrentHashMap<>();
-        for (Map<ChunkCoord, Entry> per : blocks.values()) {
-            for (Entry e : per.values()) hashIndex.putIfAbsent(e.skinHash(), e);
+        for (Map.Entry<BakeKey, Map<ChunkCoord, Entry>> e : blocks.entrySet()) {
+            knownBlocks.add(e.getKey().block());
+            for (Entry entry : e.getValue().values()) hashIndex.putIfAbsent(entry.skinHash(), entry);
         }
     }
 
@@ -184,6 +187,7 @@ public final class HeadsRegistry {
         Map<String, ModelResolver.VariantRotation> variantsCopy =
                 (variants == null || variants.isEmpty()) ? Collections.emptyMap() : Map.copyOf(variants);
         blocks.put(key, chunksCopy);
+        knownBlocks.add(key.block());
         if (!variantsCopy.isEmpty()) variantRotations.put(key.block(), variantsCopy);
         for (Entry e : chunksCopy.values()) hashIndex.putIfAbsent(e.skinHash(), e);
         Persistence p = persistence;
@@ -241,11 +245,9 @@ public final class HeadsRegistry {
         return rot != null ? rot.toQuat() : new Quaternionf();
     }
 
-    /** Snapshot of every block currently registered (bundled + runtime, across all tints). */
-    public java.util.Set<BlockKey> knownBlockKeys() {
-        java.util.Set<BlockKey> out = new java.util.HashSet<>();
-        for (BakeKey k : blocks.keySet()) out.add(k.block());
-        return Collections.unmodifiableSet(out);
+    /** Live view of every block currently registered (bundled + runtime, across all tints). */
+    public Set<BlockKey> knownBlockKeys() {
+        return Collections.unmodifiableSet(knownBlocks);
     }
 
     public Map<String, ModelResolver.VariantRotation> variantsFor(BlockKey key) {
@@ -262,6 +264,7 @@ public final class HeadsRegistry {
     public boolean invalidate(BlockKey block) {
         variantRotations.remove(block);
         boolean removed = blocks.keySet().removeIf(k -> k.block().equals(block));
+        if (removed) knownBlocks.remove(block);
         Persistence p = persistence;
         if (p != null) {
             try { p.remove(block); }
@@ -279,6 +282,7 @@ public final class HeadsRegistry {
     public int invalidateAll() {
         int n = blocks.size();
         blocks.clear();
+        knownBlocks.clear();
         variantRotations.clear();
         // hashIndex stays — its only consumer is BlockBaker.findByHash,
         // which is bypassed when TileRotations.consumeStale is true.

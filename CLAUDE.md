@@ -17,7 +17,11 @@ The `gradle/wrapper/` jar + properties **are** committed (gradle 9.3.0 pinned
 in `gradle-wrapper.properties`), but the `gradlew` / `gradlew.bat` launch
 scripts are gitignored. Either run `gradle wrapper` once locally to drop the
 scripts, or use a system `gradle` (9.x — `paperweight.userdev` 2.0.0-beta.21
-requires Gradle 9) — invoking `gradle <task>` works in both cases. CI
+requires Gradle 9) — invoking `gradle <task>` works in both cases. On this
+dev machine neither the wrapper scripts nor a system `gradle` are on PATH —
+use `! gradle <task>` in the Claude Code prompt to run tasks in-session, or
+trigger builds from IntelliJ. For compile-error checking without a build,
+`mcp__ide__getDiagnostics` reads the live IDE analysis. CI
 (`.github/workflows/build.yml`) uses `gradle/actions/setup-gradle@v4` with
 the pinned `gradle-version: '9.3.0'` and runs `gradle build --no-daemon` on
 JDK 21. Java toolchain is **JDK 25** but `release` is set to **21** for
