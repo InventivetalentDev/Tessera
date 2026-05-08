@@ -43,3 +43,7 @@
 
 
 > Creation of this plugin was heavily AI-assisted.
+
+---
+
+This plugin collects anonymous usage statistics via [bStats](https://bstats.org/plugin/bukkit/Tessera/31093). You can disable this by setting `metrics: false` in `config.yml`.
