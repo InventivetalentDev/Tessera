@@ -80,6 +80,14 @@ required — auto-invalidates registry).
 For each row, confirm both correctness and lack of console errors. Run on
 a block that exercises non-uniform faces (e.g. `oak_log axis=x`).
 
+For everything except `chunkGridSize` and `transport` you can flip values
+in-game without restarting the server: `/tessera config <key> <value>`
+writes to `config.yml` and reloads the snapshot in one step. Run
+`/tessera config` for the full key list, or `/tessera config <key>` to
+read the current value. `chunkGridSize` and `transport` still require a
+restart (registry / transport objects are built in `onEnable`); the
+command will warn you when you set those.
+
 | Setting | Values to test | What changes |
 |---------|---------------|--------------|
 | `chunkGridSize` | 1, 2, 4, 8, 16 | Lattice density. `gridN=1` is a single cube; `gridN=16` should still complete but uploads many skins on first encounter. Each size uses its own `heads-<N>.json`. |
@@ -145,6 +153,11 @@ surface (these aren't load-bearing for end users but break first when the
 listener/factory wiring shifts).
 
 - `/tessera test <material>` and `/tessera test <material> static`
+- `/tessera config` — lists all editable keys. `/tessera config <key>`
+  shows the current value; `/tessera config <key> <value>` saves to
+  `config.yml` and reloads. Verify that flipping `animation.style`
+  between `shrink` and `pop` and re-breaking a block reflects the new
+  style with no restart.
 - `/tessera debug status` — prints current rotation/flip overrides; should
   match the `DEFAULTS` in source after a clean start.
 - `/tessera debug debugtex on` then `/tessera test stone` — markers
