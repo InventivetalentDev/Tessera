@@ -241,6 +241,13 @@ public final class HeadsRegistry {
         return rot != null ? rot.toQuat() : new Quaternionf();
     }
 
+    /** Snapshot of every block currently registered (bundled + runtime, across all tints). */
+    public java.util.Set<BlockKey> knownBlockKeys() {
+        java.util.Set<BlockKey> out = new java.util.HashSet<>();
+        for (BakeKey k : blocks.keySet()) out.add(k.block());
+        return Collections.unmodifiableSet(out);
+    }
+
     public Map<String, ModelResolver.VariantRotation> variantsFor(BlockKey key) {
         Map<String, ModelResolver.VariantRotation> variants = variantRotations.get(key);
         return variants == null ? Collections.emptyMap() : variants;

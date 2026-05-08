@@ -25,11 +25,19 @@ import org.bukkit.Material;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
 import org.bukkit.command.CommandSender;
+import org.bukkit.command.TabCompleter;
 import org.bukkit.entity.Player;
+import org.bukkit.util.StringUtil;
 import org.jetbrains.annotations.NotNull;
 import org.joml.Vector3f;
 
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.List;
 import java.util.Locale;
+import java.util.Set;
+import java.util.TreeSet;
 
 /**
  * v1 command surface for testing the splitting/effect pipeline. Subcommands:
@@ -96,12 +104,31 @@ import java.util.Locale;
  *
  * v2 will add /tessera physics presets.
  */
-public final class TesseraCommand implements CommandExecutor {
+public final class TesseraCommand implements CommandExecutor, TabCompleter {
+
+    private static final List<String> TOP = List.of("test", "bake", "reload", "debug");
+    private static final List<String> DEBUG_SUBS = List.of(
+            "face", "center", "grid", "tilerot", "tileflip", "headrot",
+            "sourcerot", "sourceflip", "rebake", "status", "debugtex",
+            "permutations", "dumppng");
+    private static final List<String> DEGREES = List.of("0", "90", "180", "270");
+    private static final List<String> FLIPS = List.of("none", "h", "v", "hv");
+    private static final List<String> ON_OFF = List.of("on", "off", "toggle");
+    private static final List<String> PERM_KINDS = List.of("head", "tile", "source", "all");
+    private static final List<String> CENTER_HINTS = List.of("0", "0.5", "-0.5", "reset");
+    private static final List<String> FLOAT_HINTS = List.of("0", "90", "180", "270", "-90");
+
+    private static final List<String> HEAD_FACES = lower(HeadFace.values());
+    private static final List<String> FACE_DIRS = lower(FaceDir.values());
+    private static final List<String> HEAD_FACES_WITH_RESET = withReset(HEAD_FACES);
+    private static final List<String> FACE_DIRS_WITH_RESET = withReset(FACE_DIRS);
 
     private final TesseraPlugin plugin;
     private final FakeBlockFactory factory;
     private final HeadsRegistry registry;
     private final BlockBaker baker;
+    /** All block-form Bukkit Materials, namespaced (e.g. "minecraft:stone"). Cached because Material.values() is ~1100 entries. */
+    private final List<String> bukkitBlockMaterials;
 
     public TesseraCommand(TesseraPlugin plugin, FakeBlockFactory factory,
                           HeadsRegistry registry, BlockBaker baker) {
@@ -109,6 +136,24 @@ public final class TesseraCommand implements CommandExecutor {
         this.factory = factory;
         this.registry = registry;
         this.baker = baker;
+        this.bukkitBlockMaterials = Arrays.stream(Material.values())
+                .filter(m -> !m.isLegacy() && m.isBlock())
+                .map(m -> m.getKey().toString())
+                .sorted()
+                .toList();
+    }
+
+    private static List<String> lower(Enum<?>[] values) {
+        List<String> out = new ArrayList<>(values.length);
+        for (Enum<?> v : values) out.add(v.name().toLowerCase(Locale.ROOT));
+        return List.copyOf(out);
+    }
+
+    private static List<String> withReset(List<String> base) {
+        List<String> out = new ArrayList<>(base.size() + 1);
+        out.addAll(base);
+        out.add("reset");
+        return List.copyOf(out);
     }
 
     @Override
@@ -969,5 +1014,108 @@ public final class TesseraCommand implements CommandExecutor {
 
     private static String formatVec(Vector3f v) {
         return String.format(Locale.ROOT, "(%.3f, %.3f, %.3f)", v.x, v.y, v.z);
+    }
+
+    @Override
+    public List<String> onTabComplete(@NotNull CommandSender sender, @NotNull Command cmd,
+                                      @NotNull String alias, @NotNull String[] args) {
+        if (!sender.hasPermission("tessera.command")) return Collections.emptyList();
+        if (args.length == 0) return Collections.emptyList();
+
+        if (args.length == 1) return match(args[0], TOP);
+
+        String sub = args[0].toLowerCase(Locale.ROOT);
+        return switch (sub) {
+            case "test" -> {
+                if (args.length == 2) yield matchMaterials(args[1]);
+                if (args.length == 3) yield match(args[2], List.of("static"));
+                yield Collections.emptyList();
+            }
+            case "bake" -> {
+                if (args.length == 2) yield matchMaterials(args[1]);
+                if (args.length == 3) yield match(args[2], List.of("tint:#"));
+                yield Collections.emptyList();
+            }
+            case "debug" -> debugComplete(args);
+            default -> Collections.emptyList();
+        };
+    }
+
+    private List<String> debugComplete(String[] args) {
+        if (args.length == 2) return match(args[1], DEBUG_SUBS);
+        String dsub = args[1].toLowerCase(Locale.ROOT);
+        return switch (dsub) {
+            case "grid", "rebake", "dumppng" -> args.length == 3 ? matchMaterials(args[2]) : Collections.emptyList();
+            case "debugtex" -> args.length == 3 ? match(args[2], ON_OFF) : Collections.emptyList();
+
+            case "tilerot", "headrot" -> rotComplete(args, HEAD_FACES_WITH_RESET, HEAD_FACES);
+            case "sourcerot" -> rotComplete(args, FACE_DIRS_WITH_RESET, FACE_DIRS);
+            case "tileflip" -> flipComplete(args, HEAD_FACES_WITH_RESET, HEAD_FACES);
+            case "sourceflip" -> flipComplete(args, FACE_DIRS_WITH_RESET, FACE_DIRS);
+
+            case "face" -> {
+                // /tessera debug face <headface> <x> <y> <z>  |  reset [headface]
+                if (args.length == 3) yield match(args[2], HEAD_FACES_WITH_RESET);
+                if (args[2].equalsIgnoreCase("reset")) {
+                    yield args.length == 4 ? match(args[3], HEAD_FACES) : Collections.emptyList();
+                }
+                if (args.length >= 4 && args.length <= 6) yield match(args[args.length - 1], FLOAT_HINTS);
+                yield Collections.emptyList();
+            }
+            case "center" -> {
+                // /tessera debug center <x> <y> <z>  |  reset
+                if (args.length == 3) yield match(args[2], CENTER_HINTS);
+                if (args[2].equalsIgnoreCase("reset")) yield Collections.emptyList();
+                if (args.length >= 4 && args.length <= 5) yield match(args[args.length - 1], CENTER_HINTS);
+                yield Collections.emptyList();
+            }
+            case "permutations" -> {
+                if (args.length == 3) yield match(args[2], PERM_KINDS);
+                if (args.length == 4) yield match(args[3], FACE_DIRS);
+                if (args.length == 5) yield matchMaterials(args[4]);
+                yield Collections.emptyList();
+            }
+            default -> Collections.emptyList();
+        };
+    }
+
+    private static List<String> rotComplete(String[] args, List<String> firstSlot, List<String> resetTargets) {
+        if (args.length == 3) return match(args[2], firstSlot);
+        if (args[2].equalsIgnoreCase("reset")) {
+            return args.length == 4 ? match(args[3], resetTargets) : Collections.emptyList();
+        }
+        if (args.length == 4) return match(args[3], DEGREES);
+        return Collections.emptyList();
+    }
+
+    private static List<String> flipComplete(String[] args, List<String> firstSlot, List<String> resetTargets) {
+        if (args.length == 3) return match(args[2], firstSlot);
+        if (args[2].equalsIgnoreCase("reset")) {
+            return args.length == 4 ? match(args[3], resetTargets) : Collections.emptyList();
+        }
+        if (args.length == 4) return match(args[3], FLIPS);
+        return Collections.emptyList();
+    }
+
+    private static List<String> match(String prefix, List<String> options) {
+        List<String> out = new ArrayList<>();
+        StringUtil.copyPartialMatches(prefix, options, out);
+        Collections.sort(out);
+        return out;
+    }
+
+    /**
+     * Suggest every Bukkit block material plus anything currently registered
+     * (so runtime-baked or otherwise-registered blocks still appear). All
+     * suggestions are namespaced so the format is unambiguous; users can still
+     * type the bare form because Material.matchMaterial accepts both.
+     */
+    private List<String> matchMaterials(String prefix) {
+        Set<String> all = new TreeSet<>(bukkitBlockMaterials);
+        for (var key : registry.knownBlockKeys()) all.add(key.asString());
+        List<String> out = new ArrayList<>();
+        StringUtil.copyPartialMatches(prefix, all, out);
+        Collections.sort(out);
+        return out;
     }
 }
