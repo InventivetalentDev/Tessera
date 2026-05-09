@@ -9,6 +9,7 @@ import org.inventivetalent.tessera.plugin.TesseraConfig.CollapseStyle;
 import org.inventivetalent.tessera.transport.DisplayHandle;
 import org.bukkit.Bukkit;
 import org.bukkit.util.Transformation;
+import org.bukkit.util.Vector;
 import org.joml.Vector3f;
 
 import java.util.ArrayList;
@@ -16,15 +17,19 @@ import java.util.Comparator;
 import java.util.List;
 
 /**
- * Directional break effect with two collapse styles:
+ * Directional break effect with three collapse styles:
  * <ul>
  *   <li>{@link CollapseStyle#SHRINK} — chunks scale uniformly toward 0 as
  *       the wave passes through them.</li>
  *   <li>{@link CollapseStyle#POP} — chunks stay at full size until the wave
  *       hits them, then disappear in one tick.</li>
+ *   <li>{@link CollapseStyle#RECEDE} — chunks scale toward 0 while drifting
+ *       away from the breaker along the wave direction; the vanishing point
+ *       lands at the chunk's back face (offset {@code 0.5/gridN} along
+ *       {@link EffectContext#breakerEyeDir()}).</li>
  * </ul>
- * Both share the same wave-position math via {@link ChunkWaveSampler}; the
- * only difference is what each chunk's per-tick transformation looks like.
+ * All three share the same wave-position math via {@link ChunkWaveSampler};
+ * the difference is what each chunk's per-tick transformation looks like.
  *
  * <p>Two entry points:
  * <ul>
@@ -72,12 +77,16 @@ public final class DirectionalShrinkEffect implements ChunkEffect {
         int totalTicks  = Math.max(interpTicks + 1, ctx.durationMs() / MS_PER_TICK);
         int waveTicks   = totalTicks - interpTicks;
 
+        Vector3f recedeDelta = style == CollapseStyle.RECEDE
+                ? computeRecedeDelta(fakeBlock.gridN(), ctx.breakerEyeDir())
+                : null;
+
         for (int i = 0; i < chunks.size(); i++) {
             ChunkRef chunk = chunks.get(i);
             int delayTicks = (int) Math.round(t[i] * waveTicks);
 
             Bukkit.getScheduler().runTaskLater(ctx.plugin(),
-                    () -> collapseChunk(chunk, interpTicks),
+                    () -> collapseChunk(chunk, interpTicks, recedeDelta),
                     Math.max(0, delayTicks));
         }
 
@@ -91,6 +100,12 @@ public final class DirectionalShrinkEffect implements ChunkEffect {
      * {@code prevScales[i]} are skipped to avoid redundant packets.
      * Applied scales are written back into {@code prevScales} for the next call.
      *
+     * <p>{@code recedeDelta} and {@code baseTranslations} are only used when
+     * {@code style == RECEDE} (pass {@code null} for the other styles).
+     * {@code baseTranslations[i]} is the spawn-time translation for chunk i;
+     * the applied translation is {@code baseTranslations[i] + s * recedeDelta}
+     * where {@code s} is the chunk's shrunk fraction.
+     *
      * <p>Does NOT despawn the FakeBlock — caller owns lifecycle.
      */
     public static void applyAtProgress(FakeBlock fakeBlock,
@@ -101,11 +116,15 @@ public final class DirectionalShrinkEffect implements ChunkEffect {
                                        double window,
                                        int interpTicks,
                                        double minScaleDelta,
-                                       CollapseStyle style) {
+                                       CollapseStyle style,
+                                       Vector3f recedeDelta,
+                                       Vector3f[] baseTranslations) {
         List<ChunkRef> chunks = fakeBlock.chunks();
         int n = chunks.size();
         if (n == 0) return;
         int interp = Math.max(0, interpTicks);
+        boolean recede = style == CollapseStyle.RECEDE
+                && recedeDelta != null && baseTranslations != null;
         for (int i = 0; i < n; i++) {
             ChunkRef chunk = chunks.get(i);
             DisplayHandle handle = chunk.handle();
@@ -117,11 +136,17 @@ public final class DirectionalShrinkEffect implements ChunkEffect {
             } else {
                 target = (float) (baseScales[i] * (1.0 - s));
             }
-            if (Math.abs(target - prevScales[i]) < minScaleDelta) continue;
+            if (!recede && Math.abs(target - prevScales[i]) < minScaleDelta) continue;
             prevScales[i] = target;
             Transformation cur = handle.getTransformation();
+            Vector3f translation = recede && baseTranslations[i] != null
+                    ? new Vector3f(baseTranslations[i]).add(
+                            (float) s * recedeDelta.x,
+                            (float) s * recedeDelta.y,
+                            (float) s * recedeDelta.z)
+                    : cur.getTranslation();
             Transformation next = new Transformation(
-                    cur.getTranslation(),
+                    translation,
                     cur.getLeftRotation(),
                     new Vector3f(target, target, target),
                     cur.getRightRotation());
@@ -134,12 +159,17 @@ public final class DirectionalShrinkEffect implements ChunkEffect {
      * {@code prevScales} that drive {@link #applyAtProgress}) by
      * {@code factor}. Used in two directions, both timed to a simultaneous
      * sendBlockChange so the snap is masked by the block-vs-BARRIER swap.
+     *
+     * <p>{@code baseTranslations} is unused here (rescaling does not move
+     * chunks), but is accepted so all progress-listener call sites share the
+     * same signature shape.
      */
     public static void rescaleShell(FakeBlock fakeBlock,
                                     float[] baseScales,
                                     float[] prevScales,
                                     float factor,
-                                    int interpTicks) {
+                                    int interpTicks,
+                                    @SuppressWarnings("unused") Vector3f[] baseTranslations) {
         List<ChunkRef> chunks = fakeBlock.chunks();
         int n = chunks.size();
         int interp = Math.max(0, interpTicks);
@@ -170,16 +200,47 @@ public final class DirectionalShrinkEffect implements ChunkEffect {
         return out;
     }
 
-    private void collapseChunk(ChunkRef chunk, int interpTicks) {
+    private void collapseChunk(ChunkRef chunk, int interpTicks, Vector3f recedeDelta) {
         DisplayHandle handle = chunk.handle();
         if (!handle.isAlive()) return;
         Transformation cur = handle.getTransformation();
+        Vector3f translation = recedeDelta != null
+                ? new Vector3f(cur.getTranslation()).add(recedeDelta)
+                : cur.getTranslation();
         Transformation zero = new Transformation(
-                cur.getTranslation(),
+                translation,
                 cur.getLeftRotation(),
                 new Vector3f(0f, 0f, 0f),
                 cur.getRightRotation());
         handle.setTransformation(zero, 0, style == CollapseStyle.POP ? 0 : interpTicks);
+    }
+
+    /**
+     * Compute the world-space recede delta for one FakeBlock: a vector of
+     * magnitude {@code 0.5 / gridN} along the breaker's eye direction. This
+     * is how far each chunk's center translates toward its back face as its
+     * scale goes from base → 0.
+     */
+    public static Vector3f computeRecedeDelta(int gridN, Vector eyeDir) {
+        Vector e = eyeDir.clone().normalize();
+        float mag = 0.5f / gridN;
+        return new Vector3f((float) e.getX() * mag, (float) e.getY() * mag, (float) e.getZ() * mag);
+    }
+
+    /**
+     * Capture the spawn-time translation for every chunk in {@code fakeBlock}.
+     * Parallel to {@link #captureBaseScales}; used by the progress listener to
+     * supply stable base translations to {@link #applyAtProgress} for RECEDE.
+     * Slots for not-yet-spawned (pending) chunks are left {@code null}.
+     */
+    public static Vector3f[] captureBaseTranslations(FakeBlock fakeBlock) {
+        List<ChunkRef> chunks = fakeBlock.chunks();
+        Vector3f[] out = new Vector3f[chunks.size()];
+        for (int i = 0; i < chunks.size(); i++) {
+            Vector3f t = chunks.get(i).handle().getTransformation().getTranslation();
+            out[i] = new Vector3f(t);
+        }
+        return out;
     }
 
     /**

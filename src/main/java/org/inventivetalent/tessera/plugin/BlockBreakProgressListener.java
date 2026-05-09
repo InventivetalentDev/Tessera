@@ -176,7 +176,7 @@ public final class BlockBreakProgressListener implements Listener {
                 if (!tb.shellExpanded) {
                     DirectionalShrinkEffect.rescaleShell(
                             tb.fakeBlock, tb.baseScales, tb.currentScales,
-                            1f / FakeBlockFactory.INITIAL_SHELL_COMPRESSION, 0);
+                            1f / FakeBlockFactory.INITIAL_SHELL_COMPRESSION, 0, tb.baseTranslations);
                     tb.shellExpanded = true;
                 }
                 try {
@@ -276,7 +276,7 @@ public final class BlockBreakProgressListener implements Listener {
                 if (cfg.clientHideRealBlock()) {
                     DirectionalShrinkEffect.rescaleShell(
                             tb.fakeBlock, tb.baseScales, tb.currentScales,
-                            1f / FakeBlockFactory.INITIAL_SHELL_COMPRESSION, 0);
+                            1f / FakeBlockFactory.INITIAL_SHELL_COMPRESSION, 0, tb.baseTranslations);
                     tb.shellExpanded = true;
                     try {
                         player.sendBlockChange(breakLoc, Material.BARRIER.createBlockData());
@@ -456,7 +456,8 @@ public final class BlockBreakProgressListener implements Listener {
         // Snap to the confirmed progress; smooth task will advance toward targetProgress.
         double immediateTarget = cfg.smoothInterpolation() ? progress : targetProgress;
         DirectionalShrinkEffect.applyAtProgress(tb.fakeBlock, tb.chunkT, tb.baseScales, tb.currentScales,
-                immediateTarget, cfg.waveWindow(), interpTicks, cfg.progressMinDelta(), cfg.collapseStyle());
+                immediateTarget, cfg.waveWindow(), interpTicks, cfg.progressMinDelta(), cfg.collapseStyle(),
+                tb.recedeDelta, tb.baseTranslations);
         tb.lastAppliedProgress = progress;
         tb.lastUpdateTickMs = System.currentTimeMillis();
         DirectionalShrinkEffect.despawnPassedChunks(tb.fakeBlock, tb.chunkT,
@@ -488,7 +489,8 @@ public final class BlockBreakProgressListener implements Listener {
             double interpProgress = fromProgress + fraction * (toProgress - fromProgress);
             spawnPendingChunks(tb, interpProgress, cfg.waveWindow());
             DirectionalShrinkEffect.applyAtProgress(tb.fakeBlock, tb.chunkT, tb.baseScales, tb.currentScales,
-                    interpProgress, cfg.waveWindow(), 2, cfg.progressMinDelta(), cfg.collapseStyle());
+                    interpProgress, cfg.waveWindow(), 2, cfg.progressMinDelta(), cfg.collapseStyle(),
+                    tb.recedeDelta, tb.baseTranslations);
             DirectionalShrinkEffect.despawnPassedChunks(tb.fakeBlock, tb.chunkT, tb.baseScales, tb.currentScales,
                     interpProgress, cfg.waveWindow(), (float) cfg.progressMinDelta());
             tb.lastUpdateTickMs = System.currentTimeMillis();
@@ -578,7 +580,7 @@ public final class BlockBreakProgressListener implements Listener {
         if (tb.shellExpanded) {
             DirectionalShrinkEffect.rescaleShell(
                     tb.fakeBlock, tb.baseScales, tb.currentScales,
-                    FakeBlockFactory.INITIAL_SHELL_COMPRESSION, 0);
+                    FakeBlockFactory.INITIAL_SHELL_COMPRESSION, 0, tb.baseTranslations);
             tb.shellExpanded = false;
         }
 
@@ -596,7 +598,8 @@ public final class BlockBreakProgressListener implements Listener {
             double rp = elapsed >= durationMs ? 0d
                     : startProgress * (1.0 - (double) elapsed / (double) durationMs);
             DirectionalShrinkEffect.applyAtProgress(tb.fakeBlock, tb.chunkT, tb.baseScales, tb.currentScales,
-                    rp, cfg.waveWindow(), REVERSE_INTERP_TICKS, cfg.progressMinDelta(), cfg.collapseStyle());
+                    rp, cfg.waveWindow(), REVERSE_INTERP_TICKS, cfg.progressMinDelta(), cfg.collapseStyle(),
+                    tb.recedeDelta, tb.baseTranslations);
             tb.lastAppliedProgress = rp;
             tb.lastUpdateTickMs = System.currentTimeMillis();
             if (rp <= 0d) {
@@ -764,7 +767,7 @@ public final class BlockBreakProgressListener implements Listener {
         if (!tb.shellExpanded) {
             DirectionalShrinkEffect.rescaleShell(
                     tb.fakeBlock, tb.baseScales, tb.currentScales,
-                    1f / FakeBlockFactory.INITIAL_SHELL_COMPRESSION, 0);
+                    1f / FakeBlockFactory.INITIAL_SHELL_COMPRESSION, 0, tb.baseTranslations);
             tb.shellExpanded = true;
         }
         try {
@@ -888,6 +891,7 @@ public final class BlockBreakProgressListener implements Listener {
         float[] base = new float[total];
         float[] current = new float[total];
         double[] chunkT = new double[total];
+        Vector3f[] baseTrans = new Vector3f[total]; // pending slots stay null until spawned
 
         for (int i = 0; i < frontCount; i++) {
             ChunkRef cr = front.get(i);
@@ -895,13 +899,16 @@ public final class BlockBreakProgressListener implements Listener {
             base[i] = s;
             current[i] = s;
             chunkT[i] = plan.allOuterT().getOrDefault(cr.coord(), 0.0);
+            baseTrans[i] = new Vector3f(cr.handle().getTransformation().getTranslation());
         }
         for (int i = 0; i < pendingCount; i++) {
             chunkT[frontCount + i] = plan.pendingSpecs().get(i).t();
         }
 
+        Vector3f recedeDelta = DirectionalShrinkEffect.computeRecedeDelta(fb.gridN(), eyeDir);
+
         TrackedBreak tb = new TrackedBreak(playerId, key, fb.origin(),
-                blockData, eyeDir, fb, chunkT, base, current);
+                blockData, eyeDir, fb, chunkT, base, current, baseTrans, recedeDelta);
         tb.pendingChunks = new ArrayList<>(plan.pendingSpecs());
         return tb;
     }
@@ -947,6 +954,7 @@ public final class BlockBreakProgressListener implements Listener {
             int idx = tb.fakeBlock.chunks().size();
             tb.fakeBlock.chunks().add(ref);
 
+            tb.baseTranslations[idx] = new Vector3f(ref.handle().getTransformation().getTranslation());
             if (spec.interior()) {
                 tb.baseScales[idx] = chunkScale;
                 tb.currentScales[idx] = -1f; // sentinel: forces first applyAtProgress write
@@ -1035,6 +1043,8 @@ public final class BlockBreakProgressListener implements Listener {
                 tb.chunkT[aliveCount + i] = rebuilt.get(i).t();
             }
         }
+
+        tb.recedeDelta = DirectionalShrinkEffect.computeRecedeDelta(tb.fakeBlock.gridN(), newEyeDir);
     }
 
     private static String fmt(double d) { return String.format("%.3f", d); }

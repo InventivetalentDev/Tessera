@@ -74,6 +74,8 @@ animation:
   #   shrink - chunk uniformly scales toward 0 (smooth collapse).
   #   pop    - chunk stays at full size until the wave hits it, then
   #            disappears in one tick (crumble look).
+  #   recede - chunk scales toward 0 while drifting away from the
+  #            breaker; the vanishing point lands at the chunk's back face.
   style: pop
 
   # Total duration of the directional break animation in milliseconds.
