@@ -90,7 +90,7 @@ public final class TsraZipStore implements HeadsStore {
         List<BakeKey> out = new ArrayList<>();
         forEachEntryName(name -> {
             if (!name.startsWith(TsraFormat.BLOCKS_DIR + "/")) return;
-            if (!name.endsWith(TsraFormat.FOLDER_EXTENSION)) return;
+            if (!name.endsWith(TsraFormat.FILE_EXTENSION)) return;
             String filename = name.substring(name.lastIndexOf('/') + 1);
             try {
                 out.add(TsraFormat.parseBlockFilename(filename));

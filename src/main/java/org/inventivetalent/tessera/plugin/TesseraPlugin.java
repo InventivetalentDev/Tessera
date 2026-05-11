@@ -51,15 +51,17 @@ public final class TesseraPlugin extends JavaPlugin {
         int gridN = config.chunkGridSize();
 
         // Bundled heads catalog ships as /heads-{gridN}.ztsra inside the
-        // plugin jar. Runtime-baked overrides live in
-        // plugins/Tessera/cache/heads-{gridN}.tsra/. Reads consult runtime
-        // first, falling through to the bundled zip; writes always go to
-        // the runtime folder so the jar resource stays immutable.
+        // plugin jar. Runtime-baked overrides live in the unsuffixed folder
+        // plugins/Tessera/cache/heads-{gridN}/ (the .tsra extension is only
+        // used on individual payload files *inside* the store). Reads
+        // consult runtime first, falling through to the bundled zip; writes
+        // always go to the runtime folder so the jar resource stays
+        // immutable.
         Path cacheRoot = getDataFolder().toPath().resolve("cache");
         Path pngDir = cacheRoot.resolve("heads");
         Path assetsDir = cacheRoot.resolve("assets");
         Path skinCacheFile = cacheRoot.resolve("skins.json");
-        Path runtimeStoreRoot = cacheRoot.resolve("heads-" + gridN + TsraFormat.FOLDER_EXTENSION);
+        Path runtimeStoreRoot = cacheRoot.resolve("heads-" + gridN);
         try {
             Files.createDirectories(runtimeStoreRoot);
         } catch (java.io.IOException io) {

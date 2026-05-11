@@ -39,7 +39,7 @@ bytecode, so any JDK ≥21 can consume the artifact.
   off-server. Reads `bake-blocks.txt`, writes
   `src/main/resources/heads-<gridN>.ztsra` (defaults to `heads-4.ztsra`;
   pass `-PgridN=<N>` to bake a different size). Internally bakes into a
-  scratch `build/tessera-cache/heads-<gridN>.tsra/` folder store and zips
+  scratch `build/tessera-cache/heads-<gridN>/` folder store and zips
   it into the resource. Caches downloaded vanilla assets + intermediate
   PNGs in `build/tessera-cache/`. Idempotent — the scratch folder survives
   across runs so re-baking the same inputs only re-zips. Can run *without*
@@ -77,7 +77,7 @@ Block ID → MineSkin texture. Same code runs in two contexts:
   below).
 - **Runtime** via `BlockBaker`, output is registered into the live
   `HeadsRegistry` and persisted in the writable folder store at
-  `plugins/Tessera/cache/heads-<gridN>.tsra/` (alongside the PNG-hash dedup
+  `plugins/Tessera/cache/heads-<gridN>/` (alongside the PNG-hash dedup
   cache `cache/skins.json`).
 
 Storage layout (`skin.store.TsraFormat`): one binary file per payload.

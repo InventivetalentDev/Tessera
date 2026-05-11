@@ -98,7 +98,9 @@ public final class BakeMain {
 
         // Scratch folder store: persists across re-runs so a re-bake skips
         // unchanged blocks via store.readSkin / store.readBlock hits.
-        Path scratchRoot = cacheRoot.resolve("heads-" + gridN + TsraFormat.FOLDER_EXTENSION);
+        // No extension on the directory itself — only the individual .tsra
+        // payload files inside it carry the format extension.
+        Path scratchRoot = cacheRoot.resolve("heads-" + gridN);
         TsraFolderStore scratch = new TsraFolderStore(logger, scratchRoot);
         scratch.writeManifest(new TsraFormat.Manifest(gridN, version, "tessera-bake-cli"));
 

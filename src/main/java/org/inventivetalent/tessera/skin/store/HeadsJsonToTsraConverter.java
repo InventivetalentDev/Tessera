@@ -54,7 +54,7 @@ public final class HeadsJsonToTsraConverter {
             System.exit(1);
         }
 
-        Path scratch = scratchRoot.resolve("heads-" + gridN + "-convert" + TsraFormat.FOLDER_EXTENSION);
+        Path scratch = scratchRoot.resolve("heads-" + gridN + "-convert");
         // Always start from a clean scratch so a previous run's stale skins
         // don't leak into the zip.
         if (Files.isDirectory(scratch)) deleteRecursive(scratch);

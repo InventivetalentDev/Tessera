@@ -27,7 +27,7 @@ class TsraZipStoreTest {
 
     @Test
     void folderRoundTripsThroughZip(@TempDir Path tmp) throws Exception {
-        Path folder = tmp.resolve("heads-4.tsra");
+        Path folder = tmp.resolve("heads-4");
         TsraFolderStore source = new TsraFolderStore(LOG, folder);
         source.writeManifest(new TsraFormat.Manifest(4, "1.21.4", "test"));
         source.writeSkin(new TsraFormat.Skin("hash-1", "value-1", "sig-1", "uuid-1"));
@@ -65,7 +65,7 @@ class TsraZipStoreTest {
         // Two different blocks point at the same hash → only one skin file
         // is written but both blocks resolve through it. Pins down the
         // dedup invariant that makes uniform-stone catalogs small.
-        Path folder = tmp.resolve("heads-4.tsra");
+        Path folder = tmp.resolve("heads-4");
         TsraFolderStore source = new TsraFolderStore(LOG, folder);
         source.writeSkin(new TsraFormat.Skin("shared", "v", "s", null));
         source.writeBlock(new TsraFormat.Block(

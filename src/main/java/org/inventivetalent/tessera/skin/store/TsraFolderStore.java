@@ -70,7 +70,7 @@ public final class TsraFolderStore implements HeadsStore {
     public Collection<BakeKey> listBlocks() {
         if (!Files.isDirectory(blocksDir)) return Collections.emptyList();
         List<BakeKey> out = new ArrayList<>();
-        try (DirectoryStream<Path> stream = Files.newDirectoryStream(blocksDir, "*" + TsraFormat.FOLDER_EXTENSION)) {
+        try (DirectoryStream<Path> stream = Files.newDirectoryStream(blocksDir, "*" + TsraFormat.FILE_EXTENSION)) {
             for (Path p : stream) {
                 try {
                     out.add(TsraFormat.parseBlockFilename(p.getFileName().toString()));
@@ -148,7 +148,7 @@ public final class TsraFolderStore implements HeadsStore {
     @Override
     public void removeBlock(BlockKey block) {
         if (!Files.isDirectory(blocksDir)) return;
-        try (DirectoryStream<Path> stream = Files.newDirectoryStream(blocksDir, "*" + TsraFormat.FOLDER_EXTENSION)) {
+        try (DirectoryStream<Path> stream = Files.newDirectoryStream(blocksDir, "*" + TsraFormat.FILE_EXTENSION)) {
             for (Path p : stream) {
                 try {
                     BakeKey bk = TsraFormat.parseBlockFilename(p.getFileName().toString());
@@ -165,7 +165,7 @@ public final class TsraFolderStore implements HeadsStore {
     @Override
     public void clearBlocks() {
         if (!Files.isDirectory(blocksDir)) return;
-        try (DirectoryStream<Path> stream = Files.newDirectoryStream(blocksDir, "*" + TsraFormat.FOLDER_EXTENSION)) {
+        try (DirectoryStream<Path> stream = Files.newDirectoryStream(blocksDir, "*" + TsraFormat.FILE_EXTENSION)) {
             for (Path p : stream) {
                 try { Files.deleteIfExists(p); } catch (IOException io) {
                     logger.warning("[tsra-folder] failed to delete " + p + ": " + io.getMessage());

@@ -19,7 +19,7 @@ import java.util.TreeMap;
 /**
  * Wire format for {@code .tsra} (Tessera registry artifact) files. One file
  * carries one payload — manifest, block index, or skin entry — and the layout
- * is the same in a {@code .tsra/} folder (one file per payload) and inside a
+ * is the same in a {@code heads-{N}/} folder (one file per payload) and inside a
  * {@code .ztsra} zip (one entry per payload). The compact binary form
  * replaces the old monolithic {@code heads-{N}.json} so the registry can
  * keep only the hash index in memory and stream skin payloads (the
@@ -71,8 +71,9 @@ public final class TsraFormat {
     public static final String BLOCKS_DIR = "blocks";
     public static final String SKINS_DIR = "skins";
 
-    /** File-extension constants used by the folder and zip stores. */
-    public static final String FOLDER_EXTENSION = ".tsra";
+    /** Per-file extension used for every payload inside a store (folder or zip). */
+    public static final String FILE_EXTENSION = ".tsra";
+    /** Extension for the zipped form of the store (bundled jar resource). */
     public static final String ZIP_EXTENSION = ".ztsra";
 
     private TsraFormat() {}
@@ -234,15 +235,15 @@ public final class TsraFormat {
                 default -> b.append(c);
             }
         }
-        b.append(FOLDER_EXTENSION);
+        b.append(FILE_EXTENSION);
         return b.toString();
     }
 
     public static BakeKey parseBlockFilename(String filename) {
-        if (!filename.endsWith(FOLDER_EXTENSION)) {
+        if (!filename.endsWith(FILE_EXTENSION)) {
             throw new IllegalArgumentException("not a .tsra filename: " + filename);
         }
-        String stripped = filename.substring(0, filename.length() - FOLDER_EXTENSION.length());
+        String stripped = filename.substring(0, filename.length() - FILE_EXTENSION.length());
         StringBuilder b = new StringBuilder(stripped.length());
         for (int i = 0; i < stripped.length();) {
             if (i + 1 < stripped.length()) {
@@ -264,7 +265,7 @@ public final class TsraFormat {
      */
     public static String skinPath(String hash) {
         String shard = hash.length() >= 2 ? hash.substring(0, 2) : "_";
-        return SKINS_DIR + "/" + shard + "/" + hash + FOLDER_EXTENSION;
+        return SKINS_DIR + "/" + shard + "/" + hash + FILE_EXTENSION;
     }
 
     // ── Header helpers ───────────────────────────────────────────────────────
