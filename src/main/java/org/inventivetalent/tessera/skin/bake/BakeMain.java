@@ -4,15 +4,18 @@ import org.inventivetalent.tessera.assets.fetch.McAssetClient;
 import org.inventivetalent.tessera.assets.model.BlockModel;
 import org.inventivetalent.tessera.assets.model.ModelResolver;
 import org.inventivetalent.tessera.assets.model.ModelResolver.VariantRotation;
+import org.inventivetalent.tessera.core.BakeKey;
 import org.inventivetalent.tessera.core.BlockKey;
 import org.inventivetalent.tessera.core.ChunkCoord;
 import org.inventivetalent.tessera.core.ChunkSpec;
 import org.inventivetalent.tessera.skin.HeadSkin;
 import org.inventivetalent.tessera.skin.HeadSkinPacker;
-import org.inventivetalent.tessera.skin.HeadsRegistry;
 import org.inventivetalent.tessera.skin.SkinAssembler;
 import org.inventivetalent.tessera.skin.SkinState;
 import org.inventivetalent.tessera.skin.SkinUploader;
+import org.inventivetalent.tessera.skin.store.JsonMigrator;
+import org.inventivetalent.tessera.skin.store.TsraFolderStore;
+import org.inventivetalent.tessera.skin.store.TsraFormat;
 import org.inventivetalent.tessera.split.TextureSplitter;
 
 import java.io.IOException;
@@ -37,16 +40,19 @@ import java.util.logging.Logger;
  * Standalone entry point for the {@code ./gradlew tesseraBake} task. Reads
  * a list of block IDs from {@code bake-blocks.txt}, fetches their assets
  * from mcasset.cloud, splits the textures, packs heads, uploads to
- * MineSkin, and writes a deterministic {@code heads-{gridN}.json}.
+ * MineSkin, and writes a {@code heads-{gridN}.ztsra} resource zip.
  *
- * <p>Idempotent: skip already-baked entries by hash, so re-running on the
- * same input is a no-op once everything has been uploaded once.
+ * <p>Workflow: bakes into a scratch {@link TsraFolderStore} under
+ * {@code build/} (re-readable across re-runs so an interrupted bake doesn't
+ * waste prior uploads) and zips that folder into the requested {@code .ztsra}
+ * output. Idempotent — re-running with the same input is a no-op once every
+ * unique skin is present in the folder store.
  *
  * <p>Args:
  * <pre>
  *   --input    bake-blocks.txt (one block ID per line, # comments)
- *   --out      heads-{gridN}.json output path (defaults derive from gridN)
- *   --cache    cache root for assets + skin PNGs
+ *   --out      heads-{gridN}.ztsra output path (defaults derive from gridN)
+ *   --cache    cache root for assets + skin PNGs + scratch folder store
  *   --version  Minecraft version tag (defaults to {@code 1.21.4})
  *   --gridN    chunk grid size (defaults to 4)
  * </pre>
@@ -66,10 +72,10 @@ public final class BakeMain {
         if (gridN < 1 || gridN > 16 || 16 % gridN != 0) {
             throw new IllegalArgumentException(
                     "gridN must be one of 1, 2, 4, 8, 16; got " + gridN
-                            + " (TesseraConfig only loads heads-<N>.json for these sizes)");
+                            + " (TesseraConfig only loads heads-<N>.ztsra for these sizes)");
         }
         Path outPath    = Path.of(args.getOrDefault("out",
-                "src/main/resources/heads-" + gridN + ".json"));
+                "src/main/resources/heads-" + gridN + TsraFormat.ZIP_EXTENSION));
 
         Logger logger = Logger.getLogger("tessera-bake");
         logger.setUseParentHandlers(false);
@@ -87,8 +93,25 @@ public final class BakeMain {
         logger.info("Baking " + blocks.size() + " blocks at version " + version + " (gridN=" + gridN + ")");
 
         Files.createDirectories(cacheRoot);
-        Path pngDir = cacheRoot.resolve("heads");
+        Path pngDir = cacheRoot.resolve("head-pngs");
         Files.createDirectories(pngDir);
+
+        // Scratch folder store: persists across re-runs so a re-bake skips
+        // unchanged blocks via store.readSkin / store.readBlock hits.
+        // No extension on the directory itself — only the individual .tsra
+        // payload files inside it carry the format extension.
+        Path scratchRoot = cacheRoot.resolve("heads-" + gridN);
+        TsraFolderStore scratch = new TsraFolderStore(logger, scratchRoot);
+        scratch.writeManifest(new TsraFormat.Manifest(gridN, version, "tessera-bake-cli"));
+
+        // One-time migration from any leftover heads-{gridN}.json sitting
+        // beside the scratch root, so users with an existing pre-tsra
+        // workspace don't lose their cached uploads.
+        Path legacy = cacheRoot.resolve("heads-" + gridN + ".json");
+        if (Files.isRegularFile(legacy)) {
+            int migrated = JsonMigrator.migrate(logger, legacy, scratch, gridN, version);
+            if (migrated > 0) Files.move(legacy, legacy.resolveSibling(legacy.getFileName() + ".migrated"));
+        }
 
         McAssetClient assets = new McAssetClient(cacheRoot.resolve("assets"));
         ModelResolver resolver = new ModelResolver(assets, logger, version);
@@ -105,26 +128,16 @@ public final class BakeMain {
                 ? new SkinUploader(logger, "Tessera-Bake/0.1", apiKey)
                 : null;
 
-        // Existing heads-{gridN}.json state, indexed by skinHash → entry, so
-        // we can skip uploads we already ran. Idempotent reruns are the goal.
-        BakeState state = BakeState.loadOrEmpty(outPath, version, gridN, logger);
-        if (state.gridN != gridN || !state.version.equals(version)) {
-            logger.warning(outPath + " was baked with version=" + state.version + " gridN=" + state.gridN
-                    + ", but this run uses version=" + version + " gridN=" + gridN
-                    + ". Discarding existing entries.");
-            state = new BakeState(version, gridN);
-        }
-
         for (BlockKey key : blocks) {
             try {
-                bakeOne(key, gridN, resolver, splitter, packer, assembler, uploader, pngDir, state, logger);
-                state.write(outPath);
+                bakeOne(key, gridN, resolver, splitter, packer, assembler, uploader, pngDir, scratch, logger);
             } catch (Exception e) {
                 logger.log(Level.WARNING, "Failed to bake " + key, e);
             }
         }
 
-        state.write(outPath);
+        logger.info("Zipping scratch folder -> " + outPath);
+        JsonMigrator.zipFolder(scratchRoot, outPath);
         logger.info("Done. " + outPath.getFileName() + " written to " + outPath.toAbsolutePath());
     }
 
@@ -132,7 +145,8 @@ public final class BakeMain {
                                 ModelResolver resolver, TextureSplitter splitter,
                                 HeadSkinPacker packer, SkinAssembler assembler,
                                 SkinUploader uploader, Path pngDir,
-                                BakeState state, Logger logger) throws IOException, ExecutionException, InterruptedException, TimeoutException {
+                                TsraFolderStore store, Logger logger)
+            throws IOException, ExecutionException, InterruptedException, TimeoutException {
 
         Optional<BlockModel> modelOpt = resolver.resolve(key);
         if (modelOpt.isEmpty()) {
@@ -150,12 +164,15 @@ public final class BakeMain {
         logger.info("[" + key + "] " + chunks.size() + " visible chunks → "
                 + packed.uniqueHeads().size() + " unique heads");
 
-        // Skip uploads for hashes already in state — but still need to map chunk→hash.
+        // Skip uploads for hashes already in the scratch store — but still
+        // need to map chunk → entry for the block file.
+        BakeKey bakeKey = BakeKey.untinted(key);
         List<HeadSkin> needUpload = new ArrayList<>();
         for (HeadSkin head : packed.uniqueHeads()) {
-            HeadsRegistry.Entry existing = state.skinByHash.get(head.contentHash());
-            if (existing != null) {
-                head.texture(existing.textureValue(), existing.textureSignature(), existing.mineskinUuid());
+            Optional<TsraFormat.Skin> existing = store.readSkin(head.contentHash());
+            if (existing.isPresent()) {
+                TsraFormat.Skin s = existing.get();
+                head.texture(s.value(), s.signature(), s.mineskinUuid());
                 head.state(SkinState.COMPLETED);
                 continue;
             }
@@ -177,40 +194,40 @@ public final class BakeMain {
                         logger.warning("[" + key + "] head " + head.id() + " ended in state " + head.state());
                         continue;
                     }
-                    state.skinByHash.put(head.contentHash(), new HeadsRegistry.Entry(
-                            head.contentHash(), head.textureValue(), head.textureSignature(), head.mineskinUuid()));
+                    store.writeSkin(new TsraFormat.Skin(
+                            head.contentHash(), head.textureValue(),
+                            head.textureSignature(), head.mineskinUuid()));
                 }
             }
         }
 
-        // Build chunk → entry map for this block. Only chunks whose head
-        // actually got a MineSkin texture are written — otherwise the
-        // runtime listener would think the block is supported and spawn
-        // FakeBlocks with zero entities (visually a no-op).
-        TreeMap<ChunkCoord, HeadsRegistry.Entry> chunkToEntry = new TreeMap<>();
+        // Build chunk → hash map. Only chunks whose head got a MineSkin
+        // texture make it into the block file — otherwise the runtime
+        // listener would think the block is supported and spawn FakeBlocks
+        // with zero entities (visually a no-op).
+        TreeMap<ChunkCoord, String> chunkHashes = new TreeMap<>();
         packed.chunkToHead().forEach((chunk, head) -> {
             if (head.state() == SkinState.COMPLETED) {
-                HeadsRegistry.Entry entry = state.skinByHash.get(head.contentHash());
-                if (entry != null) chunkToEntry.put(chunk.coord(), entry);
+                chunkHashes.put(chunk.coord(), head.contentHash());
             }
         });
-        if (chunkToEntry.isEmpty()) {
+        if (chunkHashes.isEmpty()) {
             logger.info("[" + key + "] no completed skins; not writing a block entry");
-            state.blocks.remove(key);
-        } else {
-            // Capture per-variant rotation hints alongside the chunk map so
-            // the runtime can orient oak_log[axis=x] etc. correctly without
-            // re-parsing the blockstate JSON. Identity-rotation variants
-            // (canonical orientation) are dropped — the runtime falls back
-            // to identity for unknown variant keys.
-            TreeMap<String, VariantRotation> variantMap = new TreeMap<>();
-            for (Map.Entry<String, VariantRotation> e : model.variantRotations().entrySet()) {
-                if (e.getValue().xDeg() != 0 || e.getValue().yDeg() != 0) {
-                    variantMap.put(e.getKey(), e.getValue());
-                }
-            }
-            state.blocks.put(key, new HeadsJsonCodec.Block(chunkToEntry, variantMap));
+            return;
         }
+
+        // Capture per-variant rotation hints alongside the chunk map so the
+        // runtime can orient oak_log[axis=x] etc. correctly without re-
+        // parsing the blockstate JSON. Identity-rotation variants
+        // (canonical orientation) are dropped — the runtime falls back to
+        // identity for unknown variant keys.
+        TreeMap<String, VariantRotation> variantMap = new TreeMap<>();
+        for (Map.Entry<String, VariantRotation> e : model.variantRotations().entrySet()) {
+            if (e.getValue().xDeg() != 0 || e.getValue().yDeg() != 0) {
+                variantMap.put(e.getKey(), e.getValue());
+            }
+        }
+        store.writeBlock(new TsraFormat.Block(bakeKey, chunkHashes, variantMap));
     }
 
     private static List<BlockKey> readBlockList(Path file) throws IOException {
@@ -232,48 +249,4 @@ public final class BakeMain {
         return m;
     }
 
-    /**
-     * Mutable bake-side projection of a {@link HeadsJsonCodec.Document}. Holds
-     * the in-progress block table plus a hash-indexed view of every skin
-     * referenced by it, so {@link #bakeOne} can dedup uploads against prior
-     * runs. {@link #write} re-derives the document and serializes via the
-     * shared codec.
-     */
-    static final class BakeState {
-        String version;
-        int gridN;
-        final Map<BlockKey, HeadsJsonCodec.Block> blocks = new TreeMap<>(
-                java.util.Comparator.comparing(BlockKey::asString));
-        final Map<String, HeadsRegistry.Entry> skinByHash = new LinkedHashMap<>();
-
-        BakeState(String version, int gridN) {
-            this.version = version;
-            this.gridN = gridN;
-        }
-
-        static BakeState loadOrEmpty(Path out, String version, int gridN, Logger logger) throws IOException {
-            BakeState s = new BakeState(version, gridN);
-            if (!Files.isRegularFile(out)) return s;
-            String json = Files.readString(out, StandardCharsets.UTF_8);
-            HeadsJsonCodec.Document<BlockKey> doc = HeadsJsonCodec.read(
-                    json, BlockKey::of, gridN, version, logger);
-            s.version = doc.version();
-            s.gridN = doc.gridN();
-            for (Map.Entry<BlockKey, HeadsJsonCodec.Block> be : doc.blocks().entrySet()) {
-                s.blocks.put(be.getKey(), be.getValue());
-                for (HeadsRegistry.Entry e : be.getValue().chunks().values()) {
-                    s.skinByHash.putIfAbsent(e.skinHash(), e);
-                }
-            }
-            return s;
-        }
-
-        void write(Path out) throws IOException {
-            String json = HeadsJsonCodec.write(
-                    new HeadsJsonCodec.Document<>(version, gridN, blocks),
-                    BlockKey::asString);
-            Files.createDirectories(out.toAbsolutePath().getParent());
-            Files.writeString(out, json, StandardCharsets.UTF_8);
-        }
-    }
 }
