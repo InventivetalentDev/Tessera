@@ -8,7 +8,12 @@ import org.inventivetalent.tessera.skin.HeadsRegistry;
 import org.inventivetalent.tessera.skin.SkinDiskCache;
 import org.inventivetalent.tessera.skin.SkinUploader;
 import org.inventivetalent.tessera.skin.bake.BlockBaker;
-import org.inventivetalent.tessera.skin.bake.RuntimeHeadsStore;
+import org.inventivetalent.tessera.skin.store.HeadsStore;
+import org.inventivetalent.tessera.skin.store.JsonMigrator;
+import org.inventivetalent.tessera.skin.store.LayeredHeadsStore;
+import org.inventivetalent.tessera.skin.store.TsraFolderStore;
+import org.inventivetalent.tessera.skin.store.TsraFormat;
+import org.inventivetalent.tessera.skin.store.TsraZipStore;
 import org.inventivetalent.tessera.transport.DisplayTransport;
 import org.inventivetalent.tessera.transport.bukkit.BukkitDisplayTransport;
 import org.inventivetalent.tessera.transport.packet.PacketDisplayTransport;
@@ -17,7 +22,9 @@ import org.bukkit.Bukkit;
 import org.bukkit.command.PluginCommand;
 import org.bukkit.plugin.java.JavaPlugin;
 
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Optional;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -26,6 +33,7 @@ public final class TesseraPlugin extends JavaPlugin {
 
     private TesseraConfig config;
     private HeadsRegistry registry;
+    private HeadsStore headsStore;
     private HeadItemFactory itemFactory;
     private FakeBlockFactory blockFactory;
     private SkinUploader uploader;
@@ -40,12 +48,51 @@ public final class TesseraPlugin extends JavaPlugin {
         this.config = TesseraConfig.from(getConfig());
 
         String mcVersion = Bukkit.getMinecraftVersion();
-        // Bundled heads file is per-grid-size: heads-4.json, heads-8.json, …
-        // If no file exists for the configured size, the registry starts
-        // empty and runtime baking populates it (requires mineskinApiKey).
         int gridN = config.chunkGridSize();
-        this.registry = HeadsRegistry.loadFromClasspath(
-                getLogger(), "/heads-" + gridN + ".json", gridN, mcVersion);
+
+        // Bundled heads catalog ships as /heads-{gridN}.ztsra inside the
+        // plugin jar. Runtime-baked overrides live in
+        // plugins/Tessera/cache/heads-{gridN}.tsra/. Reads consult runtime
+        // first, falling through to the bundled zip; writes always go to
+        // the runtime folder so the jar resource stays immutable.
+        Path cacheRoot = getDataFolder().toPath().resolve("cache");
+        Path pngDir = cacheRoot.resolve("heads");
+        Path assetsDir = cacheRoot.resolve("assets");
+        Path skinCacheFile = cacheRoot.resolve("skins.json");
+        Path runtimeStoreRoot = cacheRoot.resolve("heads-" + gridN + TsraFormat.FOLDER_EXTENSION);
+        try {
+            Files.createDirectories(runtimeStoreRoot);
+        } catch (java.io.IOException io) {
+            getLogger().warning("Failed to create " + runtimeStoreRoot + ": " + io.getMessage());
+        }
+
+        TsraFolderStore runtimeStore = new TsraFolderStore(getLogger(), runtimeStoreRoot);
+        if (runtimeStore.manifest().isEmpty()) {
+            runtimeStore.writeManifest(new TsraFormat.Manifest(gridN, mcVersion,
+                    "Tessera/" + getDescription().getVersion()));
+        }
+        // One-shot migration from any leftover heads-{gridN}.json sitting
+        // next to the runtime store. Renames to .migrated on success so
+        // subsequent boots short-circuit this branch.
+        Path legacyJson = cacheRoot.resolve("heads-" + gridN + ".json");
+        if (Files.isRegularFile(legacyJson)) {
+            int migrated = JsonMigrator.migrate(getLogger(), legacyJson, runtimeStore, gridN, mcVersion);
+            if (migrated > 0) {
+                try {
+                    Files.move(legacyJson, legacyJson.resolveSibling(legacyJson.getFileName() + ".migrated"));
+                } catch (java.io.IOException io) {
+                    getLogger().warning("[tsra-migrate] failed to rename " + legacyJson + ": " + io.getMessage());
+                }
+            }
+        }
+
+        Optional<TsraZipStore> bundled = TsraZipStore.fromClasspath(
+                getLogger(), "/heads-" + gridN + TsraFormat.ZIP_EXTENSION);
+        this.headsStore = new LayeredHeadsStore(bundled.orElse(null), runtimeStore);
+
+        this.registry = HeadsRegistry.loadFrom(
+                getLogger(), headsStore, gridN, mcVersion, config.skinCacheCapacity());
+
         this.itemFactory = new HeadItemFactory();
         DisplayTransport transport = pickTransport(config);
         this.blockFactory = new FakeBlockFactory(itemFactory, registry, transport);
@@ -55,21 +102,8 @@ public final class TesseraPlugin extends JavaPlugin {
         // multiple concurrent first-time breaks don't block each other.
         this.uploader = new SkinUploader(
                 getLogger(), "Tessera/" + getDescription().getVersion(), config.mineskinApiKey());
-        Path cacheRoot = getDataFolder().toPath().resolve("cache");
-        Path pngDir = cacheRoot.resolve("heads");
-        Path assetsDir = cacheRoot.resolve("assets");
-        Path skinCacheFile = cacheRoot.resolve("skins.json");
-        Path runtimeHeadsFile = cacheRoot.resolve("heads-" + gridN + ".json");
         McAssetClient assets = new McAssetClient(assetsDir);
         this.diskCache = new SkinDiskCache(getLogger(), skinCacheFile);
-
-        // Rehydrate runtime-baked entries from previous sessions, then attach
-        // the same store as a persistence sink so future bakes / invalidations
-        // are mirrored to disk.
-        RuntimeHeadsStore runtimeHeads = new RuntimeHeadsStore(
-                getLogger(), runtimeHeadsFile, registry.gridN(), registry.version());
-        runtimeHeads.loadInto(registry);
-        registry.setPersistence(runtimeHeads);
         this.bakerExecutor = Executors.newFixedThreadPool(2, named("Tessera-Baker"));
         this.baker = new BlockBaker(getLogger(), () -> this.config.debug(), assets, mcVersion, registry, uploader, diskCache, pngDir, bakerExecutor);
 
@@ -109,6 +143,7 @@ public final class TesseraPlugin extends JavaPlugin {
         if (itemFactory != null) itemFactory.clear();
         if (uploader != null) uploader.cancelAll();
         if (bakerExecutor != null) bakerExecutor.shutdownNow();
+        if (headsStore != null) headsStore.close();
         getLogger().info("Tessera disabled");
     }
 

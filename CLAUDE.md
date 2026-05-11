@@ -37,22 +37,31 @@ bytecode, so any JDK ≥21 can consume the artifact.
   test class with `gradle test --tests <fqcn>`.
 - `MINESKIN_API_KEY=… gradle tesseraBake` — runs `org.inventivetalent.tessera.skin.bake.BakeMain`
   off-server. Reads `bake-blocks.txt`, writes
-  `src/main/resources/heads-<gridN>.json` (defaults to `heads-4.json`; pass
-  `-PgridN=<N>` to bake a different size), caches downloaded vanilla assets
-  + intermediate PNGs in `build/tessera-cache/`. Idempotent — re-running on
-  the same input is a no-op once the file is populated. Can run *without*
+  `src/main/resources/heads-<gridN>.ztsra` (defaults to `heads-4.ztsra`;
+  pass `-PgridN=<N>` to bake a different size). Internally bakes into a
+  scratch `build/tessera-cache/heads-<gridN>.tsra/` folder store and zips
+  it into the resource. Caches downloaded vanilla assets + intermediate
+  PNGs in `build/tessera-cache/`. Idempotent — the scratch folder survives
+  across runs so re-baking the same inputs only re-zips. Can run *without*
   `MINESKIN_API_KEY` to verify the asset → split → pack → assemble pipeline,
   but skins won't be uploaded. Multiple grid sizes coexist as separate files.
+- `gradle tesseraConvertHeads -PgridN=4` — one-shot helper that converts a
+  legacy `src/main/resources/heads-<N>.json` into the new
+  `heads-<N>.ztsra` format. Exists for the v1 → v2 migration; runtime
+  `plugins/Tessera/cache/heads-<N>.json` caches are migrated automatically
+  on first boot of the new plugin. Pass `-PdeleteInput=true` to remove the
+  source JSON after a successful conversion.
 
 `bake-blocks.txt` is the curated v1 fixture list of block IDs to pre-bake at
 build time so a freshly installed plugin handles those blocks with no network
 calls. Anything else is baked on demand at runtime via `BlockBaker` (requires
 the server admin to set `mineskinApiKey` in `config.yml`).
 
-Shadow relocates `org.mineskin` → `org.inventivetalent.tessera.shaded.mineskin` and
-`com.google.gson` → `org.inventivetalent.tessera.shaded.gson`. JOML is bundled by Paper at
-runtime, declared `implementation` only so `tesseraBake` (which doesn't load
-Paper) can find it on the classpath.
+Shadow relocates `org.mineskin` → `org.inventivetalent.tessera.shaded.mineskin`,
+`com.google.gson` → `org.inventivetalent.tessera.shaded.gson`, and
+`com.github.benmanes.caffeine` → `org.inventivetalent.tessera.shaded.caffeine`.
+JOML is bundled by Paper at runtime, declared `implementation` only so
+`tesseraBake` (which doesn't load Paper) can find it on the classpath.
 
 ## Architecture
 
@@ -64,14 +73,53 @@ Tessera has two largely independent halves wired together at startup by
 Block ID → MineSkin texture. Same code runs in two contexts:
 
 - **Build-time** via `BakeMain` (gradle `tesseraBake`), output is the
-  bundled `heads-<gridN>.json` resource.
+  bundled `heads-<gridN>.ztsra` resource (a zip of the folder store, see
+  below).
 - **Runtime** via `BlockBaker`, output is registered into the live
-  `HeadsRegistry` and persisted in `plugins/Tessera/cache/heads-<gridN>.json`
-  (alongside the PNG-hash dedup cache `cache/skins.json`).
+  `HeadsRegistry` and persisted in the writable folder store at
+  `plugins/Tessera/cache/heads-<gridN>.tsra/` (alongside the PNG-hash dedup
+  cache `cache/skins.json`).
 
-Both files use the same JSON schema (see `HeadsJsonCodec`) and live one per
-grid size, so switching `chunkGridSize` in config doesn't discard previously
-uploaded skins — each size keeps its own state.
+Storage layout (`skin.store.TsraFormat`): one binary file per payload.
+Bundled and runtime catalogs share the same on-disk layout — folder
+(read-write, runtime) and zip (read-only, bundled). The registry layers
+them via `LayeredHeadsStore`: reads consult runtime first, falling through
+to the bundled zip; writes always go to runtime so the jar resource stays
+immutable. Files inside a catalog:
+
+- `manifest.tsra` — declares `gridN` and producer.
+- `blocks/<encoded-bake-key>.tsra` — for each block, the
+  `(ChunkCoord → skin-hash)` index plus any blockstate `variants` rotation
+  hints. Tinted bakes use the encoded `BakeKey.toString()` form (e.g.
+  `minecraft__grass_block--7fbf2e.tsra`).
+- `skins/<hash[0..2]>/<hash>.tsra` — content-addressed skin payload
+  (MineSkin `value`/`signature`/`mineskinUuid`). Shared between blocks; a
+  uniform stone block at gridN=4 references the same 3 payload files for
+  all 56 visible chunks.
+
+The registry only holds the chunk → skin-hash index eagerly. Skin payloads
+(~2 KB each base64 blobs) load on demand from disk through a Caffeine LRU
+(`skins.cacheCapacity` in `config.yml`, default 1024 entries). At startup
+the registry walks every block file in the layered store but never opens
+a skin file — that happens lazily the first time a player breaks a block.
+The `interaction.preloadSkinsOnLook` flag (default on) warms the cache
+for the block a player is aiming at so the mining hot-path is a memory
+hit.
+
+Schema versioning: each file starts with the `"TSRA"` magic, a 1-byte
+format version, a 1-byte payload type (manifest / block / skin), and two
+reserved bytes. Readers reject unknown magic / version (treated as
+corruption) so a hand-edited file surfaces rather than silently parses as
+empty.
+
+One-shot JSON migration: if a server upgrades from the v1 plugin and the
+runtime cache is still `cache/heads-<N>.json`, `JsonMigrator` runs on the
+first boot of the new plugin, writes the equivalent `.tsra` folder, and
+renames the source to `.migrated`. The same `JsonMigrator` is exposed via
+`gradle tesseraConvertHeads` for the bundled resource.
+
+Per-grid-size files mean switching `chunkGridSize` in config doesn't
+discard previously uploaded skins — each size keeps its own folder.
 
 Pipeline stages (`org.inventivetalent.tessera.skin.bake.BlockBaker.doBake` / `BakeMain.bakeOne`):
 
@@ -137,9 +185,10 @@ FakeBlock at spawn time:
    first one as fallback) as the canonical model to extract textures from,
    and records each variant key's `(xDeg, yDeg)` as a
    `ModelResolver.VariantRotation`. `BakeMain` writes those into the per-
-   grid-size `heads-<N>.json` under `blocks.<id>.variants` (alongside
-   `chunks`). Both bundled and runtime files share the schema defined by
-   `HeadsJsonCodec`: each block wraps as `{ "chunks": {…}, "variants": {…} }`.
+   grid-size catalog under each block file's variants table (see
+   `TsraFormat.Block`). Both bundled and runtime catalogs share the same
+   binary layout: every `blocks/<key>.tsra` file is a self-describing
+   `(chunk-hashes, variants)` pair.
 2. **Spawn time** (`plugin.BlockBreakListener.spawn`):
    `VariantKey.fromBlockData(blockData)` produces a vanilla-format key (e.g.
    `axis=y`, `facing=west,lit=false`); `VariantKey.pickMatching` narrows it

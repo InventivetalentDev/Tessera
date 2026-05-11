@@ -33,6 +33,8 @@ public record TesseraConfig(
         boolean startOnLeftClick,
         long leftClickGraceMs,
         boolean eagerPreload,
+        boolean preloadSkinsOnLook,
+        int skinCacheCapacity,
         int minBreakDurationMs,
         boolean enableTintedBlocks,
         boolean metrics,
@@ -70,9 +72,9 @@ public record TesseraConfig(
         if (grid < 1 || grid > 16 || 16 % grid != 0) {
             throw new IllegalArgumentException(
                     "chunkGridSize must be one of 1, 2, 4, 8, 16; got " + grid
-                            + ". Note: each grid size loads its own heads-<N>.json"
-                            + " file — if no bundled file exists for the chosen"
-                            + " size, blocks are re-baked on demand via MineSkin.");
+                            + ". Note: each grid size loads its own heads-<N>.ztsra"
+                            + " bundle — if no bundle exists for the chosen size,"
+                            + " blocks are re-baked on demand via MineSkin.");
         }
 
         AnimationMode mode = parseAnimationMode(
@@ -101,6 +103,8 @@ public record TesseraConfig(
                 readBool(cfg, "interaction.startOnLeftClick", "startOnLeftClick", true),
                 readLong(cfg, "interaction.leftClickGraceMs", "leftClickGraceMs", 500L),
                 readBool(cfg, "interaction.eagerPreload", "eagerPreload", false),
+                readBool(cfg, "interaction.preloadSkinsOnLook", "preloadSkinsOnLook", true),
+                readInt(cfg, "skins.cacheCapacity", "skinCacheCapacity", 1024),
                 readInt(cfg, "interaction.minBreakDurationMs", "minBreakDurationMs", 500),
                 cfg.getBoolean("enableTintedBlocks", true),
                 cfg.getBoolean("metrics", true),

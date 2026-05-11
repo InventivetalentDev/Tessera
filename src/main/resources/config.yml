@@ -16,10 +16,10 @@ transport: packet
 #                non-uniform textures — set maxConcurrentFakeBlocks
 #                accordingly.
 #
-# Heads files are per-grid-size: bundled `heads-<N>.json` from the jar
-# and runtime cache `plugins/Tessera/cache/heads-<N>.json`. Switching
-# this value picks a different file — switching back later restores the
-# previous size's state. If no file exists for the new size, blocks are
+# Heads catalogs are per-grid-size: bundled `heads-<N>.ztsra` from the jar
+# and runtime cache `plugins/Tessera/cache/heads-<N>.tsra/`. Switching this
+# value picks a different catalog — switching back later restores the
+# previous size's state. If no catalog exists for the new size, blocks are
 # re-baked at runtime on demand (set mineskin.apiKey below).
 chunkGridSize: 4
 
@@ -40,10 +40,17 @@ debug: false
 
 mineskin:
   # API key — required for runtime uploads of blocks not in the bundled
-  # heads-<N>.json. Get one at https://account.mineskin.org/.
+  # heads-<N>.ztsra. Get one at https://account.mineskin.org/.
   # Without a key the plugin only renders blocks present in the bundled
-  # file and falls back to vanilla particles for anything else.
+  # catalog and falls back to vanilla particles for anything else.
   apiKey: ""
+
+skins:
+  # Soft cap for the in-memory skin-payload LRU cache. Skin payloads (the
+  # MineSkin texture value/signature blobs) are loaded from
+  # heads-<N>.tsra/skins/ on demand; this cache keeps the hot subset
+  # resident. ~2 KB per cached entry — 1024 ≈ 2 MB resident.
+  cacheCapacity: 1024
 
 materials:
   # Materials this plugin should animate. Use ["*"] for all full-cube blocks.
@@ -146,6 +153,14 @@ interaction:
   # of extra entity traffic for every block the player looks at (~1 second
   # of extra entity lifetime per aimed-at block on average).
   eagerPreload: false
+
+  # Warm the skin-payload cache for the block the player is aiming at, so
+  # the spawn path doesn't pay a disk round-trip for a block they're about
+  # to break. Much lighter than eagerPreload — no entities spawn, only a
+  # handful of small file reads from the runtime heads-<N>.tsra/ folder
+  # store. Disable only if disk I/O during aim is a concern (e.g. a heavily
+  # contended SSD or remote storage).
+  preloadSkinsOnLook: true
 
   # Minimum estimated break duration in milliseconds for the animation to
   # play. Blocks that break faster than this threshold fall back to the
