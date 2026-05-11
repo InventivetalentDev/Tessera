@@ -58,7 +58,7 @@ public final class TesseraPlugin extends JavaPlugin {
         // always go to the runtime folder so the jar resource stays
         // immutable.
         Path cacheRoot = getDataFolder().toPath().resolve("cache");
-        Path pngDir = cacheRoot.resolve("heads");
+        Path pngDir = cacheRoot.resolve("head-pngs");
         Path assetsDir = cacheRoot.resolve("assets");
         Path skinCacheFile = cacheRoot.resolve("skins.json");
         Path runtimeStoreRoot = cacheRoot.resolve("heads-" + gridN);

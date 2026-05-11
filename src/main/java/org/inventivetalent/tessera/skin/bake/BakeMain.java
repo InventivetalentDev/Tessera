@@ -93,7 +93,7 @@ public final class BakeMain {
         logger.info("Baking " + blocks.size() + " blocks at version " + version + " (gridN=" + gridN + ")");
 
         Files.createDirectories(cacheRoot);
-        Path pngDir = cacheRoot.resolve("heads");
+        Path pngDir = cacheRoot.resolve("head-pngs");
         Files.createDirectories(pngDir);
 
         // Scratch folder store: persists across re-runs so a re-bake skips
