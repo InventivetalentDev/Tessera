@@ -16,11 +16,9 @@ transport: packet
 #                non-uniform textures — set maxConcurrentFakeBlocks
 #                accordingly.
 #
-# Heads catalogs are per-grid-size: bundled `heads-<N>.ztsra` from the jar
-# and runtime cache `plugins/Tessera/cache/heads-<N>/`. Switching this
-# value picks a different catalog — switching back later restores the
-# previous size's state. If no catalog exists for the new size, blocks are
-# re-baked at runtime on demand (set mineskin.apiKey below).
+# Each grid size keeps its own cache, so switching values back and forth
+# doesn't discard previously-baked skins. Blocks not already cached for
+# the chosen size are baked on demand (set mineskin.apiKey below).
 chunkGridSize: 4
 
 # Bake biome-tinted blocks (grass, leaves, water, vines) on demand. The
@@ -39,17 +37,16 @@ metrics: true
 debug: false
 
 mineskin:
-  # API key — required for runtime uploads of blocks not in the bundled
-  # heads-<N>.ztsra. Get one at https://account.mineskin.org/.
-  # Without a key the plugin only renders blocks present in the bundled
-  # catalog and falls back to vanilla particles for anything else.
+  # API key — required for runtime uploads of blocks not already bundled
+  # with the plugin. Get one at https://account.mineskin.org/. Without a
+  # key the plugin only renders bundled blocks and falls back to vanilla
+  # particles for anything else.
   apiKey: ""
 
 skins:
-  # Soft cap for the in-memory skin-payload LRU cache. Skin payloads (the
-  # MineSkin texture value/signature blobs) are loaded from
-  # heads-<N>/skins/ on demand; this cache keeps the hot subset
-  # resident. ~2 KB per cached entry — 1024 ≈ 2 MB resident.
+  # How many skin payloads to keep in memory at once. Payloads are loaded
+  # from disk on demand; this cap bounds resident memory while keeping the
+  # hot subset warm. ~2 KB per entry — 1024 ≈ 2 MB resident.
   cacheCapacity: 1024
 
 materials:
@@ -154,12 +151,10 @@ interaction:
   # of extra entity lifetime per aimed-at block on average).
   eagerPreload: false
 
-  # Warm the skin-payload cache for the block the player is aiming at, so
-  # the spawn path doesn't pay a disk round-trip for a block they're about
-  # to break. Much lighter than eagerPreload — no entities spawn, only a
-  # handful of small file reads from the runtime heads-<N>/ folder
-  # store. Disable only if disk I/O during aim is a concern (e.g. a heavily
-  # contended SSD or remote storage).
+  # Preload the skin data for whichever block the player is aiming at, so
+  # the animation starts instantly when they begin mining. Much cheaper
+  # than eagerPreload — no entities spawn, just a few small reads from
+  # disk per aimed-at block.
   preloadSkinsOnLook: true
 
   # Minimum estimated break duration in milliseconds for the animation to
