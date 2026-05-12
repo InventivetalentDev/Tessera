@@ -18,7 +18,6 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
-import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Logger;
 
@@ -307,7 +306,11 @@ public final class HeadsRegistry {
      * {@code HeadItemFactory#build} on the spawn path.
      */
     public static HeadSkin toHeadSkin(Entry e) {
-        HeadSkin h = new HeadSkin(UUID.randomUUID(), e.skinHash(), Collections.emptyMap());
+        // Derive the id from skinHash so multiple chunks sharing a skin map
+        // to the same HeadSkin.id() and HeadItemFactory's ItemStack cache
+        // actually hits across chunks and across breaks (a random id here
+        // would defeat that cache entirely).
+        HeadSkin h = new HeadSkin(HeadSkin.idFromHash(e.skinHash()), e.skinHash(), Collections.emptyMap());
         h.texture(e.textureValue(), e.textureSignature(), e.mineskinUuid());
         h.state(SkinState.COMPLETED);
         return h;
