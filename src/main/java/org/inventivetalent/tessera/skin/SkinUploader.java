@@ -48,7 +48,7 @@ import java.util.logging.Logger;
  */
 public final class SkinUploader {
 
-    private static final int BATCH_SIZE = 64;
+    private static final int BATCH_SIZE = 32;
 
     private final Logger logger;
     private final String userAgent;
