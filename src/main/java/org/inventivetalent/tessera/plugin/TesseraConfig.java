@@ -51,9 +51,12 @@ public record TesseraConfig(
      *   <li>{@link #POP} — chunk stays at full size until the wave hits it,
      *       then disappears in one tick. Visually "crumbling" rather than
      *       "shrinking".</li>
+     *   <li>{@link #RECEDE} — chunk scales toward 0 while also drifting away
+     *       from the breaker along the wave direction, so the smallest point
+     *       lands at the chunk's back face.</li>
      * </ul>
      */
-    public enum CollapseStyle { SHRINK, POP }
+    public enum CollapseStyle { SHRINK, POP, RECEDE }
 
     /**
      * Entity transport backend.
@@ -132,8 +135,9 @@ public record TesseraConfig(
         return switch (raw.toLowerCase(Locale.ROOT)) {
             case "shrink" -> CollapseStyle.SHRINK;
             case "pop", "instant", "disappear" -> CollapseStyle.POP;
+            case "recede", "drift", "fog" -> CollapseStyle.RECEDE;
             default -> throw new IllegalArgumentException(
-                    "animation.style must be 'shrink' or 'pop'; got " + raw);
+                    "animation.style must be 'shrink', 'pop', or 'recede'; got " + raw);
         };
     }
 

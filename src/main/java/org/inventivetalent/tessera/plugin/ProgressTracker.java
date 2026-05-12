@@ -7,6 +7,7 @@ import org.bukkit.Location;
 import org.bukkit.block.data.BlockData;
 import org.bukkit.scheduler.BukkitTask;
 import org.bukkit.util.Vector;
+import org.joml.Vector3f;
 
 import java.util.List;
 import java.util.Map;
@@ -50,6 +51,8 @@ public final class ProgressTracker {
         public double[] chunkT;                // wave position per chunk; recomputed on owner transfer
         public final float[] baseScales;       // per-chunk spawn scales (immutable across ownership transfers)
         public final float[] currentScales;    // last-applied scale per chunk; updated by applyAtProgress
+        public Vector3f[] baseTranslations;    // per-chunk spawn translations; null slots for pending chunks
+        public Vector3f recedeDelta;           // world-space recede offset; refreshed on owner transfer
         public double lastAppliedProgress;
         public long lastUpdateTickMs;
         public long avgEventGapMs;             // EMA of inter-event gap; 0 until first delta seen
@@ -70,7 +73,8 @@ public final class ProgressTracker {
         public TrackedBreak(UUID playerId, BlockKey key, Location origin,
                             BlockData originalBlockData, Vector eyeDir,
                             FakeBlock fakeBlock, double[] chunkT,
-                            float[] baseScales, float[] currentScales) {
+                            float[] baseScales, float[] currentScales,
+                            Vector3f[] baseTranslations, Vector3f recedeDelta) {
             this.currentPlayerId = playerId;
             this.key = key;
             this.origin = origin;
@@ -80,6 +84,8 @@ public final class ProgressTracker {
             this.chunkT = chunkT;
             this.baseScales = baseScales;
             this.currentScales = currentScales;
+            this.baseTranslations = baseTranslations;
+            this.recedeDelta = recedeDelta;
             this.lastAppliedProgress = 0d;
             this.lastUpdateTickMs = System.currentTimeMillis();
             this.avgEventGapMs = 0L;
