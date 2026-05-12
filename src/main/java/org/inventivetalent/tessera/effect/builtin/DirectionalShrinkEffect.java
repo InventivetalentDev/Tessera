@@ -217,13 +217,14 @@ public final class DirectionalShrinkEffect implements ChunkEffect {
 
     /**
      * Compute the world-space recede delta for one FakeBlock: a vector of
-     * magnitude {@code 0.5 / gridN} along the breaker's eye direction. This
-     * is how far each chunk's center translates toward its back face as its
-     * scale goes from base → 0.
+     * magnitude {@code 0.5} blocks along the breaker's eye direction. Each
+     * chunk's center translates by this amount (scaled by its shrunk fraction)
+     * as its scale goes from base → 0, so the vanishing point is half a block
+     * behind the chunk's original position from the breaker's perspective.
      */
     public static Vector3f computeRecedeDelta(int gridN, Vector eyeDir) {
         Vector e = eyeDir.clone().normalize();
-        float mag = 0.5f / gridN;
+        float mag = 0.5f;
         return new Vector3f((float) e.getX() * mag, (float) e.getY() * mag, (float) e.getZ() * mag);
     }
 
