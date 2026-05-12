@@ -36,7 +36,7 @@ bytecode, so any JDK ≥21 can consume the artifact.
   yet; if you add one, use Jupiter and don't pull in JUnit 4. Run a single
   test class with `gradle test --tests <fqcn>`.
 - `MINESKIN_API_KEY=… gradle tesseraBake` — runs `org.inventivetalent.tessera.skin.bake.BakeMain`
-  off-server. Reads `bake-blocks.txt`, writes
+  off-server. Reads `bake-blocks.txt` (override with `-Pinput=<path>`), writes
   `src/main/resources/heads-<gridN>.ztsra` (defaults to `heads-4.ztsra`;
   pass `-PgridN=<N>` to bake a different size). Internally bakes into a
   scratch `build/tessera-cache/heads-<gridN>/` folder store and zips

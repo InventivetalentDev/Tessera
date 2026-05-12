@@ -112,12 +112,13 @@ val tesseraConvertHeads by tasks.registering(JavaExec::class) {
 
 val tesseraBake by tasks.registering(JavaExec::class) {
     group = "tessera"
-    description = "Pre-bake MineSkin player-head textures for blocks listed in bake-blocks.txt. Output goes to heads-<N>.ztsra (override chunk size with -PgridN=<N>)."
+    description = "Pre-bake MineSkin player-head textures for blocks listed in bake-blocks.txt. Output goes to heads-<N>.ztsra (override chunk size with -PgridN=<N>, input list with -Pinput=<path>)."
     mainClass.set("org.inventivetalent.tessera.skin.bake.BakeMain")
     classpath = sourceSets["main"].runtimeClasspath
     val gridN = (project.findProperty("gridN") as? String) ?: "4"
+    val input = (project.findProperty("input") as? String) ?: "bake-blocks.txt"
     args = listOf(
-        "--input", "bake-blocks.txt",
+        "--input", input,
         "--out",   "src/main/resources/heads-$gridN.ztsra",
         "--cache", "build/tessera-cache",
         "--gridN", gridN
