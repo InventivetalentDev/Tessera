@@ -786,7 +786,7 @@ public final class BlockBreakProgressListener implements Listener {
 
     private void aimWatchTick() {
         TesseraConfig cfg = plugin.tesseraConfig();
-        if (!cfg.eagerPreload()) {
+        if (!cfg.eagerPreload() && !cfg.preloadSkinsOnLook()) {
             if (!preloads.isEmpty()) new ArrayList<>(preloads.keySet()).forEach(this::clearPreload);
             return;
         }
@@ -825,6 +825,16 @@ public final class BlockBreakProgressListener implements Listener {
             int tint = cfg.enableTintedBlocks() ? BlockTintReader.read(target) : 0;
             BakeKey bakeKey = new BakeKey(key, tint);
             if (!registry.has(bakeKey)) continue;
+
+            // Light-weight warm: just pull the skin payloads into the
+            // Caffeine cache so the click path's `registry.get` is a
+            // memory hit. No entities spawn — cheap to run on every
+            // aim-watch tick.
+            if (cfg.preloadSkinsOnLook()) {
+                registry.warm(bakeKey);
+            }
+
+            if (!cfg.eagerPreload()) continue;
 
             BlockData blockData = target.getBlockData();
             String fullStateKey = VariantKey.fromBlockData(blockData);

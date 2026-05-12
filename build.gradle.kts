@@ -6,7 +6,7 @@ plugins {
 }
 
 group = "org.inventivetalent.tessera"
-version = "26.5.1-SNAPSHOT"
+version = "26.5.2-SNAPSHOT"
 
 java {
     toolchain.languageVersion.set(JavaLanguageVersion.of(25))
@@ -45,6 +45,10 @@ dependencies {
     // include it but the runtime plugin just sees Paper's copy first.
     implementation("org.joml:joml:1.10.5")
     implementation("org.bstats:bstats-bukkit:3.2.1")
+    // Caffeine: in-memory LRU for skin payloads loaded from .tsra files. The
+    // registry only holds chunk→hash maps eagerly; the heavy base64
+    // value/signature blobs ride this cache and load on demand from disk.
+    implementation("com.github.ben-manes.caffeine:caffeine:3.1.8")
 
     // MockBukkit boots a fake Bukkit runtime in-JVM so we can integration-test
     // listeners/commands without spinning up a real Paper server. We use the
@@ -82,6 +86,7 @@ tasks.shadowJar {
     archiveClassifier.set("")
     relocate("org.mineskin",    "org.inventivetalent.tessera.shaded.mineskin")
     relocate("com.google.gson", "org.inventivetalent.tessera.shaded.gson")
+    relocate("com.github.benmanes.caffeine", "org.inventivetalent.tessera.shaded.caffeine")
 
     relocate("org.bstats", "org.inventivetalent.tessera.shaded.bstats")
 }
@@ -90,15 +95,30 @@ tasks.assemble {
     dependsOn(tasks.shadowJar)
 }
 
+val tesseraConvertHeads by tasks.registering(JavaExec::class) {
+    group = "tessera"
+    description = "Convert the legacy heads-<N>.json bundled resource into the new heads-<N>.ztsra format. One-shot helper for the v1 -> v2 migration; the runtime cache file migrates automatically on first boot."
+    mainClass.set("org.inventivetalent.tessera.skin.store.HeadsJsonToTsraConverter")
+    classpath = sourceSets["main"].runtimeClasspath
+    val gridN = (project.findProperty("gridN") as? String) ?: "4"
+    val deleteInput = (project.findProperty("deleteInput") as? String) ?: "false"
+    args = listOf(
+        "--in", "src/main/resources/heads-$gridN.json",
+        "--out", "src/main/resources/heads-$gridN.ztsra",
+        "--gridN", gridN,
+        "--delete", deleteInput
+    )
+}
+
 val tesseraBake by tasks.registering(JavaExec::class) {
     group = "tessera"
-    description = "Pre-bake MineSkin player-head textures for blocks listed in bake-blocks.txt. Output goes to heads-<N>.json (override chunk size with -PgridN=<N>)."
+    description = "Pre-bake MineSkin player-head textures for blocks listed in bake-blocks.txt. Output goes to heads-<N>.ztsra (override chunk size with -PgridN=<N>)."
     mainClass.set("org.inventivetalent.tessera.skin.bake.BakeMain")
     classpath = sourceSets["main"].runtimeClasspath
-    val gridN = (project.findProperty("gridN") as? String) ?: "8"
+    val gridN = (project.findProperty("gridN") as? String) ?: "4"
     args = listOf(
         "--input", "bake-blocks.txt",
-        "--out",   "src/main/resources/heads-$gridN.json",
+        "--out",   "src/main/resources/heads-$gridN.ztsra",
         "--cache", "build/tessera-cache",
         "--gridN", gridN
     )

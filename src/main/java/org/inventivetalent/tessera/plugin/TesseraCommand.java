@@ -84,6 +84,10 @@ import java.util.Set;
  *   /tessera debug dumppng &lt;material&gt;    split+paint locally and write one PNG per
  *                                       chunk named &lt;x&gt;-&lt;y&gt;-&lt;z&gt;.png to
  *                                       plugins/Tessera/dump-&lt;material&gt;/
+ *   /tessera debug dumpmaterials        write every non-legacy Material that is
+ *                                       both solid and occluding to
+ *                                       plugins/Tessera/solid-occluding-blocks.txt
+ *                                       (bake-blocks.txt format).
  * </pre>
  *
  * <p>The three rotation knobs operate at different scales:
@@ -107,9 +111,9 @@ public final class TesseraCommand implements CommandExecutor, TabCompleter {
 
     private static final List<String> TOP = List.of("bake", "config", "debug", "reload", "test");
     private static final List<String> DEBUG_SUBS = List.of(
-            "center", "debugtex", "dumppng", "face", "grid", "headrot",
-            "permutations", "rebake", "sourceflip", "sourcerot", "status",
-            "tileflip", "tilerot");
+            "center", "debugtex", "dumpmaterials", "dumppng", "face", "grid",
+            "headrot", "permutations", "rebake", "sourceflip", "sourcerot",
+            "status", "tileflip", "tilerot");
     private static final List<String> CONFIG_KEYS = List.of(
             "animation.durationMs", "animation.fillInterior", "animation.mode",
             "animation.style", "animation.waveWindow", "chunkGridSize", "debug",
@@ -557,6 +561,7 @@ public final class TesseraCommand implements CommandExecutor, TabCompleter {
             case "debugtex"     -> handleDebugTex(sender, args);
             case "permutations" -> handleDebugPermutations(sender, args);
             case "dumppng"      -> handleDebugDumpPng(sender, args);
+            case "dumpmaterials" -> handleDebugDumpMaterials(sender);
             default -> {
                 sender.sendMessage("§cUnknown debug target: " + args[1]);
                 yield true;
@@ -919,6 +924,33 @@ public final class TesseraCommand implements CommandExecutor, TabCompleter {
         } catch (java.io.IOException e) {
             sender.sendMessage("§cDump failed: " + e.getMessage());
         }
+        return true;
+    }
+
+    private boolean handleDebugDumpMaterials(CommandSender sender) {
+        // /tessera debug dumpmaterials
+        // Writes every non-legacy Material that reports both isSolid() and
+        // isOccluding() as a candidate for bake-blocks.txt. Output goes to
+        // plugins/Tessera/solid-occluding-blocks.txt in bake-blocks.txt format
+        // (one namespaced id per line, # comments).
+        java.nio.file.Path out = plugin.getDataFolder().toPath().resolve("solid-occluding-blocks.txt");
+        List<String> ids = Arrays.stream(Material.values())
+                .filter(m -> !m.isLegacy() && m.isBlock() && m.isSolid() && m.isOccluding())
+                .map(m -> m.getKey().toString())
+                .sorted()
+                .toList();
+        try {
+            java.nio.file.Files.createDirectories(out.getParent());
+            StringBuilder sb = new StringBuilder();
+            sb.append("# Materials where isSolid() && isOccluding() — dumped by /tessera debug dumpmaterials\n");
+            sb.append("# Count: ").append(ids.size()).append('\n');
+            for (String id : ids) sb.append(id).append('\n');
+            java.nio.file.Files.writeString(out, sb.toString());
+        } catch (java.io.IOException e) {
+            sender.sendMessage("§cDump failed: " + e.getMessage());
+            return true;
+        }
+        sender.sendMessage("§aWrote " + ids.size() + " solid+occluding materials to " + out);
         return true;
     }
 

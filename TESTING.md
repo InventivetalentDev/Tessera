@@ -80,13 +80,12 @@ required — auto-invalidates registry).
 For each row, confirm both correctness and lack of console errors. Run on
 a block that exercises non-uniform faces (e.g. `oak_log axis=x`).
 
-For everything except `chunkGridSize` and `transport` you can flip values
-in-game without restarting the server: `/tessera config <key> <value>`
-writes to `config.yml` and reloads the snapshot in one step. Run
-`/tessera config` for the full key list, or `/tessera config <key>` to
-read the current value. `chunkGridSize` and `transport` still require a
-restart (registry / transport objects are built in `onEnable`); the
-command will warn you when you set those.
+All options are editable in-game: `/tessera config <key> <value>` writes
+to `config.yml` and reloads the snapshot in one step — no server restart
+needed for most settings. Run `/tessera config` for the full key list, or
+`/tessera config <key>` to read the current value. `chunkGridSize` and
+`transport` are editable but require a server restart to take full effect;
+the command will warn you when you set those.
 
 | Setting | Values to test | What changes |
 |---------|---------------|--------------|
