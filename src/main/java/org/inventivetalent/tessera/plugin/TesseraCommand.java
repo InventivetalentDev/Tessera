@@ -377,7 +377,7 @@ public final class TesseraCommand implements CommandExecutor, TabCompleter {
             sender.sendMessage("§6Tessera config options §8(§7/tessera config <key> [value]§8):");
             sender.sendMessage("§f  chunkGridSize              §71|2|4|8|16  §8(restart required)");
             sender.sendMessage("§f  animation.mode             §7progress|post-break");
-            sender.sendMessage("§f  animation.style            §7shrink|pop");
+            sender.sendMessage("§f  animation.style            §7shrink|pop|recede");
             sender.sendMessage("§f  animation.durationMs       §7int (ms)");
             sender.sendMessage("§f  animation.waveWindow       §70.0–1.0");
             sender.sendMessage("§f  animation.fillInterior     §7true|false");
@@ -463,7 +463,7 @@ public final class TesseraCommand implements CommandExecutor, TabCompleter {
                 yaml.set("animation.mode", value.toLowerCase(Locale.ROOT));
             }
             case "animation.style" -> {
-                cfgValidateOneOf(value, "animation.style", "shrink", "pop", "instant", "disappear");
+                cfgValidateOneOf(value, "animation.style", "shrink", "pop", "instant", "disappear", "recede", "drift", "fog");
                 yaml.set("animation.style", value.toLowerCase(Locale.ROOT));
             }
             case "animation.durationms" -> {
