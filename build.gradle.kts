@@ -115,7 +115,7 @@ val tesseraBake by tasks.registering(JavaExec::class) {
     description = "Pre-bake MineSkin player-head textures for blocks listed in bake-blocks.txt. Output goes to heads-<N>.ztsra (override chunk size with -PgridN=<N>)."
     mainClass.set("org.inventivetalent.tessera.skin.bake.BakeMain")
     classpath = sourceSets["main"].runtimeClasspath
-    val gridN = (project.findProperty("gridN") as? String) ?: "8"
+    val gridN = (project.findProperty("gridN") as? String) ?: "4"
     args = listOf(
         "--input", "bake-blocks.txt",
         "--out",   "src/main/resources/heads-$gridN.ztsra",
