@@ -81,11 +81,22 @@ Block ID → MineSkin texture. Same code runs in two contexts:
   cache `cache/skins.json`).
 
 Storage layout (`skin.store.TsraFormat`): one binary file per payload.
-Bundled and runtime catalogs share the same on-disk layout — folder
-(read-write, runtime) and zip (read-only, bundled). The registry layers
-them via `LayeredHeadsStore`: reads consult runtime first, falling through
-to the bundled zip; writes always go to runtime so the jar resource stays
-immutable. Files inside a catalog:
+Catalogs share the same on-disk layout in two shapes — folder
+(read-write, runtime) and zip (read-only). `LayeredHeadsStore` stacks
+three priorities, falling through on miss and unioning `listBlocks`:
+
+1. `plugins/Tessera/cache/heads-<N>/` — writable runtime store. Holds
+   runtime bakes; receives every write.
+2. `plugins/Tessera/heads/*.ztsra` — admin-supplied addon packs
+   (`AddonPackLoader` scans this dir at startup, filtering by manifest
+   `gridN` against `chunkGridSize`). Read-only. Designed for shipping
+   a "lite" jar plus larger packs as separate downloads — addons merge
+   additively with the bundled set and shadow it when both contain the
+   same block.
+3. `/heads-<N>.ztsra` jar resource — what the plugin ships with.
+   Read-only and treated as the floor of the stack.
+
+Files inside any catalog:
 
 - `manifest.tsra` — declares `gridN` and producer.
 - `blocks/<encoded-bake-key>.tsra` — for each block, the

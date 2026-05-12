@@ -8,6 +8,7 @@ import org.inventivetalent.tessera.skin.HeadsRegistry;
 import org.inventivetalent.tessera.skin.SkinDiskCache;
 import org.inventivetalent.tessera.skin.SkinUploader;
 import org.inventivetalent.tessera.skin.bake.BlockBaker;
+import org.inventivetalent.tessera.skin.store.AddonPackLoader;
 import org.inventivetalent.tessera.skin.store.HeadsStore;
 import org.inventivetalent.tessera.skin.store.JsonMigrator;
 import org.inventivetalent.tessera.skin.store.LayeredHeadsStore;
@@ -24,6 +25,8 @@ import org.bukkit.plugin.java.JavaPlugin;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadFactory;
@@ -50,22 +53,24 @@ public final class TesseraPlugin extends JavaPlugin {
         String mcVersion = Bukkit.getMinecraftVersion();
         int gridN = config.chunkGridSize();
 
-        // Bundled heads catalog ships as /heads-{gridN}.ztsra inside the
-        // plugin jar. Runtime-baked overrides live in the unsuffixed folder
-        // plugins/Tessera/cache/heads-{gridN}/ (the .tsra extension is only
-        // used on individual payload files *inside* the store). Reads
-        // consult runtime first, falling through to the bundled zip; writes
-        // always go to the runtime folder so the jar resource stays
-        // immutable.
+        // Heads catalogs stack from most- to least-specific:
+        //   1. plugins/Tessera/cache/heads-{gridN}/   (writable runtime store)
+        //   2. plugins/Tessera/heads/*.ztsra          (admin-supplied addon packs)
+        //   3. /heads-{gridN}.ztsra (jar resource)    (bundled with the plugin)
+        // Reads fall through in that order so addon packs add to (or
+        // override) the bundled jar while runtime bakes always win. Writes
+        // go to layer 1; the jar resource and addon files are immutable.
         Path cacheRoot = getDataFolder().toPath().resolve("cache");
         Path pngDir = cacheRoot.resolve("head-pngs");
         Path assetsDir = cacheRoot.resolve("assets");
         Path skinCacheFile = cacheRoot.resolve("skins.json");
         Path runtimeStoreRoot = cacheRoot.resolve("heads-" + gridN);
+        Path addonsDir = getDataFolder().toPath().resolve("heads");
         try {
             Files.createDirectories(runtimeStoreRoot);
+            Files.createDirectories(addonsDir);
         } catch (java.io.IOException io) {
-            getLogger().warning("Failed to create " + runtimeStoreRoot + ": " + io.getMessage());
+            getLogger().warning("Failed to create store dirs: " + io.getMessage());
         }
 
         TsraFolderStore runtimeStore = new TsraFolderStore(getLogger(), runtimeStoreRoot);
@@ -88,9 +93,14 @@ public final class TesseraPlugin extends JavaPlugin {
             }
         }
 
+        List<HeadsStore> readOnlyLayers = new ArrayList<>();
+        for (AddonPackLoader.LoadedAddon addon : AddonPackLoader.load(getLogger(), addonsDir, gridN)) {
+            readOnlyLayers.add(addon.store());
+        }
         Optional<TsraZipStore> bundled = TsraZipStore.fromClasspath(
                 getLogger(), "/heads-" + gridN + TsraFormat.ZIP_EXTENSION);
-        this.headsStore = new LayeredHeadsStore(bundled.orElse(null), runtimeStore);
+        bundled.ifPresent(readOnlyLayers::add);
+        this.headsStore = new LayeredHeadsStore(runtimeStore, readOnlyLayers);
 
         this.registry = HeadsRegistry.loadFrom(
                 getLogger(), headsStore, gridN, mcVersion, config.skinCacheCapacity());
