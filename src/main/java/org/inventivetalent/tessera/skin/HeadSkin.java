@@ -4,6 +4,7 @@ import org.inventivetalent.tessera.core.ChunkSpec;
 import org.inventivetalent.tessera.core.HeadFace;
 
 import java.awt.image.BufferedImage;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.List;
@@ -18,9 +19,12 @@ import java.util.UUID;
  *
  * <p>Mutable: the upload pipeline transitions {@link #state} between
  * {@link SkinState} values and writes {@link #textureValue}/{@link #textureSignature}
- * once MineSkin returns. Identity is the random {@link #id}; the
- * {@link #contentHash} is the dedup key (sha256 of the 6 tile content
- * hashes) — adapted from Mosaikin's SkinPacker.
+ * once MineSkin returns. Identity {@link #id} is derived deterministically
+ * from {@link #contentHash} via {@link #idFromHash} so the scratch PNG
+ * filename ({@code heads/<id>.png}) and the runtime {@code HeadItemFactory}
+ * cache key are stable across runs / breaks — bakes are long-running and
+ * frequently span multiple sessions, and the runtime ItemStack cache only
+ * collapses identical skins if equal content maps to equal id.
  */
 public final class HeadSkin {
 
@@ -51,6 +55,17 @@ public final class HeadSkin {
 
     public UUID id() { return id; }
     public String contentHash() { return contentHash; }
+
+    /**
+     * Deterministic {@link UUID} for a given content hash (sha256 of the 6
+     * tile bytes for bake-time skins, the {@code skinHash} carried by a
+     * registry entry for runtime skins). Two heads with the same hash get
+     * the same id so the scratch PNG path and the ItemStack cache key are
+     * stable across runs.
+     */
+    public static UUID idFromHash(String contentHash) {
+        return UUID.nameUUIDFromBytes(contentHash.getBytes(StandardCharsets.UTF_8));
+    }
 
     public Map<HeadFace, BufferedImage> tiles() {
         return Map.copyOf(tiles);
