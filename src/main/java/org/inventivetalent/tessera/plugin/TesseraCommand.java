@@ -31,6 +31,8 @@ import org.bukkit.util.StringUtil;
 import org.jetbrains.annotations.NotNull;
 import org.joml.Vector3f;
 
+import java.io.IOException;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -175,15 +177,16 @@ public final class TesseraCommand implements CommandExecutor, TabCompleter {
     @Override
     public boolean onCommand(@NotNull CommandSender sender, @NotNull Command cmd, @NotNull String label, @NotNull String[] args) {
         if (args.length == 0) {
-            sender.sendMessage("§7/tessera test [material] | bake <material> | config <key> [value] | reload | debug …");
+            sender.sendMessage("§7/tessera test [material] | bake <material> | config <key> [value] | reload | archives | debug …");
             return true;
         }
         return switch (args[0].toLowerCase(Locale.ROOT)) {
-            case "test"   -> handleTest(sender, args);
-            case "bake"   -> handleBake(sender, args);
-            case "config" -> handleConfig(sender, args);
-            case "reload" -> handleReload(sender);
-            case "debug"  -> handleDebug(sender, args);
+            case "test"     -> handleTest(sender, args);
+            case "bake"     -> handleBake(sender, args);
+            case "config"   -> handleConfig(sender, args);
+            case "reload"   -> handleReload(sender);
+            case "archives" -> handleArchives(sender, args);
+            case "debug"    -> handleDebug(sender, args);
             default -> {
                 sender.sendMessage("§cUnknown subcommand: " + args[0]);
                 yield true;
@@ -540,6 +543,116 @@ public final class TesseraCommand implements CommandExecutor, TabCompleter {
         plugin.reloadTesseraConfig();
         sender.sendMessage("§aTessera config reloaded.");
         return true;
+    }
+
+    private boolean handleArchives(CommandSender sender, String[] args) {
+        if (!Bbb.PAID) {
+            sender.sendMessage("§7/tessera archives is a paid feature — get the plugin on BuiltByBit.");
+            return true;
+        }
+        BackendClient backend = plugin.backendClient();
+        if (backend == null) {
+            sender.sendMessage("§cBackend client not initialized (this should not happen in paid mode).");
+            return true;
+        }
+        String sub = args.length >= 2 ? args[1].toLowerCase(Locale.ROOT) : "list";
+        return switch (sub) {
+            case "list"     -> handleArchivesList(sender, backend);
+            case "download" -> handleArchivesDownload(sender, args, backend);
+            default -> {
+                sender.sendMessage("§7/tessera archives list | download <id>");
+                yield true;
+            }
+        };
+    }
+
+    private boolean handleArchivesList(CommandSender sender, BackendClient backend) {
+        sender.sendMessage("§7Fetching archive index…");
+        Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+            try {
+                List<BackendClient.ArchiveSummary> archives = backend.listArchives(null);
+                Bukkit.getScheduler().runTask(plugin, () -> {
+                    if (archives.isEmpty()) {
+                        sender.sendMessage("§7(no archives available)");
+                        return;
+                    }
+                    sender.sendMessage("§7Available archives:");
+                    for (BackendClient.ArchiveSummary a : archives) {
+                        sender.sendMessage("§e#" + a.id() + "§7 " + a.name()
+                                + " §8(gridN=" + a.gridN()
+                                + ", mc=" + (a.mcVersion() == null ? "?" : a.mcVersion())
+                                + ", " + formatSize(a.size()) + ")"
+                                + (a.description() != null ? " §7- " + a.description() : ""));
+                    }
+                    sender.sendMessage("§7Use §f/tessera archives download <id>§7 to install.");
+                });
+            } catch (IOException io) {
+                Bukkit.getScheduler().runTask(plugin, () ->
+                        sender.sendMessage("§cFailed to list archives: " + io.getMessage()));
+            }
+        });
+        return true;
+    }
+
+    private boolean handleArchivesDownload(CommandSender sender, String[] args, BackendClient backend) {
+        if (args.length < 3) {
+            sender.sendMessage("§7/tessera archives download <id>");
+            return true;
+        }
+        int id;
+        try {
+            id = Integer.parseInt(args[2]);
+        } catch (NumberFormatException nfe) {
+            sender.sendMessage("§cArchive id must be a number: " + args[2]);
+            return true;
+        }
+        sender.sendMessage("§7Looking up archive #" + id + "…");
+        Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+            try {
+                // Bind once to a final so the lambdas below can capture it.
+                BackendClient.ArchiveSummary tmp = null;
+                for (BackendClient.ArchiveSummary a : backend.listArchives(null)) {
+                    if (a.id() == id) { tmp = a; break; }
+                }
+                final BackendClient.ArchiveSummary match = tmp;
+                if (match == null) {
+                    Bukkit.getScheduler().runTask(plugin, () ->
+                            sender.sendMessage("§cNo archive with id " + id));
+                    return;
+                }
+                final int expectedGridN = plugin.tesseraConfig().chunkGridSize();
+                if (match.gridN() != expectedGridN) {
+                    Bukkit.getScheduler().runTask(plugin, () -> sender.sendMessage(
+                            "§cArchive is gridN=" + match.gridN() + " but server runs gridN=" + expectedGridN
+                                    + ". Refusing to install (would be skipped at load anyway)."));
+                    return;
+                }
+                Bukkit.getScheduler().runTask(plugin, () -> sender.sendMessage(
+                        "§7Downloading §f" + match.name() + " §7(" + formatSize(match.size()) + ")…"));
+                final Path saved = backend.downloadArchive(match.id(), match.name(), plugin.addonsDir());
+                final int reloaded = plugin.headsStore().reloadAddons(plugin.getLogger());
+                final int added = plugin.registry().reindex();
+                Bukkit.getScheduler().runTask(plugin, () -> {
+                    sender.sendMessage("§aInstalled §f" + saved.getFileName()
+                            + "§a (" + reloaded + " addon pack(s) now active, " + added + " new block(s) indexed)");
+                });
+            } catch (IOException io) {
+                Bukkit.getScheduler().runTask(plugin, () ->
+                        sender.sendMessage("§cDownload failed: " + io.getMessage()));
+            } catch (RuntimeException re) {
+                plugin.getLogger().warning("[archives] download failed: " + re.getMessage());
+                Bukkit.getScheduler().runTask(plugin, () ->
+                        sender.sendMessage("§cDownload failed: " + re.getMessage()));
+            }
+        });
+        return true;
+    }
+
+    private static String formatSize(long bytes) {
+        if (bytes < 1024) return bytes + " B";
+        if (bytes < 1024L * 1024) return String.format(Locale.ROOT, "%.1f KiB", bytes / 1024.0);
+        if (bytes < 1024L * 1024 * 1024) return String.format(Locale.ROOT, "%.1f MiB", bytes / (1024.0 * 1024));
+        return String.format(Locale.ROOT, "%.2f GiB", bytes / (1024.0 * 1024 * 1024));
     }
 
     private boolean handleDebug(CommandSender sender, String[] args) {
