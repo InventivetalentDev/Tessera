@@ -113,6 +113,27 @@ public final class HeadsRegistry {
                 : ""));
     }
 
+    /**
+     * Re-walk the backing store and merge any newly visible blocks into
+     * the in-memory index. Idempotent: existing entries get
+     * overwritten with the same data (chunk hashes are content-addressed
+     * and don't change). Runtime-baked entries written to the writable
+     * layer survive — they're still in {@code listBlocks()} after the
+     * reload.
+     *
+     * <p>Used by {@code /tessera archives download} after a new addon pack
+     * lands on disk and {@code LayeredHeadsStore.reloadAddons} has made
+     * its blocks visible at the store layer.
+     *
+     * @return the net change in registered block count (positive when
+     *         the addon brought new blocks; zero if nothing new appeared)
+     */
+    public synchronized int reindex() {
+        int before = blockHashes.size();
+        populateIndex();
+        return blockHashes.size() - before;
+    }
+
     public int gridN() { return gridN; }
     public String version() { return version; }
 

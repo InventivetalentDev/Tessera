@@ -3,12 +3,14 @@ package org.inventivetalent.tessera.skin.store;
 import org.inventivetalent.tessera.core.BakeKey;
 import org.inventivetalent.tessera.core.BlockKey;
 
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
+import java.util.logging.Logger;
 
 /**
  * Stack of {@link HeadsStore}s composed of one writable runtime layer at
@@ -27,22 +29,107 @@ import java.util.Set;
 public final class LayeredHeadsStore implements HeadsStore {
 
     private final HeadsStore writable;
-    private final List<HeadsStore> readOnly;
+    // Composed read-only stack — recomputed on reloadAddons. Volatile so
+    // readers see a complete swap atomically.
+    private volatile List<HeadsStore> readOnly;
+
+    // Inputs preserved for reloadAddons. All null when constructed via the
+    // legacy ctor — that constructor doesn't track which read-only layer
+    // is "the bundled one", so it can't safely re-scan and recompose.
+    private final HeadsStore bundled;
+    private final Path addonsDir;
+    private final int addonsGridN;
 
     /**
      * Build a layered store. {@code writable} accepts every mutation and
      * sits at the top of the read priority order. {@code readOnly} layers
      * are consulted in iteration order on a miss; a {@code null} or empty
      * list is fine (means "no bundled or addon layers").
+     *
+     * <p>Stores built with this constructor cannot {@link #reloadAddons};
+     * for runtime use prefer
+     * {@link #LayeredHeadsStore(HeadsStore, List, HeadsStore, Path, int)}.
      */
     public LayeredHeadsStore(HeadsStore writable, List<? extends HeadsStore> readOnly) {
         if (writable == null) throw new IllegalArgumentException("writable store is required");
         this.writable = writable;
         this.readOnly = readOnly == null ? List.of() : List.copyOf(readOnly);
+        this.bundled = null;
+        this.addonsDir = null;
+        this.addonsGridN = 0;
+    }
+
+    /**
+     * Reload-capable constructor. Tracks the bundled layer and the addons
+     * directory separately so {@link #reloadAddons} can re-scan the
+     * directory without disturbing the bundled or writable layers.
+     *
+     * @param initialAddons stores wrapping {@code .ztsra} packs in
+     *                      {@code addonsDir}, in lookup priority order
+     * @param bundled       the jar-resource pack, or {@code null} if absent
+     * @param addonsDir     where {@code reloadAddons} re-runs
+     *                      {@code AddonPackLoader.load}
+     * @param addonsGridN   passes through to {@code AddonPackLoader.load}
+     */
+    public LayeredHeadsStore(HeadsStore writable,
+                             List<? extends HeadsStore> initialAddons,
+                             HeadsStore bundled,
+                             Path addonsDir,
+                             int addonsGridN) {
+        if (writable == null) throw new IllegalArgumentException("writable store is required");
+        if (addonsDir == null) throw new IllegalArgumentException("addonsDir is required");
+        this.writable = writable;
+        this.bundled = bundled;
+        this.addonsDir = addonsDir;
+        this.addonsGridN = addonsGridN;
+        this.readOnly = composeReadOnly(initialAddons);
+    }
+
+    private List<HeadsStore> composeReadOnly(List<? extends HeadsStore> addons) {
+        List<HeadsStore> out = new ArrayList<>();
+        if (addons != null) out.addAll(addons);
+        if (bundled != null) out.add(bundled);
+        return List.copyOf(out);
     }
 
     public HeadsStore writableLayer() { return writable; }
     public List<HeadsStore> readOnlyLayers() { return readOnly; }
+
+    /**
+     * Re-scan the configured addons directory and replace the addons
+     * layer. Bundled and writable layers are preserved. Existing addon
+     * stores being dropped are closed best-effort.
+     *
+     * @return the number of addon packs now active
+     * @throws IllegalStateException if this store was built with the
+     *                               legacy constructor that doesn't track
+     *                               an addons directory
+     */
+    public synchronized int reloadAddons(Logger logger) {
+        if (addonsDir == null) {
+            throw new IllegalStateException(
+                    "LayeredHeadsStore was not constructed with reload-capable inputs");
+        }
+        List<AddonPackLoader.LoadedAddon> loaded =
+                AddonPackLoader.load(logger, addonsDir, addonsGridN);
+        List<HeadsStore> newAddons = new ArrayList<>(loaded.size());
+        for (AddonPackLoader.LoadedAddon a : loaded) newAddons.add(a.store());
+
+        List<HeadsStore> oldReadOnly = this.readOnly;
+        this.readOnly = composeReadOnly(newAddons);
+
+        // Close stale addon stores we just dropped. Skip the bundled one
+        // (it's still in the new list, identity-equal).
+        for (HeadsStore old : oldReadOnly) {
+            if (old == bundled) continue;
+            try {
+                old.close();
+            } catch (RuntimeException re) {
+                logger.warning("[heads-addons] failed to close stale store: " + re.getMessage());
+            }
+        }
+        return loaded.size();
+    }
 
     @Override
     public Optional<TsraFormat.Manifest> manifest() {
