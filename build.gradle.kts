@@ -120,7 +120,7 @@ val tesseraBake by tasks.registering(JavaExec::class) {
     args = listOf(
         "--input", "bake-blocks.txt",
         "--out",   "src/main/resources/heads-$gridN.ztsra",
-        "--cache", "build/tessera-cache",
+        "--cache", "tessera-cache",
         "--gridN", gridN
     )
     environment("MINESKIN_API_KEY", System.getenv("MINESKIN_API_KEY") ?: "")
