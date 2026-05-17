@@ -133,7 +133,7 @@ public final class TesseraPlugin extends JavaPlugin {
                     serverId);
             this.uploader = new SkinUploader(getLogger(), userAgent, null, paid);
             this.backendClient = new BackendClient(getLogger(), userAgent, paid);
-            getLogger().info("Tessera in PAID mode — routing through " + Bbb.BACKEND_BASE_URL);
+            getLogger().info("Tessera in PAID mode");
         } else {
             this.uploader = new SkinUploader(getLogger(), userAgent, config.mineskinApiKey());
             this.backendClient = null;
