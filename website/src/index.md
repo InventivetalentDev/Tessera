@@ -15,6 +15,9 @@ hero:
     - theme: alt
       text: Commands
       link: /commands
+    - theme: alt
+      text: Paid Build
+      link: /paid-mode
 
 features:
   - title: Per-chunk break animations
@@ -29,6 +32,8 @@ features:
     details: Tune the chunk grid (1, 2, 4, 8, 16) and concurrent-FakeBlock cap to match your server's performance budget.
   - title: Debug command surface
     details: Built-in /tessera debug commands let server operators tune rotations, flips, and texture overrides live in-game.
+  - title: Paid version available
+    details: A BuiltByBit-distributed paid version skips the MineSkin API-key requirement and adds on-demand pre-baked archive downloads.
 ---
 
 ---

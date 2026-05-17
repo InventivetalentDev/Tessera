@@ -11,6 +11,10 @@ freshly installed plugin handles those blocks with zero network calls.
 Anything outside that list is baked on demand at runtime, which requires a
 free [MineSkin](https://account.mineskin.org/) API key.
 
+If you'd rather skip the MineSkin signup entirely, the [paid version on
+BuiltByBit](/paid-mode) routes MineSkin requests through our backend server — no API key required in `config.yml` — and adds an `/tessera archives`
+command for downloading larger pre-baked packs on demand.
+
 ## Requirements
 
 - **Server:** PaperMC, API version `1.21` (tested against MC 1.21.4).

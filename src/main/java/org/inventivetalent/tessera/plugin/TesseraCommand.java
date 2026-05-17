@@ -111,7 +111,8 @@ import java.util.Set;
  */
 public final class TesseraCommand implements CommandExecutor, TabCompleter {
 
-    private static final List<String> TOP = List.of("bake", "config", "debug", "reload", "test");
+    private static final List<String> TOP = List.of("archives", "bake", "config", "debug", "reload", "test");
+    private static final List<String> ARCHIVES_SUBS = List.of("download", "list");
     private static final List<String> DEBUG_SUBS = List.of(
             "center", "debugtex", "dumpmaterials", "dumppng", "face", "grid",
             "headrot", "permutations", "rebake", "sourceflip", "sourcerot",
@@ -1196,9 +1197,23 @@ public final class TesseraCommand implements CommandExecutor, TabCompleter {
                 yield Collections.emptyList();
             }
             case "config" -> args.length == 2 ? match(args[1], CONFIG_KEYS) : Collections.emptyList();
+            case "archives" -> archivesComplete(args);
             case "debug" -> debugComplete(args);
             default -> Collections.emptyList();
         };
+    }
+
+    private List<String> archivesComplete(String[] args) {
+        if (!Bbb.PAID) return Collections.emptyList();
+        if (args.length == 2) return match(args[1], ARCHIVES_SUBS);
+        if (args.length == 3 && "download".equalsIgnoreCase(args[1])) {
+            // Suggest known archive IDs. Cached client-side would be nicer,
+            // but archives are rare and the user typically just typed the
+            // list output — completion here just sorts by id to scaffold the
+            // numeric range. Keep it cheap (no HTTP at tab-complete time).
+            return Collections.emptyList();
+        }
+        return Collections.emptyList();
     }
 
     private List<String> debugComplete(String[] args) {
