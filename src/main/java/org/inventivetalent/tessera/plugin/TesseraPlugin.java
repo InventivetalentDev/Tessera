@@ -15,6 +15,7 @@ import org.inventivetalent.tessera.skin.store.LayeredHeadsStore;
 import org.inventivetalent.tessera.skin.store.TsraFolderStore;
 import org.inventivetalent.tessera.skin.store.TsraFormat;
 import org.inventivetalent.tessera.skin.store.TsraZipStore;
+import org.inventivetalent.tessera.util.Hashing;
 import org.inventivetalent.tessera.transport.DisplayTransport;
 import org.inventivetalent.tessera.transport.bukkit.BukkitDisplayTransport;
 import org.inventivetalent.tessera.transport.packet.PacketDisplayTransport;
@@ -36,7 +37,7 @@ public final class TesseraPlugin extends JavaPlugin {
 
     private TesseraConfig config;
     private HeadsRegistry registry;
-    private HeadsStore headsStore;
+    private LayeredHeadsStore headsStore;
     private HeadItemFactory itemFactory;
     private FakeBlockFactory blockFactory;
     private SkinUploader uploader;
@@ -44,6 +45,8 @@ public final class TesseraPlugin extends JavaPlugin {
     private BlockBaker baker;
     private java.util.concurrent.ExecutorService bakerExecutor;
     private BlockBreakProgressListener progressListener;
+    private BackendClient backendClient;
+    private Path addonsDir;
 
     @Override
     public void onEnable() {
@@ -65,7 +68,7 @@ public final class TesseraPlugin extends JavaPlugin {
         Path assetsDir = cacheRoot.resolve("assets");
         Path skinCacheFile = cacheRoot.resolve("skins.json");
         Path runtimeStoreRoot = cacheRoot.resolve("heads-" + gridN);
-        Path addonsDir = getDataFolder().toPath().resolve("heads");
+        this.addonsDir = getDataFolder().toPath().resolve("heads");
         try {
             Files.createDirectories(runtimeStoreRoot);
             Files.createDirectories(addonsDir);
@@ -93,14 +96,14 @@ public final class TesseraPlugin extends JavaPlugin {
             }
         }
 
-        List<HeadsStore> readOnlyLayers = new ArrayList<>();
+        List<HeadsStore> initialAddons = new ArrayList<>();
         for (AddonPackLoader.LoadedAddon addon : AddonPackLoader.load(getLogger(), addonsDir, gridN)) {
-            readOnlyLayers.add(addon.store());
+            initialAddons.add(addon.store());
         }
         Optional<TsraZipStore> bundled = TsraZipStore.fromClasspath(
                 getLogger(), "/heads-" + gridN + TsraFormat.ZIP_EXTENSION);
-        bundled.ifPresent(readOnlyLayers::add);
-        this.headsStore = new LayeredHeadsStore(runtimeStore, readOnlyLayers);
+        this.headsStore = new LayeredHeadsStore(
+                runtimeStore, initialAddons, bundled.orElse(null), addonsDir, gridN);
 
         this.registry = HeadsRegistry.loadFrom(
                 getLogger(), headsStore, gridN, mcVersion, config.skinCacheCapacity());
@@ -112,8 +115,29 @@ public final class TesseraPlugin extends JavaPlugin {
         // Runtime baker: kicks in when a player breaks a block we don't
         // have in the bundled heads file yet. Uses a small thread pool so
         // multiple concurrent first-time breaks don't block each other.
-        this.uploader = new SkinUploader(
-                getLogger(), "Tessera/" + getDescription().getVersion(), config.mineskinApiKey());
+        //
+        // Paid mode (BBB-purchased build): MineSkin traffic routes through
+        // our backend with the license + identity headers attached. The
+        // BackendClient handles the archive endpoints with the same headers.
+        // See org.inventivetalent.tessera.plugin.Bbb for placeholder details.
+        String pluginVersion = getDescription().getVersion();
+        String userAgent = "Tessera/" + pluginVersion;
+        if (Bbb.PAID) {
+            String serverId = computeServerId();
+            SkinUploader.PaidContext paid = new SkinUploader.PaidContext(
+                    Bbb.BBB_LICENSE,
+                    Bbb.BBB_NONCE,
+                    Bbb.BBB_USER,
+                    Bbb.BBB_RESOURCE,
+                    pluginVersion,
+                    serverId);
+            this.uploader = new SkinUploader(getLogger(), userAgent, null, paid);
+            this.backendClient = new BackendClient(getLogger(), userAgent, paid);
+            getLogger().info("Tessera in PAID mode — routing through " + Bbb.BACKEND_BASE_URL);
+        } else {
+            this.uploader = new SkinUploader(getLogger(), userAgent, config.mineskinApiKey());
+            this.backendClient = null;
+        }
         McAssetClient assets = new McAssetClient(assetsDir);
         this.diskCache = new SkinDiskCache(getLogger(), skinCacheFile);
         this.bakerExecutor = Executors.newFixedThreadPool(2, named("Tessera-Baker"));
@@ -141,6 +165,11 @@ public final class TesseraPlugin extends JavaPlugin {
             cmd.setExecutor(tc);
             cmd.setTabCompleter(tc);
         }
+
+        // Pre-existing addon packs were loaded into the layered store before
+        // the registry was built, but a runtime download via /tessera
+        // archives lands files later — the registry's reindex() call walks
+        // listBlocks() again to pick them up.
 
         getLogger().info("Tessera enabled: gridN=" + config.chunkGridSize()
                 + ", mcVersion=" + mcVersion
@@ -175,6 +204,46 @@ public final class TesseraPlugin extends JavaPlugin {
     public void reloadTesseraConfig() {
         reloadConfig();
         this.config = TesseraConfig.from(getConfig());
+    }
+
+    /** Layered store accessor used by {@code /tessera archives} to reload addons after a download. */
+    public LayeredHeadsStore headsStore() { return headsStore; }
+
+    /** {@code null} in free mode. */
+    public BackendClient backendClient() { return backendClient; }
+
+    /** Addons directory where {@code .ztsra} packs land (both at startup and runtime downloads). */
+    public Path addonsDir() { return addonsDir; }
+
+    public HeadsRegistry registry() { return registry; }
+
+    /**
+     * Stable per-install identifier sent as {@code X-Tessera-Server-Id} so
+     * the backend can flag a single license seen across many distinct
+     * servers (jar copy). Derived from the absolute path of the server's
+     * working directory plus the {@code server-id} line from
+     * {@code server.properties}. Both inputs are stable across restarts and
+     * distinct per real install; neither contains anything sensitive enough
+     * to warrant transmitting in clear. We send the SHA-256 hex truncated
+     * to 16 chars (64 bits — plenty to disambiguate).
+     */
+    private String computeServerId() {
+        String workingDir = java.nio.file.Paths.get(".").toAbsolutePath().normalize().toString();
+        String serverId = "";
+        try {
+            Path props = java.nio.file.Paths.get("server.properties");
+            if (Files.isRegularFile(props)) {
+                for (String line : Files.readAllLines(props)) {
+                    if (line.startsWith("server-id=")) {
+                        serverId = line.substring("server-id=".length()).trim();
+                        break;
+                    }
+                }
+            }
+        } catch (java.io.IOException io) {
+            getLogger().fine("[server-id] could not read server.properties: " + io.getMessage());
+        }
+        return Hashing.sha256OfStrings(List.of(workingDir, serverId)).substring(0, 16);
     }
 
     private DisplayTransport pickTransport(TesseraConfig cfg) {

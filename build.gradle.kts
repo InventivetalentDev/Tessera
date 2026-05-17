@@ -6,7 +6,7 @@ plugins {
 }
 
 group = "org.inventivetalent.tessera"
-version = "26.5.2-SNAPSHOT"
+version = "26.5.3-SNAPSHOT"
 
 java {
     toolchain.languageVersion.set(JavaLanguageVersion.of(25))
@@ -20,6 +20,7 @@ repositories {
     mavenCentral()
     maven("https://repo.papermc.io/repository/maven-public/")
     maven("https://repo.inventivetalent.org/repository/public/")
+    maven("https://repo.inventivetalent.org/repository/snapshots/")
 }
 
 // paperweight by default puts the mojang-mapped paper-server jar onto both
@@ -37,8 +38,8 @@ paperweight {
 dependencies {
     paperweight.paperDevBundle("1.21.4-R0.1-SNAPSHOT")
 
-    implementation("org.mineskin:java-client:3.2.5")
-    implementation("org.mineskin:java-client-jsoup:3.2.5")
+    implementation("org.mineskin:java-client:3.2.6-SNAPSHOT")
+    implementation("org.mineskin:java-client-jsoup:3.2.6-SNAPSHOT")
     implementation("com.google.code.gson:gson:2.11.0")
     // JOML is bundled by Paper at runtime, but the bake task runs without Paper
     // and needs it on the classpath. Use implementation; the shadow jar will

@@ -18,7 +18,6 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
-import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Logger;
 
@@ -112,6 +111,27 @@ public final class HeadsRegistry {
                 ? " (gridN=" + store.manifest().get().gridN()
                   + ", mcVersion=" + store.manifest().get().mcVersion() + ")"
                 : ""));
+    }
+
+    /**
+     * Re-walk the backing store and merge any newly visible blocks into
+     * the in-memory index. Idempotent: existing entries get
+     * overwritten with the same data (chunk hashes are content-addressed
+     * and don't change). Runtime-baked entries written to the writable
+     * layer survive — they're still in {@code listBlocks()} after the
+     * reload.
+     *
+     * <p>Used by {@code /tessera archives download} after a new addon pack
+     * lands on disk and {@code LayeredHeadsStore.reloadAddons} has made
+     * its blocks visible at the store layer.
+     *
+     * @return the net change in registered block count (positive when
+     *         the addon brought new blocks; zero if nothing new appeared)
+     */
+    public synchronized int reindex() {
+        int before = blockHashes.size();
+        populateIndex();
+        return blockHashes.size() - before;
     }
 
     public int gridN() { return gridN; }
@@ -307,7 +327,11 @@ public final class HeadsRegistry {
      * {@code HeadItemFactory#build} on the spawn path.
      */
     public static HeadSkin toHeadSkin(Entry e) {
-        HeadSkin h = new HeadSkin(UUID.randomUUID(), e.skinHash(), Collections.emptyMap());
+        // Derive the id from skinHash so multiple chunks sharing a skin map
+        // to the same HeadSkin.id() and HeadItemFactory's ItemStack cache
+        // actually hits across chunks and across breaks (a random id here
+        // would defeat that cache entirely).
+        HeadSkin h = new HeadSkin(HeadSkin.idFromHash(e.skinHash()), e.skinHash(), Collections.emptyMap());
         h.texture(e.textureValue(), e.textureSignature(), e.mineskinUuid());
         h.state(SkinState.COMPLETED);
         return h;

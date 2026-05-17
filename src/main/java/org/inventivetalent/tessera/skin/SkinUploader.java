@@ -1,5 +1,6 @@
 package org.inventivetalent.tessera.skin;
 
+import org.inventivetalent.tessera.plugin.Bbb;
 import org.mineskin.ClientBuilder;
 import org.mineskin.JsoupRequestHandler;
 import org.mineskin.MineSkinClient;
@@ -50,16 +51,39 @@ public final class SkinUploader {
 
     private static final int BATCH_SIZE = 32;
 
+    /**
+     * Paid-mode (BBB) configuration. When non-null,
+     * {@link #rebuildClient} points the client at our backend and attaches
+     * a jsoup interceptor that adds the license/identity headers our
+     * backend expects on every request. The api-key argument is ignored
+     * in paid mode — the backend uses its own server-side MineSkin key
+     * and treats the {@code X-Tessera-License} header as auth.
+     */
+    public record PaidContext(
+            String licenseKey,
+            String nonce,
+            String bbbUserId,
+            String bbbResourceId,
+            String pluginVersion,
+            String serverId
+    ) {}
+
     private final Logger logger;
     private final String userAgent;
+    private final PaidContext paidContext;
     private MineSkinClient client;
 
     /** Active runs, keyed by run ID, so {@link #cancelAll()} can reach them. */
     private final Map<String, Run> runs = new ConcurrentHashMap<>();
 
     public SkinUploader(Logger logger, String userAgent, String apiKey) {
+        this(logger, userAgent, apiKey, null);
+    }
+
+    public SkinUploader(Logger logger, String userAgent, String apiKey, PaidContext paidContext) {
         this.logger = logger;
         this.userAgent = userAgent;
+        this.paidContext = paidContext;
         rebuildClient(apiKey);
     }
 
@@ -67,14 +91,33 @@ public final class SkinUploader {
         return client != null;
     }
 
+    public boolean isPaidMode() {
+        return paidContext != null;
+    }
+
     private void rebuildClient(String apiKey) {
         try {
             ClientBuilder builder = MineSkinClient.builder()
                     .userAgent(userAgent)
-                    .requestHandler(JsoupRequestHandler::new)
                     .generateQueueOptions(GenerateQueueOptions.createAuto());
-            if (apiKey != null && !apiKey.isBlank()) {
-                builder.apiKey(apiKey);
+            if (paidContext != null) {
+                final PaidContext ctx = paidContext;
+                builder
+                        .baseUrl(Bbb.BACKEND_BASE_URL)
+                        .requestHandler(JsoupRequestHandler.withRequestInterceptor(conn -> {
+                            conn.header("X-Tessera-License", ctx.licenseKey());
+                            conn.header("X-Tessera-Nonce", ctx.nonce());
+                            conn.header("X-Tessera-BBB-User", ctx.bbbUserId());
+                            conn.header("X-Tessera-BBB-Resource", ctx.bbbResourceId());
+                            conn.header("X-Tessera-Plugin-Version", ctx.pluginVersion());
+                            conn.header("X-Tessera-Server-Id", ctx.serverId());
+                        }));
+                // No apiKey() call — backend auth is the license header.
+            } else {
+                builder.requestHandler(JsoupRequestHandler::new);
+                if (apiKey != null && !apiKey.isBlank()) {
+                    builder.apiKey(apiKey);
+                }
             }
             this.client = builder.build();
         } catch (Throwable t) {
@@ -95,8 +138,10 @@ public final class SkinUploader {
         runs.put(run.id, run);
 
         if (client == null) {
-            run.future.completeExceptionally(new IllegalStateException(
-                    "MineSkin client not initialized - set mineskinApiKey in config.yml"));
+            String reason = isPaidMode()
+                    ? "MineSkin client not initialized - tessera-backend unreachable at startup"
+                    : "MineSkin client not initialized - set mineskinApiKey in config.yml";
+            run.future.completeExceptionally(new IllegalStateException(reason));
             runs.remove(run.id);
             return run;
         }

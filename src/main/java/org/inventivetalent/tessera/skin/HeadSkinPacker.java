@@ -13,7 +13,6 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.UUID;
 
 /**
  * Builds one {@link HeadSkin} per {@link ChunkSpec} and dedupes by content
@@ -53,7 +52,7 @@ public final class HeadSkinPacker {
             String hash = hashFaceTiles(faceTiles);
 
             HeadSkin head = dedup.computeIfAbsent(hash, h -> {
-                HeadSkin newHead = new HeadSkin(UUID.randomUUID(), h, faceTiles);
+                HeadSkin newHead = new HeadSkin(HeadSkin.idFromHash(h), h, faceTiles);
                 uniqueHeads.add(newHead);
                 return newHead;
             });
