@@ -49,7 +49,7 @@ import java.util.logging.Logger;
  */
 public final class SkinUploader {
 
-    private static final int BATCH_SIZE = 32;
+    private static final int BATCH_SIZE = 16;
 
     /**
      * Paid-mode (BBB) configuration. When non-null,

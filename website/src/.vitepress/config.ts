@@ -12,11 +12,15 @@ export default defineConfig({
       { text: 'Getting Started', link: '/getting-started' },
       { text: 'Configuration', link: '/configuration' },
       { text: 'Commands', link: '/commands' },
+      { text: 'Paid Build', link: '/paid-mode' },
     ],
     sidebar: [
       {
         text: 'Guide',
-        items: [{ text: 'Getting Started', link: '/getting-started' }],
+        items: [
+          { text: 'Getting Started', link: '/getting-started' },
+          { text: 'Paid Build', link: '/paid-mode' },
+        ],
       },
       {
         text: 'Reference',

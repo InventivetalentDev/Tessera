@@ -56,3 +56,24 @@ re-uploading.
 Reload `plugins/Tessera/config.yml`. The configuration is replaced as
 an immutable snapshot, so existing animations finish under their old
 settings and new breaks pick up the new values.
+
+## `/tessera archives list | download <id>` *(paid version only)*
+
+Browse and install pre-baked block archives served by the Tessera
+backend. Available only when running the paid version distributed through
+BuiltByBit — see [Paid version](/paid-mode) for the why.
+
+On a free version the command does nothing.
+
+- `list` — fetch the current archive index. Each entry shows the id, name,
+  `gridN`, target MC version, and size. Use the id with `download` to
+  install it.
+- `download <id>` — download the chosen `.ztsra` archive into
+  `plugins/Tessera/heads/`, then call the addon-pack loader to make the
+  pack live without a restart. The download is refused if the archive's
+  `gridN` doesn't match your server's `chunkGridSize` — switch
+  `chunkGridSize` and `/tessera reload` first if you want a different
+  density.
+
+Downloads are content-addressed and idempotent — running `download <id>`
+twice yields the same file with the same SHA-256.
