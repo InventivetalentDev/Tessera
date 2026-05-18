@@ -109,6 +109,11 @@ public final class TsraFolderStore implements HeadsStore {
     }
 
     @Override
+    public boolean skinExists(String hash) {
+        return Files.isRegularFile(root.resolve(TsraFormat.skinPath(hash)));
+    }
+
+    @Override
     public void writeManifest(TsraFormat.Manifest manifest) {
         try {
             Files.createDirectories(root);
