@@ -41,6 +41,11 @@ mineskin:
   # with the plugin. Get one at https://account.mineskin.org/. Without a
   # key the plugin only renders bundled blocks and falls back to vanilla
   # particles for anything else.
+  #
+  # On paid (BuiltByBit) builds, leaving this blank routes uploads through
+  # the Tessera backend using your license — no MineSkin account needed.
+  # Setting a key here overrides that and uploads directly to MineSkin
+  # with your key instead.
   apiKey: ""
 
 skins:
