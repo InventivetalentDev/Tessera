@@ -23,11 +23,13 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.TreeMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
@@ -148,6 +150,30 @@ public final class BakeMain {
                                 TsraFolderStore store, Logger logger)
             throws IOException, ExecutionException, InterruptedException, TimeoutException {
 
+        BakeKey bakeKey = BakeKey.untinted(key);
+
+        // Fast path: a fully-cached block (block file present + every
+        // referenced skin payload on disk + chunk count matches the
+        // grid's expected surface area) needs no work. Skips the
+        // resolver/splitter/packer pipeline entirely. Partial bakes
+        // (missing chunks from a prior aborted upload) fall through and
+        // re-run the full pipeline so the missing chunks get filled in.
+        int expectedVisible = (gridN == 1) ? 1
+                : (gridN * gridN * gridN) - ((gridN - 2) * (gridN - 2) * (gridN - 2));
+        Optional<TsraFormat.Block> cached = store.readBlock(bakeKey);
+        if (cached.isPresent() && cached.get().chunkHashes().size() == expectedVisible) {
+            Set<String> uniqueHashes = new HashSet<>(cached.get().chunkHashes().values());
+            boolean allPresent = true;
+            for (String hash : uniqueHashes) {
+                if (!store.skinExists(hash)) { allPresent = false; break; }
+            }
+            if (allPresent) {
+                logger.info("[" + key + "] cached (" + expectedVisible + " chunks, "
+                        + uniqueHashes.size() + " unique heads)");
+                return;
+            }
+        }
+
         Optional<BlockModel> modelOpt = resolver.resolve(key);
         if (modelOpt.isEmpty()) {
             logger.info("[" + key + "] skipped (non-cube or asset missing)");
@@ -166,7 +192,6 @@ public final class BakeMain {
 
         // Skip uploads for hashes already in the scratch store — but still
         // need to map chunk → entry for the block file.
-        BakeKey bakeKey = BakeKey.untinted(key);
         List<HeadSkin> needUpload = new ArrayList<>();
         for (HeadSkin head : packed.uniqueHeads()) {
             Optional<TsraFormat.Skin> existing = store.readSkin(head.contentHash());

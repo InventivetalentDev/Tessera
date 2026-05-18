@@ -32,6 +32,16 @@ public interface HeadsStore extends Closeable {
     /** Read one skin payload by content hash. */
     Optional<TsraFormat.Skin> readSkin(String hash);
 
+    /**
+     * Cheap existence check for a skin payload — folder stores override
+     * with a single {@code Files.isRegularFile} call so cache-warm fast
+     * paths (e.g. {@code BakeMain}'s skip-if-fully-cached check) don't pay
+     * the cost of decoding the ~2 KB payload just to learn it's there.
+     */
+    default boolean skinExists(String hash) {
+        return readSkin(hash).isPresent();
+    }
+
     default boolean isWritable() { return false; }
 
     /** Write the manifest. Folder-backed stores call this on first use. */
