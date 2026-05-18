@@ -1,8 +1,12 @@
+import com.github.jk1.license.filter.LicenseBundleNormalizer
+import com.github.jk1.license.render.TextReportRenderer
+
 plugins {
     java
-    id("io.papermc.paperweight.userdev") version "2.0.0-beta.21"
-    id("xyz.jpenilla.run-paper")        version "2.3.1"
-    id("com.gradleup.shadow")           version "8.3.10"
+    id("io.papermc.paperweight.userdev")            version "2.0.0-beta.21"
+    id("xyz.jpenilla.run-paper")                    version "2.3.1"
+    id("com.gradleup.shadow")                       version "8.3.10"
+    id("com.github.jk1.dependency-license-report")  version "2.9"
 }
 
 group = "org.inventivetalent.tessera"
@@ -83,6 +87,18 @@ tasks.runServer {
     minecraftVersion("1.21.4")
 }
 
+// Scan the runtimeClasspath (= what shadow bundles into the plugin jar) for
+// per-dependency license metadata and dump a single plain-text report. The
+// shadowJar step below copies that report into META-INF/ so the jar carries
+// attribution for everything it actually ships. Regenerated on every build,
+// so adding/removing a dep keeps the bundled notice in sync.
+licenseReport {
+    outputDir = layout.buildDirectory.dir("reports/dependency-license").get().asFile.absolutePath
+    configurations = arrayOf("runtimeClasspath")
+    renderers = arrayOf(TextReportRenderer("THIRD-PARTY-LICENSES.txt"))
+    filters = arrayOf(LicenseBundleNormalizer())
+}
+
 tasks.shadowJar {
     archiveClassifier.set("")
     relocate("org.mineskin",    "org.inventivetalent.tessera.shaded.mineskin")
@@ -90,6 +106,14 @@ tasks.shadowJar {
     relocate("com.github.benmanes.caffeine", "org.inventivetalent.tessera.shaded.caffeine")
 
     relocate("org.bstats", "org.inventivetalent.tessera.shaded.bstats")
+
+    dependsOn(tasks.named("generateLicenseReport"))
+    from(layout.buildDirectory.file("reports/dependency-license/THIRD-PARTY-LICENSES.txt")) {
+        into("META-INF")
+    }
+    from(rootProject.file("LICENSE")) {
+        into("META-INF")
+    }
 }
 
 tasks.assemble {
