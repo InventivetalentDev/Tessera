@@ -106,7 +106,7 @@ import java.util.Set;
  * Both bake-time knobs auto-invalidate the registry so the next test
  * re-uploads. Once you find values that work, fold them into the
  * respective DEFAULTS map.
- *
+ * <p>
  * v2 will add /tessera physics presets.
  */
 public final class TesseraCommand implements CommandExecutor, TabCompleter {
@@ -142,7 +142,9 @@ public final class TesseraCommand implements CommandExecutor, TabCompleter {
     private final FakeBlockFactory factory;
     private final HeadsRegistry registry;
     private final BlockBaker baker;
-    /** All block-form Bukkit Materials, namespaced (e.g. "minecraft:stone"). Cached because Material.values() is ~1100 entries. */
+    /**
+     * All block-form Bukkit Materials, namespaced (e.g. "minecraft:stone"). Cached because Material.values() is ~1100 entries.
+     */
     private final List<String> bukkitBlockMaterials;
 
     public TesseraCommand(TesseraPlugin plugin, FakeBlockFactory factory,
@@ -182,12 +184,12 @@ public final class TesseraCommand implements CommandExecutor, TabCompleter {
             return true;
         }
         return switch (args[0].toLowerCase(Locale.ROOT)) {
-            case "test"     -> handleTest(sender, args);
-            case "bake"     -> handleBake(sender, args);
-            case "config"   -> handleConfig(sender, args);
-            case "reload"   -> handleReload(sender);
+            case "test" -> handleTest(sender, args);
+            case "bake" -> handleBake(sender, args);
+            case "config" -> handleConfig(sender, args);
+            case "reload" -> handleReload(sender);
             case "archives" -> handleArchives(sender, args);
-            case "debug"    -> handleDebug(sender, args);
+            case "debug" -> handleDebug(sender, args);
             default -> {
                 sender.sendMessage("§cUnknown subcommand: " + args[0]);
                 yield true;
@@ -434,22 +436,22 @@ public final class TesseraCommand implements CommandExecutor, TabCompleter {
 
     private String configCurrentValue(String key, TesseraConfig cfg) {
         return switch (key) {
-            case "chunkgridsize"                    -> String.valueOf(cfg.chunkGridSize());
-            case "animation.mode"                   -> cfg.animationMode().name().toLowerCase(Locale.ROOT);
-            case "animation.style"                  -> cfg.collapseStyle().name().toLowerCase(Locale.ROOT);
-            case "animation.durationms"             -> String.valueOf(cfg.effectDurationMs());
-            case "animation.wavewindow"             -> String.valueOf(cfg.waveWindow());
-            case "animation.fillinterior"           -> String.valueOf(cfg.fillInterior());
-            case "transport"                        -> cfg.transport().name().toLowerCase(Locale.ROOT);
-            case "debug"                            -> String.valueOf(cfg.debug());
-            case "limits.maxconcurrentfakeblocks"   -> String.valueOf(cfg.maxConcurrentFakeBlocks());
-            case "progress.clienthiderealblock"     -> String.valueOf(cfg.clientHideRealBlock());
-            case "progress.smoothinterpolation"     -> String.valueOf(cfg.smoothInterpolation());
-            case "interaction.startonleftclick"     -> String.valueOf(cfg.startOnLeftClick());
-            case "interaction.eagerpreload"         -> String.valueOf(cfg.eagerPreload());
-            case "interaction.minbreakdurationms"   -> String.valueOf(cfg.minBreakDurationMs());
-            case "interaction.leftclickgracems"     -> String.valueOf(cfg.leftClickGraceMs());
-            default                                 -> null;
+            case "chunkgridsize" -> String.valueOf(cfg.chunkGridSize());
+            case "animation.mode" -> cfg.animationMode().name().toLowerCase(Locale.ROOT);
+            case "animation.style" -> cfg.collapseStyle().name().toLowerCase(Locale.ROOT);
+            case "animation.durationms" -> String.valueOf(cfg.effectDurationMs());
+            case "animation.wavewindow" -> String.valueOf(cfg.waveWindow());
+            case "animation.fillinterior" -> String.valueOf(cfg.fillInterior());
+            case "transport" -> cfg.transport().name().toLowerCase(Locale.ROOT);
+            case "debug" -> String.valueOf(cfg.debug());
+            case "limits.maxconcurrentfakeblocks" -> String.valueOf(cfg.maxConcurrentFakeBlocks());
+            case "progress.clienthiderealblock" -> String.valueOf(cfg.clientHideRealBlock());
+            case "progress.smoothinterpolation" -> String.valueOf(cfg.smoothInterpolation());
+            case "interaction.startonleftclick" -> String.valueOf(cfg.startOnLeftClick());
+            case "interaction.eagerpreload" -> String.valueOf(cfg.eagerPreload());
+            case "interaction.minbreakdurationms" -> String.valueOf(cfg.minBreakDurationMs());
+            case "interaction.leftclickgracems" -> String.valueOf(cfg.leftClickGraceMs());
+            default -> null;
         };
     }
 
@@ -477,24 +479,30 @@ public final class TesseraCommand implements CommandExecutor, TabCompleter {
             }
             case "animation.wavewindow" -> {
                 double v = cfgParseDouble(value, "animation.waveWindow");
-                if (v < 0 || v > 1) throw new IllegalArgumentException("animation.waveWindow must be between 0.0 and 1.0");
+                if (v < 0 || v > 1)
+                    throw new IllegalArgumentException("animation.waveWindow must be between 0.0 and 1.0");
                 yaml.set("animation.waveWindow", v);
             }
-            case "animation.fillinterior"           -> yaml.set("animation.fillInterior",                cfgParseBool(value, "animation.fillInterior"));
+            case "animation.fillinterior" ->
+                    yaml.set("animation.fillInterior", cfgParseBool(value, "animation.fillInterior"));
             case "transport" -> {
                 cfgValidateOneOf(value, "transport", "packet", "nms", "bukkit", "api");
                 yaml.set("transport", value.toLowerCase(Locale.ROOT));
             }
-            case "debug"                            -> yaml.set("debug",                                 cfgParseBool(value, "debug"));
+            case "debug" -> yaml.set("debug", cfgParseBool(value, "debug"));
             case "limits.maxconcurrentfakeblocks" -> {
                 int v = cfgParseInt(value, "limits.maxConcurrentFakeBlocks");
                 if (v < 1) throw new IllegalArgumentException("limits.maxConcurrentFakeBlocks must be ≥ 1");
                 yaml.set("limits.maxConcurrentFakeBlocks", v);
             }
-            case "progress.clienthiderealblock"     -> yaml.set("progress.clientHideRealBlock",          cfgParseBool(value, "progress.clientHideRealBlock"));
-            case "progress.smoothinterpolation"     -> yaml.set("progress.smoothInterpolation",          cfgParseBool(value, "progress.smoothInterpolation"));
-            case "interaction.startonleftclick"     -> yaml.set("interaction.startOnLeftClick",          cfgParseBool(value, "interaction.startOnLeftClick"));
-            case "interaction.eagerpreload"         -> yaml.set("interaction.eagerPreload",              cfgParseBool(value, "interaction.eagerPreload"));
+            case "progress.clienthiderealblock" ->
+                    yaml.set("progress.clientHideRealBlock", cfgParseBool(value, "progress.clientHideRealBlock"));
+            case "progress.smoothinterpolation" ->
+                    yaml.set("progress.smoothInterpolation", cfgParseBool(value, "progress.smoothInterpolation"));
+            case "interaction.startonleftclick" ->
+                    yaml.set("interaction.startOnLeftClick", cfgParseBool(value, "interaction.startOnLeftClick"));
+            case "interaction.eagerpreload" ->
+                    yaml.set("interaction.eagerPreload", cfgParseBool(value, "interaction.eagerPreload"));
             case "interaction.minbreakdurationms" -> {
                 int v = cfgParseInt(value, "interaction.minBreakDurationMs");
                 if (v < 0) throw new IllegalArgumentException("interaction.minBreakDurationMs must be ≥ 0");
@@ -511,24 +519,33 @@ public final class TesseraCommand implements CommandExecutor, TabCompleter {
     }
 
     private static int cfgParseInt(String s, String key) {
-        try { return Integer.parseInt(s); }
-        catch (NumberFormatException e) { throw new IllegalArgumentException(key + " must be an integer; got: " + s); }
+        try {
+            return Integer.parseInt(s);
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException(key + " must be an integer; got: " + s);
+        }
     }
 
     private static long cfgParseLong(String s, String key) {
-        try { return Long.parseLong(s); }
-        catch (NumberFormatException e) { throw new IllegalArgumentException(key + " must be an integer; got: " + s); }
+        try {
+            return Long.parseLong(s);
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException(key + " must be an integer; got: " + s);
+        }
     }
 
     private static double cfgParseDouble(String s, String key) {
-        try { return Double.parseDouble(s); }
-        catch (NumberFormatException e) { throw new IllegalArgumentException(key + " must be a number; got: " + s); }
+        try {
+            return Double.parseDouble(s);
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException(key + " must be a number; got: " + s);
+        }
     }
 
     private static boolean cfgParseBool(String s, String key) {
         return switch (s.toLowerCase(Locale.ROOT)) {
-            case "true", "yes", "1", "on"   -> true;
-            case "false", "no", "0", "off"  -> false;
+            case "true", "yes", "1", "on" -> true;
+            case "false", "no", "0", "off" -> false;
             default -> throw new IllegalArgumentException(key + " must be true or false; got: " + s);
         };
     }
@@ -558,7 +575,7 @@ public final class TesseraCommand implements CommandExecutor, TabCompleter {
         }
         String sub = args.length >= 2 ? args[1].toLowerCase(Locale.ROOT) : "list";
         return switch (sub) {
-            case "list"     -> handleArchivesList(sender, backend);
+            case "list" -> handleArchivesList(sender, backend);
             case "download" -> handleArchivesDownload(sender, args, backend);
             default -> {
                 sender.sendMessage("§7/tessera archives list | download <id>");
@@ -613,7 +630,10 @@ public final class TesseraCommand implements CommandExecutor, TabCompleter {
                 // Bind once to a final so the lambdas below can capture it.
                 BackendClient.ArchiveSummary tmp = null;
                 for (BackendClient.ArchiveSummary a : backend.listArchives(null)) {
-                    if (a.id() == id) { tmp = a; break; }
+                    if (a.id() == id) {
+                        tmp = a;
+                        break;
+                    }
                 }
                 final BackendClient.ArchiveSummary match = tmp;
                 if (match == null) {
@@ -657,24 +677,25 @@ public final class TesseraCommand implements CommandExecutor, TabCompleter {
     }
 
     private boolean handleDebug(CommandSender sender, String[] args) {
+        if (!plugin.tesseraConfig().debug()) return true;
         if (args.length < 2) {
             sender.sendMessage("§7/tessera debug face|center …");
             return true;
         }
         return switch (args[1].toLowerCase(Locale.ROOT)) {
-            case "face"         -> handleDebugFace(sender, args);
-            case "center"       -> handleDebugCenter(sender, args);
-            case "grid"         -> handleDebugGrid(sender, args);
-            case "tilerot"      -> handleDebugTilerot(sender, args);
-            case "tileflip"     -> handleDebugTileflip(sender, args);
-            case "headrot"      -> handleDebugHeadrot(sender, args);
-            case "sourcerot"    -> handleDebugSourcerot(sender, args);
-            case "sourceflip"   -> handleDebugSourceflip(sender, args);
-            case "rebake"       -> handleDebugRebake(sender, args);
-            case "status"       -> handleDebugStatus(sender);
-            case "debugtex"     -> handleDebugTex(sender, args);
+            case "face" -> handleDebugFace(sender, args);
+            case "center" -> handleDebugCenter(sender, args);
+            case "grid" -> handleDebugGrid(sender, args);
+            case "tilerot" -> handleDebugTilerot(sender, args);
+            case "tileflip" -> handleDebugTileflip(sender, args);
+            case "headrot" -> handleDebugHeadrot(sender, args);
+            case "sourcerot" -> handleDebugSourcerot(sender, args);
+            case "sourceflip" -> handleDebugSourceflip(sender, args);
+            case "rebake" -> handleDebugRebake(sender, args);
+            case "status" -> handleDebugStatus(sender);
+            case "debugtex" -> handleDebugTex(sender, args);
             case "permutations" -> handleDebugPermutations(sender, args);
-            case "dumppng"      -> handleDebugDumpPng(sender, args);
+            case "dumppng" -> handleDebugDumpPng(sender, args);
             case "dumpmaterials" -> handleDebugDumpMaterials(sender);
             default -> {
                 sender.sendMessage("§cUnknown debug target: " + args[1]);
@@ -744,10 +765,14 @@ public final class TesseraCommand implements CommandExecutor, TabCompleter {
             return true;
         }
         FaceDir face = parseFaceDir(args[3]);
-        if (face == null) { sender.sendMessage("§cUnknown facedir: " + args[3]); return true; }
+        if (face == null) {
+            sender.sendMessage("§cUnknown facedir: " + args[3]);
+            return true;
+        }
         Material mat = args.length > 4 ? Material.matchMaterial(args[4]) : Material.STONE;
         if (mat == null || !mat.isBlock()) {
-            sender.sendMessage("§cNot a block material: " + args[4]); return true;
+            sender.sendMessage("§cNot a block material: " + args[4]);
+            return true;
         }
         BlockKey key = blockKeyOf(mat);
         Location anchor = pickTargetLocation(p);
@@ -773,7 +798,10 @@ public final class TesseraCommand implements CommandExecutor, TabCompleter {
                 sender.sendMessage("§aReset all source flips.");
             } else {
                 FaceDir d = parseFaceDir(args[3]);
-                if (d == null) { sender.sendMessage("§cUnknown facedir: " + args[3]); return true; }
+                if (d == null) {
+                    sender.sendMessage("§cUnknown facedir: " + args[3]);
+                    return true;
+                }
                 SourceFlips.reset(d);
                 sender.sendMessage("§aReset source flip for " + d + " to " + SourceFlips.defaultOf(d) + ".");
             }
@@ -787,7 +815,10 @@ public final class TesseraCommand implements CommandExecutor, TabCompleter {
             return true;
         }
         FaceDir d = parseFaceDir(args[2]);
-        if (d == null) { sender.sendMessage("§cUnknown facedir: " + args[2]); return true; }
+        if (d == null) {
+            sender.sendMessage("§cUnknown facedir: " + args[2]);
+            return true;
+        }
         try {
             SourceFlips.Flip flip = SourceFlips.Flip.parse(args[3]);
             SourceFlips.set(d, flip);
@@ -814,7 +845,10 @@ public final class TesseraCommand implements CommandExecutor, TabCompleter {
                 sender.sendMessage("§aReset all source rotations.");
             } else {
                 FaceDir d = parseFaceDir(args[3]);
-                if (d == null) { sender.sendMessage("§cUnknown facedir: " + args[3]); return true; }
+                if (d == null) {
+                    sender.sendMessage("§cUnknown facedir: " + args[3]);
+                    return true;
+                }
                 SourceRotations.reset(d);
                 sender.sendMessage("§aReset source rotation for " + d + " to "
                         + SourceRotations.defaultOf(d) + "°.");
@@ -829,7 +863,10 @@ public final class TesseraCommand implements CommandExecutor, TabCompleter {
             return true;
         }
         FaceDir d = parseFaceDir(args[2]);
-        if (d == null) { sender.sendMessage("§cUnknown facedir: " + args[2]); return true; }
+        if (d == null) {
+            sender.sendMessage("§cUnknown facedir: " + args[2]);
+            return true;
+        }
         try {
             int deg = Integer.parseInt(args[3]);
             SourceRotations.set(d, deg);
@@ -846,8 +883,11 @@ public final class TesseraCommand implements CommandExecutor, TabCompleter {
     }
 
     private static FaceDir parseFaceDir(String s) {
-        try { return FaceDir.valueOf(s.toUpperCase(Locale.ROOT)); }
-        catch (IllegalArgumentException e) { return null; }
+        try {
+            return FaceDir.valueOf(s.toUpperCase(Locale.ROOT));
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
     }
 
     private boolean handleDebugHeadrot(CommandSender sender, String[] args) {
@@ -863,7 +903,10 @@ public final class TesseraCommand implements CommandExecutor, TabCompleter {
                 sender.sendMessage("§aReset all head rotations.");
             } else {
                 HeadFace f = parseFace(args[3]);
-                if (f == null) { sender.sendMessage("§cUnknown face: " + args[3]); return true; }
+                if (f == null) {
+                    sender.sendMessage("§cUnknown face: " + args[3]);
+                    return true;
+                }
                 HeadRotations.reset(f);
                 sender.sendMessage("§aReset head rotation for " + f + " to "
                         + HeadRotations.defaultOf(f) + "°.");
@@ -876,7 +919,10 @@ public final class TesseraCommand implements CommandExecutor, TabCompleter {
             return true;
         }
         HeadFace face = parseFace(args[2]);
-        if (face == null) { sender.sendMessage("§cUnknown face: " + args[2]); return true; }
+        if (face == null) {
+            sender.sendMessage("§cUnknown face: " + args[2]);
+            return true;
+        }
         try {
             int deg = Integer.parseInt(args[3]);
             HeadRotations.set(face, deg);
@@ -899,7 +945,10 @@ public final class TesseraCommand implements CommandExecutor, TabCompleter {
                 sender.sendMessage("§aReset all tile rotations.");
             } else {
                 HeadFace f = parseFace(args[3]);
-                if (f == null) { sender.sendMessage("§cUnknown face: " + args[3]); return true; }
+                if (f == null) {
+                    sender.sendMessage("§cUnknown face: " + args[3]);
+                    return true;
+                }
                 TileRotations.reset(f);
                 sender.sendMessage("§aReset tile rotation for " + f + " to "
                         + TileRotations.defaultOf(f) + "°.");
@@ -914,7 +963,10 @@ public final class TesseraCommand implements CommandExecutor, TabCompleter {
             return true;
         }
         HeadFace face = parseFace(args[2]);
-        if (face == null) { sender.sendMessage("§cUnknown face: " + args[2]); return true; }
+        if (face == null) {
+            sender.sendMessage("§cUnknown face: " + args[2]);
+            return true;
+        }
         try {
             int deg = Integer.parseInt(args[3]);
             TileRotations.set(face, deg);
@@ -942,7 +994,10 @@ public final class TesseraCommand implements CommandExecutor, TabCompleter {
                 sender.sendMessage("§aReset all tile flips.");
             } else {
                 HeadFace f = parseFace(args[3]);
-                if (f == null) { sender.sendMessage("§cUnknown face: " + args[3]); return true; }
+                if (f == null) {
+                    sender.sendMessage("§cUnknown face: " + args[3]);
+                    return true;
+                }
                 TileFlips.reset(f);
                 sender.sendMessage("§aReset tile flip for " + f + " to " + TileFlips.defaultOf(f) + ".");
             }
@@ -956,7 +1011,10 @@ public final class TesseraCommand implements CommandExecutor, TabCompleter {
             return true;
         }
         HeadFace face = parseFace(args[2]);
-        if (face == null) { sender.sendMessage("§cUnknown face: " + args[2]); return true; }
+        if (face == null) {
+            sender.sendMessage("§cUnknown face: " + args[2]);
+            return true;
+        }
         try {
             TileFlips.Flip flip = TileFlips.Flip.parse(args[3]);
             TileFlips.set(face, flip);
@@ -1007,7 +1065,10 @@ public final class TesseraCommand implements CommandExecutor, TabCompleter {
             return true;
         }
         Material mat = Material.matchMaterial(args[2]);
-        if (mat == null) { sender.sendMessage("§cUnknown material: " + args[2]); return true; }
+        if (mat == null) {
+            sender.sendMessage("§cUnknown material: " + args[2]);
+            return true;
+        }
         BlockKey key = blockKeyOf(mat);
         boolean removed = registry.invalidate(key);
         sender.sendMessage(removed
@@ -1026,7 +1087,10 @@ public final class TesseraCommand implements CommandExecutor, TabCompleter {
             return true;
         }
         Material mat = Material.matchMaterial(args[2]);
-        if (mat == null) { sender.sendMessage("§cUnknown material: " + args[2]); return true; }
+        if (mat == null) {
+            sender.sendMessage("§cUnknown material: " + args[2]);
+            return true;
+        }
         BlockKey key = blockKeyOf(mat);
         java.nio.file.Path outDir = plugin.getDataFolder().toPath()
                 .resolve("dump-" + mat.getKey().getKey());
@@ -1102,7 +1166,10 @@ public final class TesseraCommand implements CommandExecutor, TabCompleter {
                 sender.sendMessage("§aReset all face rotations.");
             } else {
                 HeadFace face = parseFace(args[3]);
-                if (face == null) { sender.sendMessage("§cUnknown face: " + args[3]); return true; }
+                if (face == null) {
+                    sender.sendMessage("§cUnknown face: " + args[3]);
+                    return true;
+                }
                 FaceRotations.reset(face);
                 sender.sendMessage("§aReset " + face + " rotation.");
             }
@@ -1113,7 +1180,10 @@ public final class TesseraCommand implements CommandExecutor, TabCompleter {
             return true;
         }
         HeadFace face = parseFace(args[2]);
-        if (face == null) { sender.sendMessage("§cUnknown face: " + args[2]); return true; }
+        if (face == null) {
+            sender.sendMessage("§cUnknown face: " + args[2]);
+            return true;
+        }
         try {
             float x = Float.parseFloat(args[3]);
             float y = Float.parseFloat(args[4]);
@@ -1164,8 +1234,11 @@ public final class TesseraCommand implements CommandExecutor, TabCompleter {
     }
 
     private static HeadFace parseFace(String s) {
-        try { return HeadFace.valueOf(s.toUpperCase(Locale.ROOT)); }
-        catch (IllegalArgumentException e) { return null; }
+        try {
+            return HeadFace.valueOf(s.toUpperCase(Locale.ROOT));
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
     }
 
     private static String formatLoc(Location l) {
@@ -1217,6 +1290,7 @@ public final class TesseraCommand implements CommandExecutor, TabCompleter {
     }
 
     private List<String> debugComplete(String[] args) {
+        if (!plugin.tesseraConfig().debug()) return Collections.emptyList();
         if (args.length == 2) return match(args[1], DEBUG_SUBS);
         String dsub = args[1].toLowerCase(Locale.ROOT);
         return switch (dsub) {
