@@ -116,12 +116,17 @@ public final class TesseraPlugin extends JavaPlugin {
         // have in the bundled heads file yet. Uses a small thread pool so
         // multiple concurrent first-time breaks don't block each other.
         //
-        // Paid mode (BBB-purchased build): MineSkin traffic routes through
-        // our backend with the license + identity headers attached. The
-        // BackendClient handles the archive endpoints with the same headers.
+        // Paid mode (BBB-purchased build): the BackendClient is wired up
+        // unconditionally so archive endpoints work. MineSkin traffic
+        // routes through our backend by default, but if the operator sets
+        // mineskin.apiKey in config.yml we honor that and upload directly
+        // to MineSkin with their key instead — useful for buyers who
+        // already have a MineSkin account they'd rather use.
         // See org.inventivetalent.tessera.plugin.Bbb for placeholder details.
         String pluginVersion = getDescription().getVersion();
         String userAgent = "Tessera/" + pluginVersion;
+        String configuredApiKey = config.mineskinApiKey();
+        boolean hasCustomApiKey = configuredApiKey != null && !configuredApiKey.isBlank();
         if (Bbb.PAID) {
             String serverId = computeServerId();
             SkinUploader.PaidContext paid = new SkinUploader.PaidContext(
@@ -131,11 +136,16 @@ public final class TesseraPlugin extends JavaPlugin {
                     Bbb.BBB_RESOURCE,
                     pluginVersion,
                     serverId);
-            this.uploader = new SkinUploader(getLogger(), userAgent, null, paid);
             this.backendClient = new BackendClient(getLogger(), userAgent, paid);
-            getLogger().info("Tessera in PAID mode");
+            if (hasCustomApiKey) {
+                this.uploader = new SkinUploader(getLogger(), userAgent, configuredApiKey);
+                getLogger().info("Tessera in PAID mode (uploads via custom MineSkin API key)");
+            } else {
+                this.uploader = new SkinUploader(getLogger(), userAgent, null, paid);
+                getLogger().info("Tessera in PAID mode");
+            }
         } else {
-            this.uploader = new SkinUploader(getLogger(), userAgent, config.mineskinApiKey());
+            this.uploader = new SkinUploader(getLogger(), userAgent, configuredApiKey);
             this.backendClient = null;
         }
         McAssetClient assets = new McAssetClient(assetsDir);
