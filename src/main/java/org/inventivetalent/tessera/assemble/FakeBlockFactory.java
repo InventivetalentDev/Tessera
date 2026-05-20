@@ -1,5 +1,6 @@
 package org.inventivetalent.tessera.assemble;
 
+import org.inventivetalent.tessera.assets.model.BlockModel;
 import org.inventivetalent.tessera.core.*;
 import org.inventivetalent.tessera.skin.HeadSkin;
 import org.inventivetalent.tessera.skin.HeadsRegistry;
@@ -27,36 +28,21 @@ import java.util.Map;
 /**
  * Spawns a {@link FakeBlock} at a world location, populated with one
  * display entity per visible sub-block chunk. Reads pre-baked skin
- * texture data from {@link HeadsRegistry}; never blocks on MineSkin.
+ * texture data + outward-face masks from {@link HeadsRegistry}; never
+ * blocks on MineSkin.
+ *
+ * <p>Multi-shape: callers pass a {@code shapeKey} which the registry uses
+ * to look up the matching shape's chunk lattice. For cube blocks pass
+ * {@link BlockModel#DEFAULT_SHAPE_KEY}. For corner stairs etc. pass the
+ * shape key returned by {@link HeadsRegistry#variantBindingFor}. Per-chunk
+ * outward face sets are read from the registry rather than recomputed
+ * here — that's what makes runtime shape-agnostic.
  *
  * <p>Bukkit transform composition (see {@link BlockGeometry}):
  * {@code worldVertex = entityLocation + T + L*S*R*v}. We set
- * {@code L = blockRotation} (identity in v1), {@code R = canonicalRotation}
- * (a single rotation applied to every chunk that aligns each HeadFace UV
- * slot's normal with its corresponding world FaceDir),
+ * {@code L = blockRotation}, {@code R = canonicalRotation},
  * {@code S = uniform chunkScale}, and
- * {@code T = blockGeometry.translationFor(coord, R)} which compensates
- * for the head's intrinsic {@code CUBE_CENTER_PRE} offset.
- *
- * <p><b>Canonical rotation:</b> the player-head ItemStack's natural render
- * applies {@code Ry(180°)} to the cube (FRONT slot, UV +Z, ends up at world
- * -Z). Applying {@code Ry(180°)} again on top cancels that, so the cube
- * renders identity in world space. The skin-region → world-direction map
- * is then determined by the vanilla head model's per-face UVs:
- * {@code TOP → +Y (up), BOTTOM → -Y (down), FRONT → +Z (south),
- * BACK → -Z (north), LEFT → +X (east), RIGHT → -X (west)}. The X axes
- * are swapped relative to slot-name intuition because the model's
- * {@code east} cube face samples the LEFT skin region (the wearer's left
- * cheek, which with Steve facing south is at +X). {@code HeadSkinPacker}
- * accounts for this: each outward FaceDir's tile is packed into the slot
- * that the model actually shows on that world direction, so every viewer
- * sees the correct tile on whichever face they look at.
- *
- * <p>All display entities share the entity location at the block's
- * lower-NW-down corner; per-chunk offsets live entirely in the
- * Transformation translation. This lets a single teleport of the
- * parent location move the whole FakeBlock, which v2 physics will
- * exploit.
+ * {@code T = blockGeometry.translationFor(coord, R)}.
  */
 public final class FakeBlockFactory {
 
@@ -65,39 +51,23 @@ public final class FakeBlockFactory {
      * block volume. Spawning at slightly less than 1.0 keeps the FakeBlock
      * geometrically inside the still-visible real block until the deferred
      * sendBlockChange(BARRIER) fires, eliminating the brief z-fight that
-     * would otherwise be visible on the block's surfaces. The
-     * 1% contraction translates to sub-pixel gaps between chunks
-     * (0.0025 block units at gridN=4), well below the rendering threshold.
-     * {@link DirectionalShrinkEffect#rescaleShell}
-     * undoes the contraction in lockstep with the barrier swap.
+     * would otherwise be visible on the block's surfaces.
      */
     public static final float INITIAL_SHELL_COMPRESSION = 0.99f;
 
     /** Outer or interior chunk scheduled for lazy spawning as the wave front advances. */
     public record PendingChunkSpec(
             ChunkCoord coord,
-            HeadsRegistry.Entry registryEntry,
+            HeadsRegistry.ChunkEntry registryEntry,
             double t,
             boolean interior) {}
 
-    /**
-     * Result of {@link #preloadAndPending} / {@link #completePlan} — the already-spawned
-     * front refs plus a sorted pending list. The {@code session} owns the front-ref entities
-     * and must be passed to the {@link FakeBlock} constructor (or closed on error).
-     */
     public record PreloadPlan(
             Map<ChunkCoord, ChunkRef> frontRefs,
             List<PendingChunkSpec> pendingSpecs,
             Map<ChunkCoord, Double> allOuterT,
             TransportSession session) {}
 
-    /**
-     * Pre-built context shared across a batch of
-     * {@link #spawnPendingChunk(PendingSpawnContext, PendingChunkSpec, float)} calls.
-     * Build once per batch via {@link #beginPendingBatch} to avoid reconstructing
-     * {@link BlockGeometry} and the canonical rotation per spawn, and to share the
-     * donor {@link ItemStack} clone-source across all interior chunks in the batch.
-     */
     public record PendingSpawnContext(
             TransportSession session,
             Location origin,
@@ -107,12 +77,6 @@ public final class FakeBlockFactory {
             int gridN,
             ItemStack interiorBaseStack) {}
 
-    /**
-     * Result returned by {@link #preload}: the pre-spawned front-facing chunks
-     * and the session that owns them. The caller must either pass the session to
-     * a subsequent {@link #create} call (transferring ownership to the FakeBlock)
-     * or call {@code session().close()} to clean up if the preload is discarded.
-     */
     public record PreloadResult(Map<ChunkCoord, ChunkRef> chunks, TransportSession session) {}
 
     private final HeadItemFactory itemFactory;
@@ -128,58 +92,60 @@ public final class FakeBlockFactory {
     // ── Public create overloads ───────────────────────────────────────────────
 
     public FakeBlock create(Player viewer, Location blockLocation, BlockKey blockKey) {
-        return create(viewer, blockLocation, BakeKey.untinted(blockKey), new Quaternionf(), false, null, false);
+        return create(viewer, blockLocation, BakeKey.untinted(blockKey),
+                registry.defaultShapeFor(BakeKey.untinted(blockKey)),
+                new Quaternionf(), false, null, false);
     }
 
     public FakeBlock create(Player viewer, Location blockLocation, BlockKey blockKey, Quaternionf blockRotation) {
-        return create(viewer, blockLocation, BakeKey.untinted(blockKey), blockRotation, false, null, false);
+        BakeKey bakeKey = BakeKey.untinted(blockKey);
+        return create(viewer, blockLocation, bakeKey, registry.defaultShapeFor(bakeKey),
+                blockRotation, false, null, false);
     }
 
     public FakeBlock create(Player viewer, Location blockLocation, BakeKey bakeKey, Quaternionf blockRotation) {
-        return create(viewer, blockLocation, bakeKey, blockRotation, false, null, false);
+        return create(viewer, blockLocation, bakeKey, registry.defaultShapeFor(bakeKey),
+                blockRotation, false, null, false);
     }
 
     public FakeBlock create(Player viewer, Location blockLocation, BlockKey blockKey,
                             Quaternionf blockRotation, boolean fillInterior, Vector eyeDir) {
-        return create(viewer, blockLocation, BakeKey.untinted(blockKey), blockRotation, fillInterior, eyeDir, false);
+        BakeKey bakeKey = BakeKey.untinted(blockKey);
+        return create(viewer, blockLocation, bakeKey, registry.defaultShapeFor(bakeKey),
+                blockRotation, fillInterior, eyeDir, false);
     }
 
     public FakeBlock create(Player viewer, Location blockLocation, BakeKey bakeKey,
                             Quaternionf blockRotation, boolean fillInterior, Vector eyeDir) {
-        return create(viewer, blockLocation, bakeKey, blockRotation, fillInterior, eyeDir, false);
+        return create(viewer, blockLocation, bakeKey, registry.defaultShapeFor(bakeKey),
+                blockRotation, fillInterior, eyeDir, false);
     }
 
     /**
-     * Spawn a FakeBlock with full control over shell compression. Opens a fresh transport
-     * session; all entities are visible only to {@code viewer}.
-     *
-     * @param viewer        the player who will see the lattice
-     * @param compressShell if true, spawn at {@link #INITIAL_SHELL_COMPRESSION} scale
+     * Full-control overload. Opens a fresh transport session; all entities
+     * are visible only to {@code viewer}.
      */
-    public FakeBlock create(Player viewer, Location blockLocation, BakeKey bakeKey,
+    public FakeBlock create(Player viewer, Location blockLocation, BakeKey bakeKey, String shapeKey,
                             Quaternionf blockRotation, boolean fillInterior, Vector eyeDir,
                             boolean compressShell) {
         World world = blockLocation.getWorld();
         if (world == null) throw new IllegalArgumentException("Location has no world");
 
         TransportSession session = transport.openSession(viewer, world);
-        return buildFakeBlock(session, blockLocation, bakeKey, blockRotation,
+        return buildFakeBlock(session, blockLocation, bakeKey, shapeKey, blockRotation,
                 fillInterior, compressShell, Collections.emptyMap());
     }
 
     /**
-     * Like {@link #create(Player, Location, BakeKey, Quaternionf, boolean, Vector, boolean)}
-     * but reuses any pre-spawned entities from {@code existingRefs} (from a preload) rather
-     * than spawning new ones for those coords. The {@code existingSession} owns those
-     * pre-spawned entities and is adopted as the FakeBlock's session; remaining chunks are
-     * spawned onto it.
+     * Like {@link #create(Player, Location, BakeKey, String, Quaternionf, boolean, Vector, boolean)}
+     * but reuses any pre-spawned entities from {@code existingRefs}.
      */
-    public FakeBlock create(Player viewer, Location blockLocation, BakeKey bakeKey,
+    public FakeBlock create(Player viewer, Location blockLocation, BakeKey bakeKey, String shapeKey,
                             Quaternionf blockRotation, boolean fillInterior, Vector eyeDir,
                             boolean compressShell, Map<ChunkCoord, ChunkRef> existingRefs,
                             TransportSession existingSession) {
         if (blockLocation.getWorld() == null) throw new IllegalArgumentException("Location has no world");
-        return buildFakeBlock(existingSession, blockLocation, bakeKey, blockRotation,
+        return buildFakeBlock(existingSession, blockLocation, bakeKey, shapeKey, blockRotation,
                 fillInterior, compressShell, existingRefs);
     }
 
@@ -187,13 +153,10 @@ public final class FakeBlockFactory {
 
     /**
      * Pre-spawn the viewer-facing faces of the outer shell for eager preload.
-     * A chunk is pre-spawned if any of its outward face normals opposes the eye
-     * direction (i.e. the face is visible from the player's viewpoint). The
-     * returned {@link PreloadResult} contains both the spawned refs and the session
-     * that owns them. The caller must pass the session to a subsequent {@link #create}
-     * call or close it if the preload is discarded.
+     * The shape's per-chunk outward-face mask drives which faces are viewer-
+     * facing.
      */
-    public PreloadResult preload(Player viewer, Location blockLocation, BakeKey bakeKey,
+    public PreloadResult preload(Player viewer, Location blockLocation, BakeKey bakeKey, String shapeKey,
                                   Quaternionf blockRotation, Vector eyeDir) {
         World world = blockLocation.getWorld();
         if (world == null) return new PreloadResult(Collections.emptyMap(), noopSession());
@@ -204,7 +167,7 @@ public final class FakeBlockFactory {
                 Math.floor(blockLocation.getY()),
                 Math.floor(blockLocation.getZ()));
 
-        Map<ChunkCoord, HeadsRegistry.Entry> chunks = registry.chunksFor(bakeKey);
+        Map<ChunkCoord, HeadsRegistry.ChunkEntry> chunks = registry.chunksFor(bakeKey, shapeKey);
         if (chunks.isEmpty()) return new PreloadResult(Collections.emptyMap(), noopSession());
 
         Quaternionf canonicalRotation = HeadRotations.compose(
@@ -216,12 +179,13 @@ public final class FakeBlockFactory {
 
         TransportSession session = transport.openSession(viewer, world);
         List<ChunkRef> refs = new ArrayList<>(chunks.size() / 2 + 1);
-        for (Map.Entry<ChunkCoord, HeadsRegistry.Entry> entry : chunks.entrySet()) {
+        for (Map.Entry<ChunkCoord, HeadsRegistry.ChunkEntry> entry : chunks.entrySet()) {
             ChunkCoord coord = entry.getKey();
-            if (!isViewerFacing(coord, gridN, localEyeDir)) continue;
+            EnumSet<FaceDir> outward = entry.getValue().outwardFaces();
+            if (!isViewerFacing(outward, localEyeDir)) continue;
 
             ChunkRef ref = spawnChunk(session, origin, coord, entry.getValue(),
-                    blockRotation, canonicalRotation, geom, gridN, INITIAL_SHELL_COMPRESSION);
+                    blockRotation, canonicalRotation, geom, INITIAL_SHELL_COMPRESSION);
             refs.add(ref);
         }
 
@@ -232,61 +196,41 @@ public final class FakeBlockFactory {
 
     // ── Lazy-spawn plan methods ───────────────────────────────────────────────
 
-    /**
-     * Compute the full lazy-spawn plan for a fresh break (no pre-spawned preload).
-     * Opens a new transport session; the caller must either use {@code plan.session()}
-     * as the FakeBlock's session or close it on error.
-     */
-    public PreloadPlan preloadAndPending(Player viewer, Location blockLocation, BakeKey bakeKey,
+    public PreloadPlan preloadAndPending(Player viewer, Location blockLocation, BakeKey bakeKey, String shapeKey,
                                           Quaternionf blockRotation, boolean fillInterior, Vector eyeDir) {
         World world = blockLocation.getWorld();
         if (world == null) return emptyPlan();
-        return buildPlan(transport.openSession(viewer, world), blockLocation, bakeKey,
+        return buildPlan(transport.openSession(viewer, world), blockLocation, bakeKey, shapeKey,
                 blockRotation, fillInterior, eyeDir, Collections.emptyMap());
     }
 
-    /**
-     * Like {@link #preloadAndPending} but reuses {@code existingRefs} for coords
-     * that are already spawned (eager-preload consume path) and adopts the
-     * {@code existingSession} as the plan's session so all entities share one session.
-     */
-    public PreloadPlan completePlan(Location blockLocation, BakeKey bakeKey,
+    public PreloadPlan completePlan(Location blockLocation, BakeKey bakeKey, String shapeKey,
                                      Quaternionf blockRotation, boolean fillInterior, Vector eyeDir,
                                      Map<ChunkCoord, ChunkRef> existingRefs,
                                      TransportSession existingSession) {
         if (blockLocation.getWorld() == null) return new PreloadPlan(Collections.emptyMap(),
                 Collections.emptyList(), Collections.emptyMap(), existingSession);
-        return buildPlan(existingSession, blockLocation, bakeKey, blockRotation, fillInterior,
+        return buildPlan(existingSession, blockLocation, bakeKey, shapeKey, blockRotation, fillInterior,
                 eyeDir, existingRefs);
     }
 
-    /**
-     * Build a {@link PendingSpawnContext} for a batch of pending chunk spawns.
-     * Pass any interior spec as {@code donorSpec} so the donor ItemStack is built once
-     * for the whole batch; pass {@code null} if the batch has no interior chunks.
-     * The context borrows the session from {@code fakeBlock.session()}.
-     */
     public PendingSpawnContext beginPendingBatch(FakeBlock fakeBlock, PendingChunkSpec donorSpec) {
         int gridN = fakeBlock.gridN();
         BlockGeometry geom = new BlockGeometry(gridN, fakeBlock.blockRotation());
         Quaternionf canonRot = HeadRotations.compose(
                 HeadFace.FRONT, FaceDir.SOUTH, FaceRotations.of(HeadFace.FRONT));
         ItemStack interiorStack = donorSpec != null
-                ? itemFactory.build(HeadsRegistry.toHeadSkin(donorSpec.registryEntry()))
+                ? itemFactory.build(HeadsRegistry.toHeadSkin(donorSpec.registryEntry().skin()))
                 : null;
         return new PendingSpawnContext(fakeBlock.session(), fakeBlock.origin(),
                 fakeBlock.blockRotation(), geom, canonRot, gridN, interiorStack);
     }
 
-    /**
-     * Spawn a single pending chunk using a pre-built context. Interior chunks clone the
-     * context's {@code interiorBaseStack}; outer chunks delegate to {@link #spawnChunk}.
-     */
     public ChunkRef spawnPendingChunk(PendingSpawnContext ctx, PendingChunkSpec spec, float shellFactor) {
         if (spec.interior()) {
             ItemStack stack = ctx.interiorBaseStack() != null
                     ? ctx.interiorBaseStack().clone()
-                    : itemFactory.build(HeadsRegistry.toHeadSkin(spec.registryEntry()));
+                    : itemFactory.build(HeadsRegistry.toHeadSkin(spec.registryEntry().skin()));
             float scale = ctx.geom().chunkScale() * shellFactor;
             Vector3f translation = ctx.geom().translationFor(spec.coord(), ctx.canonicalRotation(), scale);
             Transformation tx = new Transformation(
@@ -300,14 +244,14 @@ public final class FakeBlockFactory {
                     EnumSet.noneOf(FaceDir.class));
         } else {
             return spawnChunk(ctx.session(), ctx.origin(), spec.coord(), spec.registryEntry(),
-                    ctx.blockRotation(), ctx.canonicalRotation(), ctx.geom(), ctx.gridN(), shellFactor);
+                    ctx.blockRotation(), ctx.canonicalRotation(), ctx.geom(), shellFactor);
         }
     }
 
     // ── Internal build helpers ────────────────────────────────────────────────
 
     private FakeBlock buildFakeBlock(TransportSession session,
-                                     Location blockLocation, BakeKey bakeKey,
+                                     Location blockLocation, BakeKey bakeKey, String shapeKey,
                                      Quaternionf blockRotation, boolean fillInterior,
                                      boolean compressShell,
                                      Map<ChunkCoord, ChunkRef> existingRefs) {
@@ -320,7 +264,7 @@ public final class FakeBlockFactory {
                 Math.floor(blockLocation.getY()),
                 Math.floor(blockLocation.getZ()));
 
-        Map<ChunkCoord, HeadsRegistry.Entry> chunks = registry.chunksFor(bakeKey);
+        Map<ChunkCoord, HeadsRegistry.ChunkEntry> chunks = registry.chunksFor(bakeKey, shapeKey);
         List<ChunkRef> refs = new ArrayList<>(chunks.size());
 
         Quaternionf canonicalRotation = HeadRotations.compose(
@@ -328,7 +272,7 @@ public final class FakeBlockFactory {
 
         float shellFactor = compressShell ? INITIAL_SHELL_COMPRESSION : 1f;
         populateOuterChunks(session, origin, geom, chunks, blockRotation, canonicalRotation,
-                gridN, shellFactor, existingRefs, refs);
+                shellFactor, existingRefs, refs);
 
         if (fillInterior && gridN >= 3 && !chunks.isEmpty()) {
             spawnInteriorChunks(session, origin, geom, chunks, blockRotation,
@@ -338,13 +282,7 @@ public final class FakeBlockFactory {
         return new FakeBlock(origin, bakeKey.block(), gridN, refs, blockRotation, session);
     }
 
-    /**
-     * Internal: build a {@link PreloadPlan} using the given session. Outer chunks are
-     * partitioned into a viewer-facing immediate set (plus all alive {@code existingRefs})
-     * and a pending list for back-facing chunks; interior chunks are all pending.
-     * t values are globally normalised across all outer coords.
-     */
-    private PreloadPlan buildPlan(TransportSession session, Location blockLocation, BakeKey bakeKey,
+    private PreloadPlan buildPlan(TransportSession session, Location blockLocation, BakeKey bakeKey, String shapeKey,
                                    Quaternionf blockRotation, boolean fillInterior, Vector eyeDir,
                                    Map<ChunkCoord, ChunkRef> existingRefs) {
         World world = blockLocation.getWorld();
@@ -355,7 +293,7 @@ public final class FakeBlockFactory {
                 Math.floor(blockLocation.getY()),
                 Math.floor(blockLocation.getZ()));
 
-        Map<ChunkCoord, HeadsRegistry.Entry> chunks = registry.chunksFor(bakeKey);
+        Map<ChunkCoord, HeadsRegistry.ChunkEntry> chunks = registry.chunksFor(bakeKey, shapeKey);
         if (chunks.isEmpty()) {
             return new PreloadPlan(Collections.emptyMap(), Collections.emptyList(),
                     Collections.emptyMap(), session);
@@ -386,7 +324,7 @@ public final class FakeBlockFactory {
         }
 
         // 2. Keep alive preloaded entities; spawn viewer-facing chunks immediately,
-        // defer back-facing chunks to pendingSpecs so they appear as the wave passes them.
+        // defer back-facing chunks to pendingSpecs so they appear as the wave passes.
         Vector3f localEyeDir = new Quaternionf(blockRotation).conjugate().transform(new Vector3f(dir));
         Map<ChunkCoord, ChunkRef> frontRefs = new HashMap<>(existingRefs.size() + chunks.size());
         List<PendingChunkSpec> pending = new ArrayList<>();
@@ -395,25 +333,36 @@ public final class FakeBlockFactory {
             if (e.getValue().handle().isAlive()) frontRefs.put(e.getKey(), e.getValue());
         }
 
-        for (Map.Entry<ChunkCoord, HeadsRegistry.Entry> e : chunks.entrySet()) {
+        for (Map.Entry<ChunkCoord, HeadsRegistry.ChunkEntry> e : chunks.entrySet()) {
             ChunkCoord c = e.getKey();
             if (frontRefs.containsKey(c)) continue;
-            if (isViewerFacing(c, gridN, localEyeDir)) {
+            EnumSet<FaceDir> outward = e.getValue().outwardFaces();
+            if (isViewerFacing(outward, localEyeDir)) {
                 frontRefs.put(c, spawnChunk(session, origin, c, e.getValue(),
-                        blockRotation, canonicalRotation, geom, gridN, INITIAL_SHELL_COMPRESSION));
+                        blockRotation, canonicalRotation, geom, INITIAL_SHELL_COMPRESSION));
             } else {
                 pending.add(new PendingChunkSpec(c, e.getValue(), allOuterT.get(c), false));
             }
         }
 
-        // 3. Interior chunks: all pending, using the same global t scale.
+        // 3. Interior chunks: all pending, using the same global t scale. Filter by
+        // shape — non-cube shapes have no meaningful interior (no coord in [1,N-1]³
+        // that isn't already in the outer chunk set), so most iterations are no-ops.
         if (fillInterior && gridN >= 3) {
-            HeadsRegistry.Entry donor = pickInteriorDonor(chunks, gridN);
+            HeadsRegistry.ChunkEntry donor = pickInteriorDonor(chunks, gridN);
             if (donor != null) {
                 for (int x = 1; x < gridN - 1; x++) {
                     for (int y = 1; y < gridN - 1; y++) {
                         for (int z = 1; z < gridN - 1; z++) {
                             ChunkCoord c = new ChunkCoord(x, y, z);
+                            // Skip cells that aren't part of this shape (sparse non-cube)
+                            // or are already in the outer set.
+                            if (chunks.containsKey(c)) continue;
+                            // Only fill cells that are "inside" the shape — i.e.
+                            // surrounded by outer chunks on all 6 sides. For
+                            // cubes this is the entire (1..N-1)³ interior; for
+                            // non-cubes it's typically empty.
+                            if (!isInsideShape(c, chunks, gridN)) continue;
                             Vector3f rel = geom.chunkLocalCenter(c).sub(blockCenter);
                             new Quaternionf(blockRotation).transform(rel);
                             double p = rel.dot(dir);
@@ -430,28 +379,28 @@ public final class FakeBlockFactory {
     }
 
     private void populateOuterChunks(TransportSession session, Location origin, BlockGeometry geom,
-                                      Map<ChunkCoord, HeadsRegistry.Entry> chunks,
+                                      Map<ChunkCoord, HeadsRegistry.ChunkEntry> chunks,
                                       Quaternionf blockRotation, Quaternionf canonicalRotation,
-                                      int gridN, float shellFactor,
+                                      float shellFactor,
                                       Map<ChunkCoord, ChunkRef> existingRefs,
                                       List<ChunkRef> refs) {
-        for (Map.Entry<ChunkCoord, HeadsRegistry.Entry> entry : chunks.entrySet()) {
+        for (Map.Entry<ChunkCoord, HeadsRegistry.ChunkEntry> entry : chunks.entrySet()) {
             ChunkCoord coord = entry.getKey();
             ChunkRef existing = existingRefs.get(coord);
             if (existing != null && existing.handle().isAlive()) {
                 refs.add(existing);
             } else {
                 refs.add(spawnChunk(session, origin, coord, entry.getValue(),
-                        blockRotation, canonicalRotation, geom, gridN, shellFactor));
+                        blockRotation, canonicalRotation, geom, shellFactor));
             }
         }
     }
 
     private ChunkRef spawnChunk(TransportSession session, Location origin, ChunkCoord coord,
-                                 HeadsRegistry.Entry entry, Quaternionf blockRotation,
+                                 HeadsRegistry.ChunkEntry entry, Quaternionf blockRotation,
                                  Quaternionf canonicalRotation, BlockGeometry geom,
-                                 int gridN, float shellFactor) {
-        HeadSkin head = HeadsRegistry.toHeadSkin(entry);
+                                 float shellFactor) {
+        HeadSkin head = HeadsRegistry.toHeadSkin(entry.skin());
         ItemStack itemStack = itemFactory.build(head);
         float scale = geom.chunkScale() * shellFactor;
         Vector3f translation = geom.translationFor(coord, canonicalRotation, scale);
@@ -462,23 +411,24 @@ public final class FakeBlockFactory {
                 canonicalRotation);
 
         DisplayHandle handle = session.spawn(origin, itemStack, tx, 1.0f);
-        return new ChunkRef(handle, coord, geom.chunkLocalCenter(coord),
-                outwardFacesAt(coord, gridN));
+        return new ChunkRef(handle, coord, geom.chunkLocalCenter(coord), entry.outwardFaces());
     }
 
     private void spawnInteriorChunks(TransportSession session, Location origin, BlockGeometry geom,
-                                      Map<ChunkCoord, HeadsRegistry.Entry> chunks,
+                                      Map<ChunkCoord, HeadsRegistry.ChunkEntry> chunks,
                                       Quaternionf blockRotation, Quaternionf canonicalRotation,
                                       int gridN, List<ChunkRef> refs, float shellFactor) {
-        HeadsRegistry.Entry donorEntry = pickInteriorDonor(chunks, gridN);
+        HeadsRegistry.ChunkEntry donorEntry = pickInteriorDonor(chunks, gridN);
         if (donorEntry == null) return;
-        HeadSkin donorSkin = HeadsRegistry.toHeadSkin(donorEntry);
+        HeadSkin donorSkin = HeadsRegistry.toHeadSkin(donorEntry.skin());
         ItemStack donorStack = itemFactory.build(donorSkin);
 
         for (int x = 1; x < gridN - 1; x++) {
             for (int y = 1; y < gridN - 1; y++) {
                 for (int z = 1; z < gridN - 1; z++) {
                     ChunkCoord coord = new ChunkCoord(x, y, z);
+                    if (chunks.containsKey(coord)) continue;
+                    if (!isInsideShape(coord, chunks, gridN)) continue;
 
                     float scale = geom.chunkScale() * shellFactor;
                     Vector3f translation = geom.translationFor(coord, canonicalRotation, scale);
@@ -497,38 +447,40 @@ public final class FakeBlockFactory {
         }
     }
 
-    static HeadsRegistry.Entry pickInteriorDonor(Map<ChunkCoord, HeadsRegistry.Entry> chunks, int gridN) {
-        HeadsRegistry.Entry fallback = null;
-        for (Map.Entry<ChunkCoord, HeadsRegistry.Entry> e : chunks.entrySet()) {
+    static HeadsRegistry.ChunkEntry pickInteriorDonor(Map<ChunkCoord, HeadsRegistry.ChunkEntry> chunks, int gridN) {
+        HeadsRegistry.ChunkEntry fallback = null;
+        for (Map.Entry<ChunkCoord, HeadsRegistry.ChunkEntry> e : chunks.entrySet()) {
             if (fallback == null) fallback = e.getValue();
-            ChunkCoord c = e.getKey();
-            int outward = 0;
-            int last = gridN - 1;
-            if (c.x() == 0 || c.x() == last) outward++;
-            if (c.y() == 0 || c.y() == last) outward++;
-            if (c.z() == 0 || c.z() == last) outward++;
-            if (outward == 1) return e.getValue();
+            int outwardCount = e.getValue().outwardFaces().size();
+            if (outwardCount == 1) return e.getValue();
         }
         return fallback;
     }
 
-    private static EnumSet<FaceDir> outwardFacesAt(ChunkCoord c, int gridN) {
-        EnumSet<FaceDir> out = EnumSet.noneOf(FaceDir.class);
+    /**
+     * True iff every 6-neighbor of {@code c} is either out-of-bounds or
+     * an outer chunk in {@code chunks}. This catches "buried" cells —
+     * cube interior for a full cube; nothing for slabs/stairs. Used to
+     * decide which interior cells need filler donor spawns when
+     * {@code fillInterior} is set.
+     */
+    private static boolean isInsideShape(ChunkCoord c, Map<ChunkCoord, HeadsRegistry.ChunkEntry> chunks, int gridN) {
         for (FaceDir d : FaceDir.values()) {
-            if (d.isOutwardAt(c.x(), c.y(), c.z(), gridN)) out.add(d);
+            int nx = c.x() + d.dx, ny = c.y() + d.dy, nz = c.z() + d.dz;
+            if (nx < 0 || nx >= gridN || ny < 0 || ny >= gridN || nz < 0 || nz >= gridN) continue;
+            if (!chunks.containsKey(new ChunkCoord(nx, ny, nz))) return false;
         }
-        return out;
+        return true;
     }
 
     /**
-     * Returns true if any outward face of the chunk at {@code c} has a normal that
-     * opposes {@code localEyeDir} (i.e. the face is visible from the viewer's side).
+     * Returns true if any outward face of the chunk has a normal that
+     * opposes {@code localEyeDir} (i.e. the face is visible from the viewer).
      * {@code localEyeDir} must already be in block-local space.
      */
-    private static boolean isViewerFacing(ChunkCoord c, int gridN, Vector3f localEyeDir) {
-        for (FaceDir d : FaceDir.values()) {
-            if (d.isOutwardAt(c.x(), c.y(), c.z(), gridN)
-                    && d.dx * localEyeDir.x + d.dy * localEyeDir.y + d.dz * localEyeDir.z < 0) {
+    private static boolean isViewerFacing(EnumSet<FaceDir> outward, Vector3f localEyeDir) {
+        for (FaceDir d : outward) {
+            if (d.dx * localEyeDir.x + d.dy * localEyeDir.y + d.dz * localEyeDir.z < 0) {
                 return true;
             }
         }

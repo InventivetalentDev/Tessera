@@ -122,11 +122,13 @@ public final class BlockBreakListener implements Listener {
         BlockKey key = bakeKey.block();
         String fullStateKey = VariantKey.fromBlockData(blockData);
         String matchedKey = VariantKey.pickMatching(fullStateKey, registry.variantsFor(key).keySet());
-        Quaternionf blockRotation = registry.rotationFor(key, matchedKey);
+        HeadsRegistry.ShapeVariantBinding binding = registry.variantBindingFor(key, matchedKey);
+        Quaternionf blockRotation = binding.rotation().toQuat();
 
         FakeBlock fb;
         try {
-            fb = factory.create(viewer, breakLoc, bakeKey, blockRotation, cfg.fillInterior(), eyeDir);
+            fb = factory.create(viewer, breakLoc, bakeKey, binding.shapeKey(),
+                    blockRotation, cfg.fillInterior(), eyeDir, false);
         } catch (RuntimeException re) {
             active.decrementAndGet();
             plugin.getLogger().warning("Failed to spawn FakeBlock for " + bakeKey + ": " + re.getMessage());

@@ -40,24 +40,24 @@ class LayeredHeadsStoreTest {
         BakeKey shared = BakeKey.untinted(BlockKey.of("minecraft:cobblestone"));
 
         writable.writeSkin(new TsraFormat.Skin("h-w", "writable", "s", null));
-        writable.writeBlock(new TsraFormat.Block(stone,
+        writable.writeBlock(TsraFormat.Block.singleShape(stone,
                 Map.of(new ChunkCoord(0, 0, 0), "h-w"), Map.of()));
         writable.writeSkin(new TsraFormat.Skin("h-shared-w", "writable-shared", "s", null));
-        writable.writeBlock(new TsraFormat.Block(shared,
+        writable.writeBlock(TsraFormat.Block.singleShape(shared,
                 Map.of(new ChunkCoord(0, 0, 0), "h-shared-w"), Map.of()));
 
         addon.writeSkin(new TsraFormat.Skin("h-a", "addon", "s", null));
-        addon.writeBlock(new TsraFormat.Block(diorite,
+        addon.writeBlock(TsraFormat.Block.singleShape(diorite,
                 Map.of(new ChunkCoord(0, 0, 0), "h-a"), Map.of()));
         addon.writeSkin(new TsraFormat.Skin("h-shared-a", "addon-shared", "s", null));
-        addon.writeBlock(new TsraFormat.Block(shared,
+        addon.writeBlock(TsraFormat.Block.singleShape(shared,
                 Map.of(new ChunkCoord(0, 0, 0), "h-shared-a"), Map.of()));
 
         bundled.writeSkin(new TsraFormat.Skin("h-b", "bundled", "s", null));
-        bundled.writeBlock(new TsraFormat.Block(granite,
+        bundled.writeBlock(TsraFormat.Block.singleShape(granite,
                 Map.of(new ChunkCoord(0, 0, 0), "h-b"), Map.of()));
         bundled.writeSkin(new TsraFormat.Skin("h-shared-b", "bundled-shared", "s", null));
-        bundled.writeBlock(new TsraFormat.Block(shared,
+        bundled.writeBlock(TsraFormat.Block.singleShape(shared,
                 Map.of(new ChunkCoord(0, 0, 0), "h-shared-b"), Map.of()));
 
         LayeredHeadsStore stack = new LayeredHeadsStore(writable, List.of(addon, bundled));
@@ -81,7 +81,7 @@ class LayeredHeadsStoreTest {
         LayeredHeadsStore stack = new LayeredHeadsStore(writable, List.of(addon));
 
         stack.writeSkin(new TsraFormat.Skin("h", "v", "s", null));
-        stack.writeBlock(new TsraFormat.Block(
+        stack.writeBlock(TsraFormat.Block.singleShape(
                 BakeKey.untinted(BlockKey.of("minecraft:stone")),
                 Map.of(new ChunkCoord(0, 0, 0), "h"), Map.of()));
 
@@ -97,12 +97,12 @@ class LayeredHeadsStoreTest {
 
         BakeKey addonBlock = BakeKey.untinted(BlockKey.of("minecraft:granite"));
         addon.writeSkin(new TsraFormat.Skin("h-a", "v", "s", null));
-        addon.writeBlock(new TsraFormat.Block(addonBlock,
+        addon.writeBlock(TsraFormat.Block.singleShape(addonBlock,
                 Map.of(new ChunkCoord(0, 0, 0), "h-a"), Map.of()));
 
         BakeKey writableBlock = BakeKey.untinted(BlockKey.of("minecraft:stone"));
         writable.writeSkin(new TsraFormat.Skin("h-w", "v", "s", null));
-        writable.writeBlock(new TsraFormat.Block(writableBlock,
+        writable.writeBlock(TsraFormat.Block.singleShape(writableBlock,
                 Map.of(new ChunkCoord(0, 0, 0), "h-w"), Map.of()));
 
         LayeredHeadsStore stack = new LayeredHeadsStore(writable, List.of(addon));

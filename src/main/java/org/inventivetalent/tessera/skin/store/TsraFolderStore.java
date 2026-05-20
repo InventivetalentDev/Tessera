@@ -42,12 +42,28 @@ public final class TsraFolderStore implements HeadsStore {
     private final Path root;
     private final Path blocksDir;
     private final Path skinsDir;
+    /**
+     * gridN required by v1 → v2 block format compatibility (synthesizes
+     * per-chunk outward masks via cube boundary check). Lazily read from
+     * the manifest on first block read; if the manifest is absent we
+     * default to 4 (the only value the bundled resource and dev builds
+     * use, and the only value v1 bakes existed at).
+     */
+    private volatile int cachedGridN = -1;
 
     public TsraFolderStore(Logger logger, Path root) {
         this.logger = logger;
         this.root = root;
         this.blocksDir = root.resolve(TsraFormat.BLOCKS_DIR);
         this.skinsDir = root.resolve(TsraFormat.SKINS_DIR);
+    }
+
+    private int gridN() {
+        int g = cachedGridN;
+        if (g >= 0) return g;
+        g = manifest().map(TsraFormat.Manifest::gridN).orElse(4);
+        cachedGridN = g;
+        return g;
     }
 
     public Path root() { return root; }
@@ -89,7 +105,7 @@ public final class TsraFolderStore implements HeadsStore {
         Path p = blocksDir.resolve(TsraFormat.blockFilename(key));
         if (!Files.isRegularFile(p)) return Optional.empty();
         try {
-            return Optional.of(TsraFormat.readBlock(Files.readAllBytes(p)));
+            return Optional.of(TsraFormat.readBlock(Files.readAllBytes(p), gridN()));
         } catch (IOException io) {
             logger.log(Level.WARNING, "[tsra-folder] failed to read " + p, io);
             return Optional.empty();

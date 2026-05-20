@@ -32,7 +32,7 @@ class TsraZipStoreTest {
         source.writeManifest(new TsraFormat.Manifest(4, "1.21.4", "test"));
         source.writeSkin(new TsraFormat.Skin("hash-1", "value-1", "sig-1", "uuid-1"));
         source.writeSkin(new TsraFormat.Skin("hash-2", "value-2", "sig-2", null));
-        source.writeBlock(new TsraFormat.Block(
+        source.writeBlock(TsraFormat.Block.singleShape(
                 BakeKey.untinted(BlockKey.of("minecraft:stone")),
                 Map.of(new ChunkCoord(0, 0, 0), "hash-1",
                         new ChunkCoord(1, 0, 0), "hash-2"),
@@ -68,10 +68,10 @@ class TsraZipStoreTest {
         Path folder = tmp.resolve("heads-4");
         TsraFolderStore source = new TsraFolderStore(LOG, folder);
         source.writeSkin(new TsraFormat.Skin("shared", "v", "s", null));
-        source.writeBlock(new TsraFormat.Block(
+        source.writeBlock(TsraFormat.Block.singleShape(
                 BakeKey.untinted(BlockKey.of("minecraft:stone")),
                 Map.of(new ChunkCoord(0, 0, 0), "shared"), Map.of()));
-        source.writeBlock(new TsraFormat.Block(
+        source.writeBlock(TsraFormat.Block.singleShape(
                 BakeKey.untinted(BlockKey.of("minecraft:cobblestone")),
                 Map.of(new ChunkCoord(0, 0, 0), "shared"), Map.of()));
 

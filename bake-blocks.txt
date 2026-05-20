@@ -49,3 +49,13 @@ prismarine_bricks
 mossy_cobblestone
 cracked_stone_bricks
 chiseled_stone_bricks
+
+# Non-cube shapes (voxelized via ShapeVoxelizer)
+# Slabs — bottom + top half + full-cube (type=double) shapes.
+oak_slab
+stone_slab
+smooth_stone_slab
+# Stairs — straight + inner_left/right + outer_left/right shape variants.
+oak_stairs
+stone_stairs
+cobblestone_stairs

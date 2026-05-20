@@ -41,7 +41,7 @@ class HeadsRegistryStoreTest {
         store.writeManifest(new TsraFormat.Manifest(4, "1.21.4", "test"));
         store.writeSkin(new TsraFormat.Skin("h", "value", "sig", "uuid"));
         BakeKey key = BakeKey.untinted(BlockKey.of("minecraft:stone"));
-        store.writeBlock(new TsraFormat.Block(key,
+        store.writeBlock(TsraFormat.Block.singleShape(key,
                 Map.of(new ChunkCoord(0, 0, 0), "h",
                         new ChunkCoord(1, 0, 0), "h"),
                 Map.of()));
@@ -76,7 +76,7 @@ class HeadsRegistryStoreTest {
         store.writeSkin(new TsraFormat.Skin("h1", "v1", "s1", null));
         store.writeSkin(new TsraFormat.Skin("h2", "v2", "s2", null));
         BakeKey key = BakeKey.untinted(BlockKey.of("minecraft:diorite"));
-        store.writeBlock(new TsraFormat.Block(key,
+        store.writeBlock(TsraFormat.Block.singleShape(key,
                 Map.of(new ChunkCoord(0, 0, 0), "h1",
                         new ChunkCoord(1, 0, 0), "h1",   // dupe — warm dedupes
                         new ChunkCoord(2, 0, 0), "h2"),

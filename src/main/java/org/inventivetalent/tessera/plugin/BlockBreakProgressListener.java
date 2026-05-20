@@ -77,6 +77,7 @@ public final class BlockBreakProgressListener implements Listener {
     private record PreloadEntry(
             BlockPosKey posKey,
             BakeKey bakeKey,
+            String shapeKey,
             Quaternionf blockRotation,
             Map<ChunkCoord, ChunkRef> prespawnedChunks,
             TransportSession session
@@ -254,7 +255,7 @@ public final class BlockBreakProgressListener implements Listener {
                 Vector eyeDir = player.getEyeLocation().getDirection();
                 FakeBlockFactory.PreloadPlan plan;
                 try {
-                    plan = factory.completePlan(breakLoc, preload.bakeKey(),
+                    plan = factory.completePlan(breakLoc, preload.bakeKey(), preload.shapeKey(),
                             preload.blockRotation(), cfg.fillInterior(), eyeDir,
                             preload.prespawnedChunks(), preload.session());
                 } catch (RuntimeException re) {
@@ -392,15 +393,16 @@ public final class BlockBreakProgressListener implements Listener {
         BlockData blockData = block.getBlockData();
         String fullStateKey = VariantKey.fromBlockData(blockData);
         String matchedKey = VariantKey.pickMatching(fullStateKey, registry.variantsFor(key).keySet());
-        Quaternionf blockRotation = registry.rotationFor(key, matchedKey);
+        HeadsRegistry.ShapeVariantBinding binding = registry.variantBindingFor(key, matchedKey);
+        Quaternionf blockRotation = binding.rotation().toQuat();
 
         Vector eyeDir = player.getEyeLocation().getDirection();
         active.incrementAndGet();
 
         FakeBlockFactory.PreloadPlan plan;
         try {
-            plan = factory.preloadAndPending(player, breakLoc, bakeKey, blockRotation,
-                    cfg.fillInterior(), eyeDir);
+            plan = factory.preloadAndPending(player, breakLoc, bakeKey, binding.shapeKey(),
+                    blockRotation, cfg.fillInterior(), eyeDir);
         } catch (RuntimeException re) {
             active.decrementAndGet();
             plugin.getLogger().warning("Failed to spawn FakeBlock for " + bakeKey + ": " + re.getMessage());
@@ -839,18 +841,20 @@ public final class BlockBreakProgressListener implements Listener {
             BlockData blockData = target.getBlockData();
             String fullStateKey = VariantKey.fromBlockData(blockData);
             String matchedKey = VariantKey.pickMatching(fullStateKey, registry.variantsFor(key).keySet());
-            Quaternionf blockRotation = registry.rotationFor(key, matchedKey);
+            HeadsRegistry.ShapeVariantBinding binding = registry.variantBindingFor(key, matchedKey);
+            Quaternionf blockRotation = binding.rotation().toQuat();
             Vector eyeDir = player.getEyeLocation().getDirection();
 
             FakeBlockFactory.PreloadResult preloadResult;
             try {
-                preloadResult = factory.preload(player, target.getLocation(), bakeKey, blockRotation, eyeDir);
+                preloadResult = factory.preload(player, target.getLocation(), bakeKey, binding.shapeKey(),
+                        blockRotation, eyeDir);
             } catch (RuntimeException re) {
                 continue;
             }
             if (preloadResult.chunks().isEmpty()) continue;
             preloads.put(player.getUniqueId(),
-                    new PreloadEntry(targetKey, bakeKey, blockRotation,
+                    new PreloadEntry(targetKey, bakeKey, binding.shapeKey(), blockRotation,
                             preloadResult.chunks(), preloadResult.session()));
 
             if (cfg.debug()) plugin.getLogger().info(

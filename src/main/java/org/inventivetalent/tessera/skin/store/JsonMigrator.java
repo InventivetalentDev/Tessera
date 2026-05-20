@@ -3,14 +3,17 @@ package org.inventivetalent.tessera.skin.store;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import org.inventivetalent.tessera.assets.model.BlockModel;
 import org.inventivetalent.tessera.assets.model.ModelResolver.VariantRotation;
 import org.inventivetalent.tessera.core.BakeKey;
 import org.inventivetalent.tessera.core.ChunkCoord;
+import org.inventivetalent.tessera.core.FaceDir;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.EnumSet;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.logging.Level;
@@ -90,7 +93,7 @@ public final class JsonMigrator {
                 }
                 JsonObject obj = be.getValue().getAsJsonObject();
 
-                Map<ChunkCoord, String> chunkHashes = new LinkedHashMap<>();
+                LinkedHashMap<ChunkCoord, TsraFormat.ChunkRecord> chunks = new LinkedHashMap<>();
                 if (obj.has("chunks")) {
                     for (Map.Entry<String, JsonElement> ce : obj.getAsJsonObject("chunks").entrySet()) {
                         ChunkCoord coord;
@@ -100,22 +103,32 @@ public final class JsonMigrator {
                         JsonElement hashEl = ce.getValue().getAsJsonObject().get("skinHash");
                         if (hashEl == null || hashEl.isJsonNull() || !hashEl.isJsonPrimitive()
                                 || !hashEl.getAsJsonPrimitive().isString()) continue;
-                        chunkHashes.put(coord, hashEl.getAsString());
+                        // Pre-multishape JSON only stored cube blocks, so the
+                        // outward-mask reconstruction is just the cube boundary.
+                        EnumSet<FaceDir> outward = EnumSet.noneOf(FaceDir.class);
+                        for (FaceDir d : FaceDir.values()) {
+                            if (d.isOutwardAt(coord.x(), coord.y(), coord.z(), gridN)) outward.add(d);
+                        }
+                        chunks.put(coord, new TsraFormat.ChunkRecord(
+                                hashEl.getAsString(), TsraFormat.ChunkRecord.mask(outward)));
                     }
                 }
-                if (chunkHashes.isEmpty()) continue;
+                if (chunks.isEmpty()) continue;
 
-                Map<String, VariantRotation> variants = new LinkedHashMap<>();
+                LinkedHashMap<String, TsraFormat.ShapeVariantBinding> variants = new LinkedHashMap<>();
                 if (obj.has("variants")) {
                     for (Map.Entry<String, JsonElement> ve : obj.getAsJsonObject("variants").entrySet()) {
                         JsonObject vo = ve.getValue().getAsJsonObject();
                         int xDeg = vo.has("x") ? vo.get("x").getAsInt() : 0;
                         int yDeg = vo.has("y") ? vo.get("y").getAsInt() : 0;
-                        variants.put(ve.getKey(), new VariantRotation(xDeg, yDeg));
+                        variants.put(ve.getKey(), new TsraFormat.ShapeVariantBinding(
+                                BlockModel.DEFAULT_SHAPE_KEY, new VariantRotation(xDeg, yDeg)));
                     }
                 }
 
-                target.writeBlock(new TsraFormat.Block(key, chunkHashes, variants));
+                LinkedHashMap<String, TsraFormat.Shape> shapes = new LinkedHashMap<>(2);
+                shapes.put(BlockModel.DEFAULT_SHAPE_KEY, new TsraFormat.Shape(chunks));
+                target.writeBlock(new TsraFormat.Block(key, shapes, variants));
                 migrated++;
             }
         }

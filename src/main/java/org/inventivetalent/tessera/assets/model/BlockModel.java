@@ -5,119 +5,158 @@ import org.inventivetalent.tessera.core.FaceDir;
 
 import java.awt.image.BufferedImage;
 import java.util.Collections;
-import java.util.EnumMap;
 import java.util.EnumSet;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
 
 /**
- * Result of {@link ModelResolver#resolve} for a full-cube block. Carries:
+ * Result of {@link ModelResolver#resolve} for a block. Carries one or more
+ * named shapes plus a variant-key → (shape, rotation) lookup table.
  *
+ * <p>Most blocks have one shape:
  * <ul>
- *   <li>{@link #faces} — base texture per face (one per {@link FaceDir}),
- *       at vanilla resolution (16×16 by default).</li>
- *   <li>{@link #tintedFaces} — which base faces carry a {@code tintindex}
- *       in the model JSON and should be multiplied by the biome color. Empty
- *       for blocks with no tinting.</li>
- *   <li>{@link #overlays} — optional second-element overlay textures. Vanilla
- *       grass_block has a second full-cube element whose four side faces are a
- *       semi-transparent tinted overlay ({@code grass_block_side_overlay.png})
- *       composited on top of the untinted dirt-side base. Always tinted.</li>
+ *   <li>Cubes (stone, oak_log, grass_block, …) → one {@link ShapeContent.CubeFaces}
+ *       under the default shape key. Tint + overlays are supported on this
+ *       shape only.</li>
+ *   <li>Single-element non-cubes (slabs, daylight detector) → one
+ *       {@link ShapeContent.VoxelizedShape} with the pre-voxelized chunks.</li>
  * </ul>
  *
- * <p>{@link #tinted} returns {@code true} when either {@code tintedFaces} or
- * {@code overlays} is non-empty — i.e. when the block needs a biome color at
- * bake time.
- *
- * <p>{@link #variantRotations} maps each blockstate variant key to its
- * world-space quaternion for spawn-time orientation.
+ * <p>Stairs reference three distinct models (straight, inner-corner,
+ * outer-corner) across their blockstate; each gets its own
+ * {@link ShapeContent.VoxelizedShape} keyed by the model path. The variant
+ * table maps each {@code "facing=…,half=…,shape=…"} variant string to one
+ * of those shape keys + the runtime rotation to apply.
  */
 public final class BlockModel {
 
-    private final BlockKey key;
-    private final EnumMap<FaceDir, BufferedImage> faces;
-    private final EnumSet<FaceDir> tintedFaces;
-    private final EnumMap<FaceDir, BufferedImage> overlays;  // always tinted; may be empty
-    private final String parentChain;
-    private final Map<String, ModelResolver.VariantRotation> variantRotations;
+    /**
+     * Stable identifier for a single-shape block (cubes + single-model
+     * non-cubes). Multi-shape blocks (stairs) use model paths as keys
+     * instead.
+     */
+    public static final String DEFAULT_SHAPE_KEY = "default";
 
-    /** Backward-compatible: treats all faces as tinted or untinted uniformly, no overlays. */
-    public BlockModel(BlockKey key, Map<FaceDir, BufferedImage> faces, boolean tinted, String parentChain) {
-        this(key, faces, tinted ? EnumSet.allOf(FaceDir.class) : EnumSet.noneOf(FaceDir.class),
-                Collections.emptyMap(), parentChain, Collections.emptyMap());
+    /**
+     * Variant → (shape, rotation) binding. The {@code rotation} is applied
+     * to the lattice as a whole at spawn time (block-level), while
+     * {@code shapeKey} selects which voxelization to spawn.
+     */
+    public record VariantBinding(String shapeKey, ModelResolver.VariantRotation rotation) {}
+
+    private final BlockKey key;
+    private final String defaultShapeKey;
+    private final Map<String, ShapeContent> shapes;
+    private final Map<String, VariantBinding> variants;
+    private final String parentChain;
+
+    public BlockModel(BlockKey key,
+                      String defaultShapeKey,
+                      Map<String, ShapeContent> shapes,
+                      Map<String, VariantBinding> variants,
+                      String parentChain) {
+        if (shapes.isEmpty()) throw new IllegalArgumentException("BlockModel must have at least one shape");
+        if (!shapes.containsKey(defaultShapeKey)) {
+            throw new IllegalArgumentException("defaultShapeKey '" + defaultShapeKey
+                    + "' not in shapes " + shapes.keySet());
+        }
+        this.key = key;
+        this.defaultShapeKey = defaultShapeKey;
+        this.shapes = Map.copyOf(shapes);
+        this.variants = variants.isEmpty() ? Collections.emptyMap() : Map.copyOf(variants);
+        this.parentChain = parentChain;
     }
 
-    /** Backward-compatible: treats all faces as tinted or untinted uniformly, no overlays. */
-    public BlockModel(BlockKey key, Map<FaceDir, BufferedImage> faces, boolean tinted, String parentChain,
-                      Map<String, ModelResolver.VariantRotation> variantRotations) {
-        this(key, faces, tinted ? EnumSet.allOf(FaceDir.class) : EnumSet.noneOf(FaceDir.class),
+    /** Legacy single-shape (cube) convenience: all faces tinted iff {@code tinted}, no overlays. */
+    public BlockModel(BlockKey key, Map<FaceDir, BufferedImage> faces, boolean tinted,
+                      String parentChain, Map<String, ModelResolver.VariantRotation> variantRotations) {
+        this(key, faces,
+                tinted ? EnumSet.allOf(FaceDir.class) : EnumSet.noneOf(FaceDir.class),
                 Collections.emptyMap(), parentChain, variantRotations);
     }
 
-    /** Canonical constructor with per-face tint tracking and optional overlay map. */
+    /** Legacy single-shape (cube) convenience with per-face tinting + overlays. */
     public BlockModel(BlockKey key, Map<FaceDir, BufferedImage> faces,
-                      Set<FaceDir> tintedFaces,
-                      Map<FaceDir, BufferedImage> overlays,
+                      Set<FaceDir> tintedFaces, Map<FaceDir, BufferedImage> overlays,
                       String parentChain,
                       Map<String, ModelResolver.VariantRotation> variantRotations) {
-        if (faces.size() != 6) {
-            throw new IllegalArgumentException(
-                    "BlockModel must have all 6 face textures, got " + faces.keySet());
+        this(key, DEFAULT_SHAPE_KEY,
+                Map.of(DEFAULT_SHAPE_KEY, new ShapeContent.CubeFaces(faces, tintedFaces, overlays)),
+                toBindings(variantRotations),
+                parentChain);
+    }
+
+    private static Map<String, VariantBinding> toBindings(
+            Map<String, ModelResolver.VariantRotation> rotations) {
+        if (rotations == null || rotations.isEmpty()) return Collections.emptyMap();
+        LinkedHashMap<String, VariantBinding> out = new LinkedHashMap<>(rotations.size() * 2);
+        for (Map.Entry<String, ModelResolver.VariantRotation> e : rotations.entrySet()) {
+            out.put(e.getKey(), new VariantBinding(DEFAULT_SHAPE_KEY, e.getValue()));
         }
-        this.key = key;
-        this.faces = new EnumMap<>(faces);
-        this.tintedFaces = tintedFaces.isEmpty()
-                ? EnumSet.noneOf(FaceDir.class)
-                : EnumSet.copyOf(tintedFaces);
-        this.overlays = overlays.isEmpty()
-                ? new EnumMap<>(FaceDir.class)
-                : new EnumMap<>(overlays);
-        this.parentChain = parentChain;
-        this.variantRotations = Map.copyOf(variantRotations);
+        return out;
+    }
+
+    /**
+     * Convenience accessor for cube-shaped blocks: returns the face image
+     * for the default cube shape, or {@code null} if the default shape isn't
+     * a {@link ShapeContent.CubeFaces}.
+     */
+    public BufferedImage face(FaceDir d) {
+        ShapeContent sc = defaultShape();
+        return sc instanceof ShapeContent.CubeFaces cf ? cf.face(d) : null;
     }
 
     public BlockKey key() { return key; }
     public String parentChain() { return parentChain; }
+    public String defaultShapeKey() { return defaultShapeKey; }
+    public Map<String, ShapeContent> shapes() { return shapes; }
+    public Map<String, VariantBinding> variants() { return variants; }
 
-    /** True when any face or overlay carries a {@code tintindex} — needs a biome color at bake time. */
-    public boolean tinted() { return !tintedFaces.isEmpty() || !overlays.isEmpty(); }
-
-    public BufferedImage face(FaceDir dir) { return faces.get(dir); }
-
-    public Map<FaceDir, BufferedImage> faces() { return Map.copyOf(faces); }
-
-    public Map<String, ModelResolver.VariantRotation> variantRotations() { return variantRotations; }
+    public ShapeContent defaultShape() { return shapes.get(defaultShapeKey); }
 
     /**
-     * Return a copy of this model with per-face tinting applied:
-     * <ul>
-     *   <li>Faces in {@link #tintedFaces}: pixel-multiplied by {@code tintArgb}.</li>
-     *   <li>Faces with an overlay: overlay is tinted then alpha-composited on
-     *       top of the (possibly already tinted) base, reproducing vanilla's
-     *       two-element rendering for blocks like grass_block.</li>
-     *   <li>All other faces: copied unchanged.</li>
-     * </ul>
+     * True when any shape is a tinted {@link ShapeContent.CubeFaces}. The
+     * bake path applies a biome tint before splitting only when this is
+     * true (and only to the tinted shapes). Voxelized shapes never tint.
+     */
+    public boolean tinted() {
+        for (ShapeContent sc : shapes.values()) {
+            if (sc instanceof ShapeContent.CubeFaces cf && cf.isTinted()) return true;
+        }
+        return false;
+    }
+
+    /**
+     * Return a copy with biome tint applied to every tinted {@link
+     * ShapeContent.CubeFaces} shape. Voxelized shapes pass through
+     * unchanged (no vanilla slab/stair has a tintindex; if a future shape
+     * needs tinting it'll need its own withTint path).
      */
     public BlockModel withTint(int tintArgb) {
-        if (tintArgb == 0) return this;
-        EnumMap<FaceDir, BufferedImage> result = new EnumMap<>(faces);
-        for (FaceDir d : FaceDir.values()) {
-            boolean baseTinted = tintedFaces.contains(d);
-            boolean hasOverlay = overlays.containsKey(d);
-            if (!baseTinted && !hasOverlay) continue;
-
-            BufferedImage base = faces.get(d);
-            if (baseTinted) {
-                base = TintApplier.multiply(base, tintArgb);
+        if (tintArgb == 0 || !tinted()) return this;
+        LinkedHashMap<String, ShapeContent> tinted = new LinkedHashMap<>();
+        for (Map.Entry<String, ShapeContent> e : shapes.entrySet()) {
+            if (e.getValue() instanceof ShapeContent.CubeFaces cf) {
+                tinted.put(e.getKey(), cf.withTint(tintArgb));
+            } else {
+                tinted.put(e.getKey(), e.getValue());
             }
-            if (hasOverlay) {
-                BufferedImage tintedOverlay = TintApplier.multiply(overlays.get(d), tintArgb);
-                base = TintApplier.composite(base, tintedOverlay);
-            }
-            result.put(d, base);
         }
-        // Overlays are now composited into the bases — clear them in the result.
-        return new BlockModel(key, result, EnumSet.copyOf(tintedFaces),
-                Collections.emptyMap(), parentChain, variantRotations);
+        return new BlockModel(key, defaultShapeKey, tinted, variants, parentChain);
+    }
+
+    /**
+     * Synthesized {@code variantKey → VariantRotation} table for callers that
+     * predate multi-shape (e.g. anything reading the rotation but not yet
+     * threading shapeKey). Pulls the rotation field out of each binding.
+     */
+    public Map<String, ModelResolver.VariantRotation> variantRotations() {
+        if (variants.isEmpty()) return Collections.emptyMap();
+        LinkedHashMap<String, ModelResolver.VariantRotation> out = new LinkedHashMap<>();
+        for (Map.Entry<String, VariantBinding> e : variants.entrySet()) {
+            out.put(e.getKey(), e.getValue().rotation());
+        }
+        return out;
     }
 }

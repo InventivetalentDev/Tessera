@@ -2,10 +2,12 @@ package org.inventivetalent.tessera.skin;
 
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
+import org.inventivetalent.tessera.assets.model.BlockModel;
 import org.inventivetalent.tessera.assets.model.ModelResolver;
 import org.inventivetalent.tessera.core.BakeKey;
 import org.inventivetalent.tessera.core.BlockKey;
 import org.inventivetalent.tessera.core.ChunkCoord;
+import org.inventivetalent.tessera.core.FaceDir;
 import org.inventivetalent.tessera.skin.bake.BlockBaker;
 import org.inventivetalent.tessera.skin.store.HeadsStore;
 import org.inventivetalent.tessera.skin.store.TsraFormat;
@@ -13,6 +15,7 @@ import org.joml.Quaternionf;
 
 import java.util.Collection;
 import java.util.Collections;
+import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -23,16 +26,22 @@ import java.util.logging.Logger;
 
 /**
  * In-memory index over a {@link HeadsStore}: maps
- * {@code (BakeKey, ChunkCoord)} → {@link Entry} (skin payload).
+ * {@code (BakeKey, shapeKey, ChunkCoord)} → {@link ChunkEntry} (skin payload
+ * + outward-face mask).
  *
  * <p>The registry holds only the cheap shape of the catalog eagerly — for
- * every block, a chunk → skin-hash map plus a tiny variant-rotation table.
- * The heavy {@code value}/{@code signature}/{@code mineskinUuid} blobs (a few
- * KB each) live on disk in {@code .tsra} files and stream in through a
- * Caffeine cache the first time a {@link #get} call resolves them. A bundled
- * 1.4k-skin catalog used to weigh ~3 MB resident; this design keeps the
- * baseline footprint under 200 KB and lets the cache decide what to keep
- * warm based on access patterns.
+ * every block, a per-shape chunk → (hash, outward-mask) map plus a variant
+ * → (shape, rotation) table. The heavy
+ * {@code value}/{@code signature}/{@code mineskinUuid} blobs live on disk
+ * in {@code .tsra} files and stream in through a Caffeine cache the first
+ * time a {@link #chunksFor} call resolves them.
+ *
+ * <p>Multi-shape support: blocks like stairs have multiple model files
+ * referenced by their blockstate (straight, inner-corner, outer-corner).
+ * Each is stored as a separate shape under its model path. Cube blocks
+ * have a single shape under either the canonical model path or
+ * {@link BlockModel#DEFAULT_SHAPE_KEY}. Spawn-time picks the right shape
+ * via {@link #variantBindingFor}.
  *
  * <p>The store is layered (bundled-zip + runtime-folder, runtime shadows
  * bundled — see {@code LayeredHeadsStore}). All writes go to the runtime
@@ -40,23 +49,32 @@ import java.util.logging.Logger;
  */
 public final class HeadsRegistry {
 
+    /** Skin payload entry — content hash + MineSkin texture triple. */
     public record Entry(String skinHash, String textureValue, String textureSignature, String mineskinUuid) {}
+
+    /**
+     * Per-coord chunk record at runtime: resolved skin payload + the
+     * outward-face set baked at build time. Spawn reads outward faces from
+     * here directly so {@code FakeBlockFactory} stays shape-agnostic.
+     */
+    public record ChunkEntry(Entry skin, EnumSet<FaceDir> outwardFaces) {}
+
+    /** Lightweight in-memory chunk record: just hash + outward mask. */
+    private record StoredChunk(String skinHash, byte outwardMask) {}
+
+    /** Re-export for callers (BlockBreakListener et al.) that resolve a variant to a shape + rotation. */
+    public record ShapeVariantBinding(String shapeKey, ModelResolver.VariantRotation rotation) {}
 
     private final Logger logger;
     private final int gridN;
     private final String version;
     private final HeadsStore store;
-    // Lightweight projection of the catalog: chunk → hash + variants. Cheap
-    // to keep in memory even for thousands of blocks (~100 bytes per block).
-    private final Map<BakeKey, Map<ChunkCoord, String>> blockHashes = new ConcurrentHashMap<>();
-    private final Map<BlockKey, Map<String, ModelResolver.VariantRotation>> variantRotations = new ConcurrentHashMap<>();
-    // Add-only: blocks are never removed on invalidate so tab-completion sees a superset,
-    // which is fine — invalidated blocks get re-baked on next use.
+    // Per BakeKey: shapeKey → coord → stored chunk. Per BlockKey: variant → binding;
+    // and a defaultShapeKey lookup so callers without a variant get something usable.
+    private final Map<BakeKey, Map<String, Map<ChunkCoord, StoredChunk>>> blockShapes = new ConcurrentHashMap<>();
+    private final Map<BakeKey, String> defaultShape = new ConcurrentHashMap<>();
+    private final Map<BlockKey, Map<String, ShapeVariantBinding>> variantBindings = new ConcurrentHashMap<>();
     private final Set<BlockKey> knownBlocks = ConcurrentHashMap.newKeySet();
-    // Caffeine cache of skin payloads keyed by hash. Loader hits the store
-    // on miss. Dedup is automatic: a uniform stone block at gridN=4 has 64
-    // chunks pointing at ~3 unique hashes, so 64 get() calls trigger at
-    // most 3 loader invocations.
     private final Cache<String, Entry> skinCache;
 
     private HeadsRegistry(Logger logger, int gridN, String version, HeadsStore store,
@@ -70,20 +88,10 @@ public final class HeadsRegistry {
                 .build();
     }
 
-    /**
-     * Construct a registry without a backing store. Used by tests that
-     * register Entries directly and read them back without touching disk;
-     * the in-memory Caffeine cache absorbs both sides of the round-trip.
-     */
     public static HeadsRegistry empty(Logger logger, int gridN, String version) {
         return new HeadsRegistry(logger, gridN, version, NullStore.INSTANCE, 256);
     }
 
-    /**
-     * Construct a registry over {@code store}, populating the hash index
-     * from every block file in the store. Skin payloads are <i>not</i>
-     * loaded — they're streamed on demand through the Caffeine cache.
-     */
     public static HeadsRegistry loadFrom(Logger logger, HeadsStore store,
                                          int gridN, String version, int cacheCapacity) {
         HeadsRegistry reg = new HeadsRegistry(logger, gridN, version, store, cacheCapacity);
@@ -98,12 +106,8 @@ public final class HeadsRegistry {
             Optional<TsraFormat.Block> opt = store.readBlock(key);
             if (opt.isEmpty()) continue;
             TsraFormat.Block b = opt.get();
-            if (b.chunkHashes().isEmpty()) continue;
-            blockHashes.put(key, Map.copyOf(b.chunkHashes()));
-            knownBlocks.add(key.block());
-            if (!b.variants().isEmpty()) {
-                variantRotations.put(key.block(), Map.copyOf(b.variants()));
-            }
+            if (b.shapes().isEmpty()) continue;
+            ingestBlock(b);
             loaded++;
         }
         logger.info("[heads-registry] indexed " + loaded + " block(s) from store"
@@ -113,68 +117,96 @@ public final class HeadsRegistry {
                 : ""));
     }
 
+    private void ingestBlock(TsraFormat.Block b) {
+        LinkedHashMap<String, Map<ChunkCoord, StoredChunk>> shapeIndex = new LinkedHashMap<>();
+        for (Map.Entry<String, TsraFormat.Shape> se : b.shapes().entrySet()) {
+            LinkedHashMap<ChunkCoord, StoredChunk> chunkIndex = new LinkedHashMap<>(se.getValue().chunks().size() * 2);
+            for (Map.Entry<ChunkCoord, TsraFormat.ChunkRecord> ce : se.getValue().chunks().entrySet()) {
+                chunkIndex.put(ce.getKey(), new StoredChunk(ce.getValue().hash(), ce.getValue().outwardMask()));
+            }
+            shapeIndex.put(se.getKey(), Collections.unmodifiableMap(chunkIndex));
+        }
+        blockShapes.put(b.key(), Collections.unmodifiableMap(shapeIndex));
+        defaultShape.put(b.key(), pickDefaultShapeKey(shapeIndex));
+        knownBlocks.add(b.key().block());
+        if (!b.variants().isEmpty()) {
+            LinkedHashMap<String, ShapeVariantBinding> vCopy = new LinkedHashMap<>(b.variants().size() * 2);
+            for (Map.Entry<String, TsraFormat.ShapeVariantBinding> ve : b.variants().entrySet()) {
+                vCopy.put(ve.getKey(), new ShapeVariantBinding(
+                        ve.getValue().shapeKey(), ve.getValue().rotation()));
+            }
+            variantBindings.put(b.key().block(), Collections.unmodifiableMap(vCopy));
+        }
+    }
+
+    private static String pickDefaultShapeKey(Map<String, Map<ChunkCoord, StoredChunk>> shapeIndex) {
+        if (shapeIndex.containsKey(BlockModel.DEFAULT_SHAPE_KEY)) return BlockModel.DEFAULT_SHAPE_KEY;
+        return shapeIndex.keySet().iterator().next();
+    }
+
     /**
      * Re-walk the backing store and merge any newly visible blocks into
-     * the in-memory index. Idempotent: existing entries get
-     * overwritten with the same data (chunk hashes are content-addressed
-     * and don't change). Runtime-baked entries written to the writable
-     * layer survive — they're still in {@code listBlocks()} after the
-     * reload.
-     *
-     * <p>Used by {@code /tessera archives download} after a new addon pack
-     * lands on disk and {@code LayeredHeadsStore.reloadAddons} has made
-     * its blocks visible at the store layer.
-     *
-     * @return the net change in registered block count (positive when
-     *         the addon brought new blocks; zero if nothing new appeared)
+     * the in-memory index. Idempotent.
      */
     public synchronized int reindex() {
-        int before = blockHashes.size();
+        int before = blockShapes.size();
         populateIndex();
-        return blockHashes.size() - before;
+        return blockShapes.size() - before;
     }
 
     public int gridN() { return gridN; }
     public String version() { return version; }
 
     public boolean has(BakeKey key) {
-        Map<ChunkCoord, String> per = blockHashes.get(key);
-        return per != null && !per.isEmpty();
+        Map<String, Map<ChunkCoord, StoredChunk>> shapes = blockShapes.get(key);
+        if (shapes == null || shapes.isEmpty()) return false;
+        for (Map<ChunkCoord, StoredChunk> s : shapes.values()) if (!s.isEmpty()) return true;
+        return false;
     }
 
-    /** Untinted convenience overload — equivalent to {@code has(BakeKey.untinted(key))}. */
-    public boolean has(BlockKey key) {
-        return has(BakeKey.untinted(key));
-    }
+    public boolean has(BlockKey key) { return has(BakeKey.untinted(key)); }
 
-    public Optional<Entry> get(BakeKey key, ChunkCoord coord) {
-        Map<ChunkCoord, String> per = blockHashes.get(key);
-        if (per == null) return Optional.empty();
-        String hash = per.get(coord);
-        if (hash == null) return Optional.empty();
-        return Optional.ofNullable(loadByHash(hash));
+    /**
+     * Default shape key for this BakeKey (the canonical model the
+     * blockstate's no-rotation variant references, or
+     * {@link BlockModel#DEFAULT_SHAPE_KEY} for v1-migrated records). Used
+     * as a fallback when the runtime can't match a variant.
+     */
+    public String defaultShapeFor(BakeKey key) {
+        String s = defaultShape.get(key);
+        return s != null ? s : BlockModel.DEFAULT_SHAPE_KEY;
     }
 
     /**
-     * Resolve every chunk's skin in one shot, populating the Caffeine cache
-     * with any payloads that miss. The returned map is a fresh snapshot —
-     * mutating it has no effect on the registry. Entries whose payload
-     * lookup fails are omitted so callers see a consistent view (no half-
-     * loaded chunks).
+     * Resolve every chunk's skin in one shot for the given shape, populating
+     * the Caffeine cache with any payloads that miss. Returns an empty map
+     * when the BakeKey is unregistered or {@code shapeKey} resolves to no
+     * chunks.
      */
-    public Map<ChunkCoord, Entry> chunksFor(BakeKey key) {
-        Map<ChunkCoord, String> per = blockHashes.get(key);
-        if (per == null) return Collections.emptyMap();
-        Map<ChunkCoord, Entry> out = new LinkedHashMap<>(Math.max(8, per.size() * 2));
-        for (Map.Entry<ChunkCoord, String> e : per.entrySet()) {
-            Entry entry = loadByHash(e.getValue());
-            if (entry != null) out.put(e.getKey(), entry);
+    public Map<ChunkCoord, ChunkEntry> chunksFor(BakeKey key, String shapeKey) {
+        Map<String, Map<ChunkCoord, StoredChunk>> shapes = blockShapes.get(key);
+        if (shapes == null) return Collections.emptyMap();
+        Map<ChunkCoord, StoredChunk> stored = shapes.get(shapeKey);
+        if (stored == null) stored = shapes.get(defaultShape.get(key));
+        if (stored == null || stored.isEmpty()) return Collections.emptyMap();
+        LinkedHashMap<ChunkCoord, ChunkEntry> out = new LinkedHashMap<>(stored.size() * 2);
+        for (Map.Entry<ChunkCoord, StoredChunk> e : stored.entrySet()) {
+            Entry skin = loadByHash(e.getValue().skinHash());
+            if (skin == null) continue;
+            out.put(e.getKey(), new ChunkEntry(skin, decode(e.getValue().outwardMask())));
         }
         return out;
     }
 
-    /** Untinted convenience overload. */
-    public Map<ChunkCoord, Entry> chunksFor(BlockKey key) {
+    /**
+     * Convenience: chunks for {@link #defaultShapeFor default shape} of
+     * {@code key}.
+     */
+    public Map<ChunkCoord, ChunkEntry> chunksFor(BakeKey key) {
+        return chunksFor(key, defaultShapeFor(key));
+    }
+
+    public Map<ChunkCoord, ChunkEntry> chunksFor(BlockKey key) {
         return chunksFor(BakeKey.untinted(key));
     }
 
@@ -184,19 +216,35 @@ public final class HeadsRegistry {
     }
 
     /**
-     * Pre-load every skin payload for {@code key} into the cache without
-     * resolving full Entries. Used by the "preload on look" path so a
-     * subsequent {@link #get} on the mining hot-path doesn't hit disk.
-     * Returns the number of unique hashes warmed.
+     * Legacy single-coord lookup: returns the skin {@link Entry} for the
+     * default shape's chunk at {@code coord}, or empty if unregistered.
+     * Multi-shape callers should use {@link #chunksFor(BakeKey, String)}
+     * and read {@link ChunkEntry#skin()} per coord.
+     */
+    public Optional<Entry> get(BakeKey key, ChunkCoord coord) {
+        Map<String, Map<ChunkCoord, StoredChunk>> shapes = blockShapes.get(key);
+        if (shapes == null) return Optional.empty();
+        Map<ChunkCoord, StoredChunk> stored = shapes.get(defaultShapeFor(key));
+        if (stored == null) return Optional.empty();
+        StoredChunk sc = stored.get(coord);
+        if (sc == null) return Optional.empty();
+        return Optional.ofNullable(loadByHash(sc.skinHash()));
+    }
+
+    /**
+     * Pre-load every skin payload for {@code key}'s default shape into the
+     * cache without resolving full Entries. Used by the "preload on look"
+     * path so a subsequent {@link #chunksFor} on the mining hot-path
+     * doesn't hit disk.
      */
     public int warm(BakeKey key) {
-        Map<ChunkCoord, String> per = blockHashes.get(key);
-        if (per == null) return 0;
+        Map<String, Map<ChunkCoord, StoredChunk>> shapes = blockShapes.get(key);
+        if (shapes == null) return 0;
         int n = 0;
-        // Dedup by hash so a uniform block doesn't trigger 64 redundant
-        // loads — Caffeine.get is idempotent but we still want to count
-        // unique payloads.
-        Set<String> seen = new java.util.HashSet<>(per.values());
+        java.util.HashSet<String> seen = new java.util.HashSet<>();
+        for (Map<ChunkCoord, StoredChunk> stored : shapes.values()) {
+            for (StoredChunk sc : stored.values()) seen.add(sc.skinHash());
+        }
         for (String hash : seen) {
             if (skinCache.getIfPresent(hash) == null) {
                 Entry e = loadFromStore(hash);
@@ -221,29 +269,47 @@ public final class HeadsRegistry {
         return store.readSkin(hash).map(TsraFormat.Skin::toEntry).orElse(null);
     }
 
-    /**
-     * Register chunks for {@code key} discovered at runtime by
-     * {@link BlockBaker}. Replaces any existing entry for the same key. The
-     * payload Entries are written through to the store (if writable) so a
-     * restart finds them again, then prewarmed into the cache so the
-     * immediately-following spawn doesn't pay a disk round-trip.
-     */
-    public void register(BakeKey key, Map<ChunkCoord, Entry> chunks) {
-        register(key, chunks, Collections.emptyMap());
+    private static EnumSet<FaceDir> decode(byte mask) {
+        EnumSet<FaceDir> out = EnumSet.noneOf(FaceDir.class);
+        for (FaceDir d : FaceDir.values()) {
+            if ((mask & (1 << d.ordinal())) != 0) out.add(d);
+        }
+        return out;
     }
 
-    public void register(BakeKey key, Map<ChunkCoord, Entry> chunks,
-                         Map<String, ModelResolver.VariantRotation> variants) {
-        Map<ChunkCoord, String> chunkHashes = new LinkedHashMap<>(Math.max(8, chunks.size() * 2));
-        for (Map.Entry<ChunkCoord, Entry> e : chunks.entrySet()) {
-            chunkHashes.put(e.getKey(), e.getValue().skinHash());
-            skinCache.put(e.getValue().skinHash(), e.getValue());
+    /**
+     * Register the result of a bake. {@code shapes} carries the per-shape
+     * chunk index ({@code shapeKey → coord → ChunkEntry}); {@code variants}
+     * carries the variant → (shape, rotation) bindings; {@code defaultShapeKey}
+     * is the fallback used when a variant key doesn't match anything.
+     */
+    public void register(BakeKey key,
+                          String defaultShapeKey,
+                          Map<String, Map<ChunkCoord, ChunkEntry>> shapes,
+                          Map<String, ShapeVariantBinding> variants) {
+        if (shapes.isEmpty()) return;
+        // Build the in-memory index + the on-disk TsraFormat.Block in one pass.
+        LinkedHashMap<String, Map<ChunkCoord, StoredChunk>> memShapes = new LinkedHashMap<>();
+        LinkedHashMap<String, TsraFormat.Shape> diskShapes = new LinkedHashMap<>();
+        for (Map.Entry<String, Map<ChunkCoord, ChunkEntry>> se : shapes.entrySet()) {
+            LinkedHashMap<ChunkCoord, StoredChunk> memChunks = new LinkedHashMap<>(se.getValue().size() * 2);
+            LinkedHashMap<ChunkCoord, TsraFormat.ChunkRecord> diskChunks = new LinkedHashMap<>(se.getValue().size() * 2);
+            for (Map.Entry<ChunkCoord, ChunkEntry> ce : se.getValue().entrySet()) {
+                ChunkEntry ch = ce.getValue();
+                byte mask = TsraFormat.ChunkRecord.mask(ch.outwardFaces());
+                memChunks.put(ce.getKey(), new StoredChunk(ch.skin().skinHash(), mask));
+                diskChunks.put(ce.getKey(), new TsraFormat.ChunkRecord(ch.skin().skinHash(), mask));
+                skinCache.put(ch.skin().skinHash(), ch.skin());
+            }
+            memShapes.put(se.getKey(), Collections.unmodifiableMap(memChunks));
+            diskShapes.put(se.getKey(), new TsraFormat.Shape(diskChunks));
         }
-        blockHashes.put(key, Map.copyOf(chunkHashes));
+        blockShapes.put(key, Collections.unmodifiableMap(memShapes));
+        defaultShape.put(key, defaultShapeKey != null ? defaultShapeKey : pickDefaultShapeKey(memShapes));
         knownBlocks.add(key.block());
-        Map<String, ModelResolver.VariantRotation> variantsCopy =
+        Map<String, ShapeVariantBinding> varsCopy =
                 (variants == null || variants.isEmpty()) ? Collections.emptyMap() : Map.copyOf(variants);
-        if (!variantsCopy.isEmpty()) variantRotations.put(key.block(), variantsCopy);
+        if (!varsCopy.isEmpty()) variantBindings.put(key.block(), varsCopy);
 
         if (store.isWritable()) {
             try {
@@ -251,10 +317,18 @@ public final class HeadsRegistry {
                 // valid payloads — the block file is the index, so writing
                 // it last means a kill mid-bake leaves orphan skins (dead
                 // weight) instead of dangling references (broken catalog).
-                for (Entry e : chunks.values()) {
-                    store.writeSkin(TsraFormat.Skin.from(e));
+                for (Map<ChunkCoord, ChunkEntry> sh : shapes.values()) {
+                    for (ChunkEntry ce : sh.values()) {
+                        store.writeSkin(TsraFormat.Skin.from(ce.skin()));
+                    }
                 }
-                store.writeBlock(new TsraFormat.Block(key, chunkHashes, variantsCopy));
+                LinkedHashMap<String, TsraFormat.ShapeVariantBinding> diskVariants =
+                        new LinkedHashMap<>(varsCopy.size() * 2);
+                for (Map.Entry<String, ShapeVariantBinding> ve : varsCopy.entrySet()) {
+                    diskVariants.put(ve.getKey(), new TsraFormat.ShapeVariantBinding(
+                            ve.getValue().shapeKey(), ve.getValue().rotation()));
+                }
+                store.writeBlock(new TsraFormat.Block(key, diskShapes, diskVariants));
             } catch (RuntimeException re) {
                 logger.warning("[heads-registry] persistence write failed for " + key + ": " + re.getMessage());
             }
@@ -262,16 +336,68 @@ public final class HeadsRegistry {
     }
 
     /**
-     * Look up the world-space rotation for a specific blockstate variant of
-     * {@code key}. See the prior implementation's contract: identity is
-     * returned for unknown keys / variants so blocks predating the variant
-     * map render in canonical orientation.
+     * Single-shape register convenience used by the runtime baker. All
+     * variants bind to the same shape; the shape key is
+     * {@link BlockModel#DEFAULT_SHAPE_KEY}.
+     */
+    public void registerSingleShape(BakeKey key, Map<ChunkCoord, ChunkEntry> chunks,
+                                     Map<String, ModelResolver.VariantRotation> variants) {
+        LinkedHashMap<String, Map<ChunkCoord, ChunkEntry>> shapes = new LinkedHashMap<>(1);
+        shapes.put(BlockModel.DEFAULT_SHAPE_KEY, chunks);
+        LinkedHashMap<String, ShapeVariantBinding> bound = new LinkedHashMap<>();
+        if (variants != null) {
+            for (Map.Entry<String, ModelResolver.VariantRotation> e : variants.entrySet()) {
+                bound.put(e.getKey(), new ShapeVariantBinding(BlockModel.DEFAULT_SHAPE_KEY, e.getValue()));
+            }
+        }
+        register(key, BlockModel.DEFAULT_SHAPE_KEY, shapes, bound);
+    }
+
+    /**
+     * Legacy convenience used by tests + pre-multishape callers. Wraps the
+     * skin {@link Entry} map in {@link ChunkEntry}s with outward-face masks
+     * computed via {@link FaceDir#isOutwardAt} (cube assumption; correct for
+     * every caller that uses this legacy entry-point).
+     */
+    public void register(BakeKey key, Map<ChunkCoord, Entry> chunks) {
+        register(key, chunks, Collections.emptyMap());
+    }
+
+    public void register(BakeKey key, Map<ChunkCoord, Entry> chunks,
+                          Map<String, ModelResolver.VariantRotation> variants) {
+        LinkedHashMap<ChunkCoord, ChunkEntry> wrapped = new LinkedHashMap<>(chunks.size() * 2);
+        for (Map.Entry<ChunkCoord, Entry> e : chunks.entrySet()) {
+            ChunkCoord c = e.getKey();
+            EnumSet<FaceDir> outward = EnumSet.noneOf(FaceDir.class);
+            for (FaceDir d : FaceDir.values()) {
+                if (d.isOutwardAt(c.x(), c.y(), c.z(), gridN)) outward.add(d);
+            }
+            wrapped.put(c, new ChunkEntry(e.getValue(), outward));
+        }
+        registerSingleShape(key, wrapped, variants);
+    }
+
+    /**
+     * Resolve a variant key to its (shape, rotation) binding. Returns a
+     * binding pointing at the default shape with identity rotation when no
+     * variants are known or {@code variantKey} doesn't match.
+     */
+    public ShapeVariantBinding variantBindingFor(BlockKey key, String variantKey) {
+        Map<String, ShapeVariantBinding> binds = variantBindings.get(key);
+        if (binds != null && variantKey != null) {
+            ShapeVariantBinding b = binds.get(variantKey);
+            if (b != null) return b;
+        }
+        return new ShapeVariantBinding(BlockModel.DEFAULT_SHAPE_KEY,
+                new ModelResolver.VariantRotation(0, 0));
+    }
+
+    /**
+     * Backward-compat shim: look up the world-space rotation for a variant.
+     * Identity if unknown.
      */
     public Quaternionf rotationFor(BlockKey key, String variantKey) {
-        Map<String, ModelResolver.VariantRotation> variants = variantRotations.get(key);
-        if (variants == null || variantKey == null) return new Quaternionf();
-        ModelResolver.VariantRotation rot = variants.get(variantKey);
-        return rot != null ? rot.toQuat() : new Quaternionf();
+        return variantBindingFor(key, variantKey).rotation().toQuat();
     }
 
     /** Live view of every block currently registered (bundled + runtime, across all tints). */
@@ -279,21 +405,19 @@ public final class HeadsRegistry {
         return Collections.unmodifiableSet(knownBlocks);
     }
 
-    public Map<String, ModelResolver.VariantRotation> variantsFor(BlockKey key) {
-        Map<String, ModelResolver.VariantRotation> variants = variantRotations.get(key);
-        return variants == null ? Collections.emptyMap() : variants;
+    /**
+     * Variant bindings for the block. {@code VariantKey.pickMatching} runs
+     * against this map's key set to narrow a BlockData to a known binding.
+     */
+    public Map<String, ShapeVariantBinding> variantsFor(BlockKey key) {
+        Map<String, ShapeVariantBinding> binds = variantBindings.get(key);
+        return binds == null ? Collections.emptyMap() : binds;
     }
 
-    /**
-     * Forget every runtime registration for {@code block} (untinted plus
-     * every tinted variant) so the next request re-runs the bake. Bundled
-     * entries are cleared from the in-memory index too; the bundled file
-     * itself is jar-resource immutable and re-launching the plugin
-     * reloads them.
-     */
     public boolean invalidate(BlockKey block) {
-        variantRotations.remove(block);
-        boolean removed = blockHashes.keySet().removeIf(k -> k.block().equals(block));
+        variantBindings.remove(block);
+        boolean removed = blockShapes.keySet().removeIf(k -> k.block().equals(block));
+        defaultShape.keySet().removeIf(k -> k.block().equals(block));
         if (store.isWritable()) {
             try { store.removeBlock(block); }
             catch (RuntimeException re) { logger.warning("[heads-registry] store remove failed: " + re.getMessage()); }
@@ -301,18 +425,11 @@ public final class HeadsRegistry {
         return removed;
     }
 
-    /**
-     * Forget every runtime-registered (and bundled) entry. Used by
-     * {@code /tessera debug tilerot} since changing tile rotation needs
-     * fresh PNGs uploaded — the dedup hash is computed pre-rotation, so
-     * existing cached entries would otherwise mask the change.
-     */
     public int invalidateAll() {
-        int n = blockHashes.size();
-        blockHashes.clear();
-        variantRotations.clear();
-        // skinCache stays — its only consumer is findByHash, which is
-        // bypassed when TileRotations.consumeStale is true.
+        int n = blockShapes.size();
+        blockShapes.clear();
+        defaultShape.clear();
+        variantBindings.clear();
         if (store.isWritable()) {
             try { store.clearBlocks(); }
             catch (RuntimeException re) { logger.warning("[heads-registry] store clear failed: " + re.getMessage()); }
@@ -321,23 +438,15 @@ public final class HeadsRegistry {
     }
 
     /**
-     * Build a runtime {@link HeadSkin} from a registry entry. The skin has no
-     * tile bitmaps (those were baked away into the MineSkin texture) and no
-     * chunk bookkeeping — it exists purely to feed
-     * {@code HeadItemFactory#build} on the spawn path.
+     * Build a runtime {@link HeadSkin} from a registry entry's skin payload.
      */
     public static HeadSkin toHeadSkin(Entry e) {
-        // Derive the id from skinHash so multiple chunks sharing a skin map
-        // to the same HeadSkin.id() and HeadItemFactory's ItemStack cache
-        // actually hits across chunks and across breaks (a random id here
-        // would defeat that cache entirely).
         HeadSkin h = new HeadSkin(HeadSkin.idFromHash(e.skinHash()), e.skinHash(), Collections.emptyMap());
         h.texture(e.textureValue(), e.textureSignature(), e.mineskinUuid());
         h.state(SkinState.COMPLETED);
         return h;
     }
 
-    /** Internal no-op store for {@link #empty(Logger, int, String)} / tests that don't need persistence. */
     private static final class NullStore implements HeadsStore {
         static final NullStore INSTANCE = new NullStore();
         @Override public Optional<TsraFormat.Manifest> manifest() { return Optional.empty(); }

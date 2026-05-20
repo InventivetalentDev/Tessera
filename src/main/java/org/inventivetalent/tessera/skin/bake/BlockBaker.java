@@ -3,6 +3,7 @@ package org.inventivetalent.tessera.skin.bake;
 import org.inventivetalent.tessera.assets.fetch.McAssetClient;
 import org.inventivetalent.tessera.assets.model.BlockModel;
 import org.inventivetalent.tessera.assets.model.ModelResolver;
+import org.inventivetalent.tessera.assets.model.ShapeContent;
 import org.inventivetalent.tessera.core.BakeKey;
 import org.inventivetalent.tessera.core.BlockKey;
 import org.inventivetalent.tessera.core.ChunkCoord;
@@ -20,6 +21,8 @@ import org.inventivetalent.tessera.split.TextureSplitter;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -36,22 +39,27 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
- * Bakes a single block on demand: resolve assets → split textures → pack
+ * Bakes a single block on demand: resolve assets → per-shape split → pack
  * heads → assemble PNGs → upload to MineSkin → register in
  * {@link HeadsRegistry}. Used both by the runtime listener (when a player
  * breaks a block we haven't baked yet) and the {@link BakeMain} CLI.
  *
- * <p>Concurrency: dedups simultaneous requests for the same {@link BlockKey}
+ * <p>Multi-shape handling: a block whose blockstate references multiple
+ * model paths (stairs: straight + inner + outer) bakes each shape's chunks
+ * separately and registers all of them in one {@link HeadsRegistry#register}
+ * call. Skin dedup happens automatically — {@code HeadSkinPacker}
+ * content-hashes per chunk, so a uniform-textured stair uploads few unique
+ * skins across all three shapes combined.
+ *
+ * <p>Concurrency: dedups simultaneous requests for the same {@link BakeKey}
  * via {@link #inflight} so a single block break doesn't kick off N parallel
- * bakes if the player spams. The future returned by {@link #bake} resolves
- * to {@code true} if the block was successfully registered; {@code false}
- * means it was unbakeable (non-cube, tinted, asset 404, etc.).
+ * bakes if the player spams.
  *
  * <p>Cache bypass: when the global "stale" flag in
- * {@link TileRotations#consumeStale} is set, the next bake
- * for any block tells {@link SkinUploader} to skip its skin-hash cache and
- * upload fresh PNGs. This is how {@code /tessera debug tilerot} forces a
- * re-upload after changing in-plane rotation.
+ * {@link TileRotations#consumeStale} is set, the next bake for any block
+ * tells {@link SkinUploader} to skip its skin-hash cache and upload fresh
+ * PNGs. This is how {@code /tessera debug tilerot} forces a re-upload
+ * after changing in-plane rotation.
  */
 public final class BlockBaker {
 
@@ -66,16 +74,10 @@ public final class BlockBaker {
     private final SkinDiskCache diskCache;
     private final Path pngDir;
     private final Executor executor;
+    private final int gridN;
 
     private final Map<BakeKey, CompletableFuture<Boolean>> inflight = new ConcurrentHashMap<>();
 
-    /**
-     * Bake-plan summary fired through the optional callback passed to
-     * {@link #bake(BakeKey, Consumer)} once the splitter and packer have
-     * decided what's actually going to happen. {@code needUpload} is the
-     * subset of {@code uniqueHeads} that missed both the in-memory registry
-     * and the persistent disk cache and will hit MineSkin.
-     */
     public record Plan(int totalChunks, int uniqueHeads, int needUpload) {}
 
     public BlockBaker(Logger logger,
@@ -89,7 +91,8 @@ public final class BlockBaker {
                       Executor executor) {
         this.logger = logger;
         this.debug = debug;
-        this.resolver = new ModelResolver(assets, logger, mcVersion);
+        this.gridN = registry.gridN();
+        this.resolver = new ModelResolver(assets, logger, mcVersion, this.gridN);
         this.splitter = new TextureSplitter();
         this.packer = new HeadSkinPacker();
         this.assembler = new SkinAssembler();
@@ -104,16 +107,6 @@ public final class BlockBaker {
         return bake(key, null);
     }
 
-    /**
-     * Like {@link #bake(BakeKey)} but invokes {@code onPlan} as soon as the
-     * splitter/packer/cache lookup finishes and we know how many MineSkin
-     * uploads this bake actually needs. {@code onPlan} runs on the bake
-     * executor thread, so dispatch to the main thread inside it if it touches
-     * Bukkit state. Skipped entirely when an inflight bake for the same key
-     * is already running (the second caller just rides the existing future).
-     *
-     * <p>For untinted blocks, callers should pass {@link BakeKey#untinted(BlockKey)}.
-     */
     public CompletableFuture<Boolean> bake(BakeKey key, Consumer<Plan> onPlan) {
         return inflight.computeIfAbsent(key, k -> startBake(k, onPlan));
     }
@@ -142,55 +135,53 @@ public final class BlockBaker {
 
         Optional<BlockModel> modelOpt = resolver.resolve(key.block());
         if (modelOpt.isEmpty()) {
-            if (debug.getAsBoolean()) logger.info("[runtime-bake] " + key + " unsupported (non-cube or asset missing)");
+            if (debug.getAsBoolean()) logger.info("[runtime-bake] " + key + " unsupported (no resolvable shape)");
             return false;
         }
         BlockModel model = modelOpt.get();
         if (model.tinted()) {
             if (key.tintArgb() == 0) {
-                // Tinted block requested without a tint — caller (e.g.
-                // build-time) didn't resolve a biome color. Skip; the
-                // runtime listener will provide a tint when available.
                 if (debug.getAsBoolean()) logger.info("[runtime-bake] " + key + " skipped (tinted block, no tint provided)");
                 return false;
             }
-            // Multiply all six face PNGs by the resolved tint. Downstream
-            // hashes (chunk content + post-paint PNG) diverge naturally per
-            // tint, so SkinDiskCache dedupes uploads across breaks of the
-            // same block in the same biome but distinguishes biomes.
             model = model.withTint(key.tintArgb());
         }
 
-        int gridN = registry.gridN();
-        List<ChunkSpec> chunks = splitter.split(model, gridN);
-        HeadSkinPacker.Result packed = packer.pack(chunks);
-        logger.info("[runtime-bake] " + key + " — " + chunks.size() + " chunks → "
-                + packed.uniqueHeads().size() + " unique heads"
+        // Per-shape pipeline. Collect (shape → list of ChunkSpec) plus the
+        // union of unique heads across shapes (so we de-dup uploads).
+        LinkedHashMap<String, List<ChunkSpec>> chunksPerShape = new LinkedHashMap<>();
+        LinkedHashMap<String, HeadSkinPacker.Result> packedPerShape = new LinkedHashMap<>();
+        LinkedHashMap<String, HeadSkin> uniqueHeads = new LinkedHashMap<>();
+        for (Map.Entry<String, ShapeContent> se : model.shapes().entrySet()) {
+            List<ChunkSpec> chunks = splitter.split(se.getValue(), gridN);
+            if (chunks.isEmpty()) continue;
+            HeadSkinPacker.Result packed = packer.pack(chunks);
+            chunksPerShape.put(se.getKey(), chunks);
+            packedPerShape.put(se.getKey(), packed);
+            for (HeadSkin h : packed.uniqueHeads()) uniqueHeads.putIfAbsent(h.contentHash(), h);
+        }
+        if (chunksPerShape.isEmpty()) {
+            logger.warning("[runtime-bake] " + key + " all shapes empty after split");
+            return false;
+        }
+        int totalChunks = chunksPerShape.values().stream().mapToInt(List::size).sum();
+        logger.info("[runtime-bake] " + key + " — " + chunksPerShape.size() + " shape(s), "
+                + totalChunks + " chunks → " + uniqueHeads.size() + " unique heads"
                 + (bypassCache ? " (cache bypassed)" : ""));
 
-        // Two-tier cache lookup:
-        // 1. In-memory registry (cheap; survives within a session) — keyed
-        //    by pre-paint contentHash. Skipped when bypassCache is set
-        //    (i.e. just after a TileRotations change) because the post-paint
-        //    bytes will differ even though the pre-paint hash hasn't.
-        // 2. Persistent SkinDiskCache — keyed by the SHA-256 of the actual
-        //    painted PNG bytes, so any combination of source/tile rotations
-        //    that produces the same final image hits cache regardless of how
-        //    we got there. Survives plugin restarts.
-        // Heads that miss both tiers get assembled + queued for upload.
-        List<HeadSkin> needUpload = new java.util.ArrayList<>();
-        java.util.Map<HeadSkin, String> pngHashByHead = new java.util.HashMap<>();
-        for (HeadSkin head : packed.uniqueHeads()) {
+        // Two-tier cache lookup, same as before but operating on the union
+        // of unique heads across all shapes.
+        List<HeadSkin> needUpload = new ArrayList<>();
+        Map<HeadSkin, String> pngHashByHead = new HashMap<>();
+        for (HeadSkin head : uniqueHeads.values()) {
             HeadsRegistry.Entry registryHit = bypassCache ? null : registry.findByHash(head.contentHash());
             if (registryHit != null) {
                 head.texture(registryHit.textureValue(), registryHit.textureSignature(), registryHit.mineskinUuid());
                 head.state(SkinState.COMPLETED);
                 continue;
             }
-            // Have to assemble before we can hash post-paint bytes — but the
-            // assemble step is cheap (pure local PNG paint, no I/O of size).
-            java.nio.file.Path pngPath = assembler.assemble(head, pngDir);
-            byte[] pngBytes = java.nio.file.Files.readAllBytes(pngPath);
+            Path pngPath = assembler.assemble(head, pngDir);
+            byte[] pngBytes = Files.readAllBytes(pngPath);
             String pngHash = SkinDiskCache.hashPng(pngBytes);
             pngHashByHead.put(head, pngHash);
             SkinDiskCache.Entry diskHit = diskCache == null ? null : diskCache.find(pngHash);
@@ -204,7 +195,7 @@ public final class BlockBaker {
 
         if (onPlan != null) {
             try {
-                onPlan.accept(new Plan(chunks.size(), packed.uniqueHeads().size(), needUpload.size()));
+                onPlan.accept(new Plan(totalChunks, uniqueHeads.size(), needUpload.size()));
             } catch (RuntimeException re) {
                 logger.warning("[runtime-bake] " + key + " onPlan callback threw: " + re.getMessage());
             }
@@ -213,11 +204,9 @@ public final class BlockBaker {
         if (!needUpload.isEmpty()) {
             logger.info("[runtime-bake] " + key + " uploading " + needUpload.size()
                     + " new skins ("
-                    + (packed.uniqueHeads().size() - needUpload.size())
+                    + (uniqueHeads.size() - needUpload.size())
                     + " hit cache)");
             SkinUploader.Run run = uploader.upload(needUpload, pngDir.getParent(), h -> {
-                // As each upload completes, persist the (png-hash → texture)
-                // entry so a kill mid-bake still preserves work done so far.
                 if (diskCache != null && h.state() == SkinState.COMPLETED) {
                     String pngHash = pngHashByHead.get(h);
                     if (pngHash != null) {
@@ -228,65 +217,79 @@ public final class BlockBaker {
             run.future().get(5, TimeUnit.MINUTES);
         }
 
-        Map<ChunkCoord, HeadsRegistry.Entry> chunkMap = new LinkedHashMap<>();
+        // Stitch shapes back together: per-shape map<ChunkCoord, ChunkEntry>.
+        LinkedHashMap<String, Map<ChunkCoord, HeadsRegistry.ChunkEntry>> shapeChunks = new LinkedHashMap<>();
         int completedHeads = 0, erroredHeads = 0;
-        for (HeadSkin head : packed.uniqueHeads()) {
-            if (head.state() == SkinState.COMPLETED) completedHeads++;
+        for (HeadSkin h : uniqueHeads.values()) {
+            if (h.state() == SkinState.COMPLETED) completedHeads++;
             else erroredHeads++;
         }
-        packed.chunkToHead().forEach((chunk, head) -> {
-            if (head.state() == SkinState.COMPLETED) {
-                chunkMap.put(chunk.coord(), new HeadsRegistry.Entry(
-                        head.contentHash(), head.textureValue(),
-                        head.textureSignature(), head.mineskinUuid()));
+        int totalRegistered = 0;
+        for (Map.Entry<String, HeadSkinPacker.Result> entry : packedPerShape.entrySet()) {
+            LinkedHashMap<ChunkCoord, HeadsRegistry.ChunkEntry> chunkMap = new LinkedHashMap<>();
+            entry.getValue().chunkToHead().forEach((chunk, head) -> {
+                if (head.state() == SkinState.COMPLETED) {
+                    chunkMap.put(chunk.coord(), new HeadsRegistry.ChunkEntry(
+                            new HeadsRegistry.Entry(head.contentHash(), head.textureValue(),
+                                    head.textureSignature(), head.mineskinUuid()),
+                            chunk.outwardFaces()));
+                }
+            });
+            if (!chunkMap.isEmpty()) {
+                shapeChunks.put(entry.getKey(), chunkMap);
+                totalRegistered += chunkMap.size();
             }
-        });
-        // Always log completion stats so the user can spot rate-limit /
-        // upload errors that produce partially-baked blocks (visible as
-        // "missing chunks" in /tessera test).
+        }
         logger.info("[runtime-bake] " + key + " complete: "
-                + completedHeads + "/" + packed.uniqueHeads().size() + " heads succeeded, "
-                + chunkMap.size() + "/" + chunks.size() + " chunks registered"
+                + completedHeads + "/" + uniqueHeads.size() + " heads succeeded, "
+                + totalRegistered + "/" + totalChunks + " chunks registered"
                 + (erroredHeads > 0 ? " (" + erroredHeads + " heads errored - retry to fill in)" : ""));
 
-        if (chunkMap.isEmpty()) {
+        if (shapeChunks.isEmpty()) {
             logger.warning("[runtime-bake] " + key + " produced 0 completed chunks");
             return false;
         }
 
         // Don't register partial bakes: a half-populated registry entry
         // would short-circuit the listener's `registry.has(...)` check and
-        // we'd never retry the failed chunks. The succeeded uploads are
-        // already in SkinDiskCache (keyed by post-paint PNG hash), so the
-        // next bake() call hits cache for the working subset and only
-        // re-attempts the failures — no duplicate MineSkin uploads.
-        if (chunkMap.size() < chunks.size()) {
+        // we'd never retry the failed chunks.
+        if (totalRegistered < totalChunks) {
             logger.warning("[runtime-bake] " + key + " incomplete ("
-                    + chunkMap.size() + "/" + chunks.size()
+                    + totalRegistered + "/" + totalChunks
                     + " chunks); leaving unregistered so the next bake retries the failures.");
             return false;
         }
 
-        registry.register(key, chunkMap, model.variantRotations());
+        // Variant bindings: variantKey → (shapeKey, rotation). Shapes
+        // referenced by missing variants fall back to the model's default
+        // shape (handled in ModelResolver).
+        LinkedHashMap<String, HeadsRegistry.ShapeVariantBinding> variantBindings = new LinkedHashMap<>();
+        for (Map.Entry<String, BlockModel.VariantBinding> ve : model.variants().entrySet()) {
+            BlockModel.VariantBinding vb = ve.getValue();
+            String shapeKey = shapeChunks.containsKey(vb.shapeKey()) ? vb.shapeKey() : model.defaultShapeKey();
+            variantBindings.put(ve.getKey(), new HeadsRegistry.ShapeVariantBinding(shapeKey, vb.rotation()));
+        }
+
+        registry.register(key, model.defaultShapeKey(), shapeChunks, variantBindings);
 
         Files.createDirectories(pngDir);
         return true;
     }
 
     /**
-     * Diagnostic-only: split + pack + assemble {@code key}'s textures locally
-     * and write one PNG per chunk into {@code outDir} with chunk-coordinate
-     * filenames (e.g. {@code 3-3-1.png}). No upload, no registry side-effects.
-     * Lets a developer inspect exactly what bytes are being painted into each
-     * chunk's head canvas — pairs with {@code /tessera debug dumppng}.
+     * Diagnostic-only: split + pack + assemble {@code key}'s default-shape
+     * textures locally and write one PNG per chunk into {@code outDir} with
+     * chunk-coordinate filenames (e.g. {@code 3-3-1.png}). No upload, no
+     * registry side-effects. For multi-shape blocks only the default shape
+     * is dumped — corner shapes can be inspected via runtime tests.
      */
     public int dumpPng(BlockKey key, Path outDir) throws IOException {
         Optional<BlockModel> modelOpt = resolver.resolve(key);
         if (modelOpt.isEmpty()) return 0;
         BlockModel model = modelOpt.get();
 
-        int gridN = registry.gridN();
-        List<ChunkSpec> chunks = splitter.split(model, gridN);
+        ShapeContent defaultShape = model.defaultShape();
+        List<ChunkSpec> chunks = splitter.split(defaultShape, gridN);
         HeadSkinPacker.Result packed = packer.pack(chunks);
 
         Files.createDirectories(outDir);
@@ -301,11 +304,9 @@ public final class BlockBaker {
             Files.copy(tmp, named);
             written++;
         }
-        // Clean up the UUID-named intermediate files SkinAssembler wrote.
         try (var stream = Files.list(outDir)) {
             stream.filter(p -> {
                 String n = p.getFileName().toString();
-                // Heuristic: UUID has 4 dashes. Coord names have 2.
                 return n.endsWith(".png") && n.length() > 12 && n.chars().filter(ch -> ch == '-').count() >= 4;
             }).forEach(p -> { try { Files.deleteIfExists(p); } catch (IOException ignored) {} });
         }

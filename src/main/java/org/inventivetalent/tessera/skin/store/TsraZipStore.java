@@ -43,6 +43,7 @@ public final class TsraZipStore implements HeadsStore {
     private final ZipFile zipFile;            // null in classpath mode
     private final java.util.Map<String, byte[]> entries; // null in file mode
     private final TsraFormat.Manifest manifest;
+    private final int gridN;
 
     private TsraZipStore(Logger logger, ZipFile zipFile,
                          java.util.Map<String, byte[]> entries,
@@ -51,6 +52,9 @@ public final class TsraZipStore implements HeadsStore {
         this.zipFile = zipFile;
         this.entries = entries;
         this.manifest = manifest;
+        // Required by v1 → v2 block-format compatibility; default to 4 when
+        // the manifest is missing (matches every existing v1 bake).
+        this.gridN = manifest != null ? manifest.gridN() : 4;
     }
 
     public static TsraZipStore fromFile(Logger logger, java.nio.file.Path path) throws IOException {
@@ -107,7 +111,7 @@ public final class TsraZipStore implements HeadsStore {
         byte[] bytes = readEntry(name);
         if (bytes == null) return Optional.empty();
         try {
-            return Optional.of(TsraFormat.readBlock(bytes));
+            return Optional.of(TsraFormat.readBlock(bytes, gridN));
         } catch (IOException io) {
             logger.log(Level.WARNING, "[tsra-zip] failed to parse " + name, io);
             return Optional.empty();

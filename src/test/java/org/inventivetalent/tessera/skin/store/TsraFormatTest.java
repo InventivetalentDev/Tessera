@@ -42,11 +42,11 @@ class TsraFormatTest {
         variants.put("axis=x", new VariantRotation(90, 90));
         variants.put("facing=west", new VariantRotation(0, -90));
 
-        byte[] bytes = TsraFormat.writeBlock(new TsraFormat.Block(key, chunks, variants));
+        byte[] bytes = TsraFormat.writeBlock(TsraFormat.Block.singleShape(key, chunks, variants));
         TsraFormat.Block out = TsraFormat.readBlock(bytes);
         assertEquals(key, out.key());
         assertEquals(new TreeMap<>(chunks), new TreeMap<>(out.chunkHashes()));
-        assertEquals(new TreeMap<>(variants), new TreeMap<>(out.variants()));
+        assertEquals(new TreeMap<>(variants), new TreeMap<>(out.variantRotations()));
     }
 
     @Test
@@ -70,6 +70,14 @@ class TsraFormatTest {
         bytes[4] = (byte) 99; // bump version
         assertThrows(TsraFormat.MalformedTsraException.class,
                 () -> TsraFormat.readManifest(bytes));
+    }
+
+    @Test
+    void payloadBytesCarryLatestFormatVersion() throws IOException {
+        byte[] manifestBytes = TsraFormat.writeManifest(new TsraFormat.Manifest(4, "1.21", "p"));
+        byte[] skinBytes = TsraFormat.writeSkin(new TsraFormat.Skin("h", "v", "s", null));
+        assertEquals(TsraFormat.FORMAT_VERSION, manifestBytes[4]);
+        assertEquals(TsraFormat.FORMAT_VERSION, skinBytes[4]);
     }
 
     @Test
@@ -102,8 +110,8 @@ class TsraFormatTest {
         // Magic + version are identical; type byte at offset 5 must differ.
         assertArrayEquals(new byte[]{'T', 'S', 'R', 'A'},
                 new byte[]{manifestBytes[0], manifestBytes[1], manifestBytes[2], manifestBytes[3]});
-        assertEquals((byte) 1, manifestBytes[4]);
-        assertEquals((byte) 1, skinBytes[4]);
+        assertEquals(TsraFormat.FORMAT_VERSION, manifestBytes[4]);
+        assertEquals(TsraFormat.FORMAT_VERSION, skinBytes[4]);
         assertEquals(TsraFormat.TYPE_MANIFEST, manifestBytes[5]);
         assertEquals(TsraFormat.TYPE_SKIN, skinBytes[5]);
     }

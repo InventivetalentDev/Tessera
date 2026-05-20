@@ -1,6 +1,7 @@
 package org.inventivetalent.tessera.split;
 
 import org.inventivetalent.tessera.assets.model.BlockModel;
+import org.inventivetalent.tessera.assets.model.ShapeContent;
 import org.inventivetalent.tessera.core.ChunkCoord;
 import org.inventivetalent.tessera.core.ChunkSpec;
 import org.inventivetalent.tessera.core.FaceDir;
@@ -11,53 +12,70 @@ import java.util.EnumMap;
 import java.util.List;
 
 /**
- * Slices a {@link BlockModel}'s 6 face textures into N×N tiles and emits one
- * {@link ChunkSpec} per visible chunk in the gridN³ volume.
+ * Slices a {@link ShapeContent.CubeFaces}' 6 face textures into N×N tiles
+ * and emits one {@link ChunkSpec} per visible chunk in the gridN³ volume,
+ * OR returns pre-voxelized chunks unchanged for non-cube shapes.
  *
- * <p>Coordinate mapping (the tricky bit): Minecraft block-space is right-handed
- * with +X east, +Y up, +Z south. Vanilla face textures are 16×16 PNGs whose
- * U axis (image X) and V axis (image Y) are oriented per-face. For our
- * sub-block split we want the chunk at grid coord {@code (cx,cy,cz)} to
- * sample the (sx,sy) tile of each outward face such that the image lines up
- * across adjacent chunks — i.e. neighbouring chunks' tiles are pixel-adjacent.
+ * <p>For non-cube shapes the splitting work happened upstream in
+ * {@code ShapeVoxelizer} at model-resolve time; the splitter is just a
+ * thin pass-through. For cube shapes the existing per-face tile slicing
+ * applies, including the {@link SourceRotations} / {@link SourceFlips}
+ * debug knobs.
+ *
+ * <p>Coordinate mapping for the cube path: Minecraft block-space is
+ * right-handed with +X east, +Y up, +Z south. Vanilla face textures are
+ * 16×16 PNGs whose U axis (image X) and V axis (image Y) are oriented
+ * per-face. For our sub-block split we want the chunk at grid coord
+ * {@code (cx,cy,cz)} to sample the (sx,sy) tile of each outward face such
+ * that the image lines up across adjacent chunks.
  *
  * <p>Per-face source-tile mapping. Sides match vanilla
  * {@code BlockElementFace.defaultFaceUV} verbatim. UP and DOWN match
  * each other rather than vanilla's mismatched cube up/down convention,
  * because the player-head model used by ItemDisplay rendering shares
- * the skin layout's image-Y = +Z direction on both TOP and BOTTOM
- * (verified empirically — vanilla's cube {@code image-Y = -Z} on DOWN
- * does not apply to the skull model).
+ * the skin layout's image-Y = +Z direction on both TOP and BOTTOM.
  * <ul>
- *   <li>UP    (+Y) — tileX = cx,             tileY = cz             (image-X = +X, image-Y = +Z)</li>
- *   <li>DOWN  (-Y) — tileX = cx,             tileY = cz             (image-X = +X, image-Y = +Z, head-model convention)</li>
- *   <li>NORTH (-Z) — tileX = (N-1) − cx,     tileY = (N-1) − cy     (image-X = -X, image-Y = -Y)</li>
- *   <li>SOUTH (+Z) — tileX = cx,             tileY = (N-1) − cy     (image-X = +X, image-Y = -Y)</li>
- *   <li>EAST  (+X) — tileX = (N-1) − cz,     tileY = (N-1) − cy     (image-X = -Z, image-Y = -Y)</li>
- *   <li>WEST  (-X) — tileX = cz,             tileY = (N-1) − cy     (image-X = +Z, image-Y = -Y)</li>
+ *   <li>UP    (+Y) — tileX = cx,             tileY = cz</li>
+ *   <li>DOWN  (-Y) — tileX = cx,             tileY = cz (head-model convention)</li>
+ *   <li>NORTH (-Z) — tileX = (N-1) − cx,     tileY = (N-1) − cy</li>
+ *   <li>SOUTH (+Z) — tileX = cx,             tileY = (N-1) − cy</li>
+ *   <li>EAST  (+X) — tileX = (N-1) − cz,     tileY = (N-1) − cy</li>
+ *   <li>WEST  (-X) — tileX = cz,             tileY = (N-1) − cy</li>
  * </ul>
- * If an axis flip turns out wrong on a given face during step 11 tuning, fix
- * it in {@link #sourceTile} alone — every other module references chunks by
- * {@link ChunkCoord} not by source UV.
  *
- * <p>Interior chunks (no outward face) are skipped entirely in v1: they're
- * invisible while the block is whole and the directional-shrink effect
- * never exposes them. Visible chunk count = {@code 6n² − 12n + 8} (= 56 for
- * n=4, 8 for n=2).
+ * <p>Interior chunks (no outward face) are skipped: they're invisible
+ * while the block is whole and the directional-shrink effect never
+ * exposes them. Visible chunk count for a uniform cube = {@code 6n² − 12n + 8}
+ * (= 56 for n=4, 8 for n=2).
  */
 public final class TextureSplitter {
 
+    /**
+     * Legacy entry point: splits the model's default shape. Use the
+     * {@link ShapeContent}-typed overload for explicit per-shape control on
+     * multi-shape blocks (stairs).
+     */
     public List<ChunkSpec> split(BlockModel model, int gridN) {
+        return split(model.defaultShape(), gridN);
+    }
+
+    /**
+     * Split a shape into the per-cell {@link ChunkSpec} list the bake
+     * pipeline consumes. Dispatches by shape type: cube-faces go through
+     * the per-face slicing path, voxelized shapes pass through unchanged.
+     */
+    public List<ChunkSpec> split(ShapeContent shape, int gridN) {
         if (gridN < 1) throw new IllegalArgumentException("gridN must be ≥ 1");
-        // Vanilla textures are 16x16. Pre-slice each face into a gridN x gridN tile array.
-        // Each face's source is optionally pre-rotated by SourceRotations.of(faceDir),
-        // then optionally mirrored by SourceFlips.of(faceDir). Both are user-tunable
-        // "rotate/mirror the whole block face" knobs, distinct from per-tile in-plane
-        // rotation (TileRotations). Order: rotate THEN flip (matches what the debug
-        // commands' messages claim).
+        return switch (shape) {
+            case ShapeContent.CubeFaces cf -> splitCube(cf, gridN);
+            case ShapeContent.VoxelizedShape vs -> vs.chunks();
+        };
+    }
+
+    private List<ChunkSpec> splitCube(ShapeContent.CubeFaces cube, int gridN) {
         EnumMap<FaceDir, BufferedImage[][]> tilesByFace = new EnumMap<>(FaceDir.class);
         for (FaceDir d : FaceDir.values()) {
-            BufferedImage rotated = rotate90Multiples(model.face(d), SourceRotations.of(d));
+            BufferedImage rotated = rotate90Multiples(cube.face(d), SourceRotations.of(d));
             BufferedImage flipped = applyFlip(rotated, SourceFlips.of(d));
             tilesByFace.put(d, sliceFace(flipped, gridN));
         }
@@ -148,17 +166,6 @@ public final class TextureSplitter {
     private static int[] sourceTile(FaceDir d, int cx, int cy, int cz, int n) {
         int last = n - 1;
         return switch (d) {
-            // UP uses (cx, cz) — image-Y = +Z. DOWN's mapping is also
-            // (cx, cz) here, but the head model's BOTTOM UV actually has
-            // image-Y = -Z (matching vanilla cube DOWN, not TOP); we
-            // compensate via a default V-flip in SourceFlips.DOWN rather
-            // than diverging the lookup here. Sides match the cube
-            // convention verbatim.
-            //
-            // The earlier `(cx, last - cz)` on UP V-flipped at the
-            // chunk-grid level: invisible on V-symmetric textures
-            // (oak_planks, stone) but visibly mirrored on V-asymmetric
-            // ones (oak_log_top rings, pumpkin_top stem).
             case UP    -> new int[] { cx,        cz };
             case DOWN  -> new int[] { cx,        cz };
             case NORTH -> new int[] { last - cx, last - cy };

@@ -32,7 +32,7 @@ class TsraFolderStoreTest {
         TsraFolderStore writer = new TsraFolderStore(LOG, tmp);
         writer.writeManifest(new TsraFormat.Manifest(4, "1.21.4", "test"));
         writer.writeSkin(new TsraFormat.Skin("h-obs", "v1", "s1", "u1"));
-        writer.writeBlock(new TsraFormat.Block(
+        writer.writeBlock(TsraFormat.Block.singleShape(
                 BakeKey.untinted(BlockKey.of("minecraft:obsidian")),
                 Map.of(new ChunkCoord(0, 0, 0), "h-obs"),
                 Map.of()));
@@ -64,9 +64,9 @@ class TsraFolderStoreTest {
         TsraFolderStore store = new TsraFolderStore(LOG, tmp);
         BakeKey untinted = BakeKey.untinted(BlockKey.of("minecraft:grass_block"));
         BakeKey tinted = new BakeKey(BlockKey.of("minecraft:grass_block"), 0xFF7fbf2e);
-        store.writeBlock(new TsraFormat.Block(untinted,
+        store.writeBlock(TsraFormat.Block.singleShape(untinted,
                 Map.of(new ChunkCoord(0, 0, 0), "h-untinted"), Map.of()));
-        store.writeBlock(new TsraFormat.Block(tinted,
+        store.writeBlock(TsraFormat.Block.singleShape(tinted,
                 Map.of(new ChunkCoord(0, 0, 0), "h-tinted"), Map.of()));
 
         // Both files are addressable by their distinct filenames.
@@ -80,11 +80,11 @@ class TsraFolderStoreTest {
     void removeBlockClearsEveryTintedVariant(@TempDir Path tmp) {
         TsraFolderStore store = new TsraFolderStore(LOG, tmp);
         BlockKey block = BlockKey.of("minecraft:grass_block");
-        store.writeBlock(new TsraFormat.Block(BakeKey.untinted(block),
+        store.writeBlock(TsraFormat.Block.singleShape(BakeKey.untinted(block),
                 Map.of(new ChunkCoord(0, 0, 0), "h1"), Map.of()));
-        store.writeBlock(new TsraFormat.Block(new BakeKey(block, 0xFF7fbf2e),
+        store.writeBlock(TsraFormat.Block.singleShape(new BakeKey(block, 0xFF7fbf2e),
                 Map.of(new ChunkCoord(0, 0, 0), "h2"), Map.of()));
-        store.writeBlock(new TsraFormat.Block(new BakeKey(block, 0xFFff0000),
+        store.writeBlock(TsraFormat.Block.singleShape(new BakeKey(block, 0xFFff0000),
                 Map.of(new ChunkCoord(0, 0, 0), "h3"), Map.of()));
 
         store.removeBlock(block);
@@ -107,7 +107,7 @@ class TsraFolderStoreTest {
     void clearBlocksLeavesSkinsIntact(@TempDir Path tmp) {
         TsraFolderStore store = new TsraFolderStore(LOG, tmp);
         store.writeSkin(new TsraFormat.Skin("h", "v", "s", null));
-        store.writeBlock(new TsraFormat.Block(BakeKey.untinted(BlockKey.of("minecraft:stone")),
+        store.writeBlock(TsraFormat.Block.singleShape(BakeKey.untinted(BlockKey.of("minecraft:stone")),
                 Map.of(new ChunkCoord(0, 0, 0), "h"), Map.of()));
         store.clearBlocks();
         assertEquals(0, store.listBlocks().size());
@@ -119,13 +119,13 @@ class TsraFolderStoreTest {
     void variantRotationsRoundTrip(@TempDir Path tmp) {
         TsraFolderStore store = new TsraFolderStore(LOG, tmp);
         BakeKey key = BakeKey.untinted(BlockKey.of("minecraft:oak_log"));
-        store.writeBlock(new TsraFormat.Block(key,
+        store.writeBlock(TsraFormat.Block.singleShape(key,
                 Map.of(new ChunkCoord(0, 0, 0), "h"),
                 Map.of("axis=x", new VariantRotation(90, 90),
                         "axis=z", new VariantRotation(90, 0))));
         TsraFormat.Block b = store.readBlock(key).orElseThrow();
-        assertEquals(new VariantRotation(90, 90), b.variants().get("axis=x"));
-        assertEquals(new VariantRotation(90, 0), b.variants().get("axis=z"));
+        assertEquals(new VariantRotation(90, 90), b.variantRotations().get("axis=x"));
+        assertEquals(new VariantRotation(90, 0), b.variantRotations().get("axis=z"));
     }
 
     @Test

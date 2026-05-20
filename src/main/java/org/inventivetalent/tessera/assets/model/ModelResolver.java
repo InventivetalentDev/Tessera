@@ -35,22 +35,29 @@ import java.util.logging.Logger;
  * blockstate → model parent chain on mcasset.cloud and downloading the
  * referenced textures.
  *
- * <p><b>v1 cube-only:</b> a model is accepted iff it has a full-cube element
- * (from=[0,0,0] to=[16,16,16]) with all 6 face textures resolvable. Anything
- * else returns {@link Optional#empty()} and a one-shot fine-log. Property
- * variants are ignored — we always pick the first variant. Tint detection
- * is driven by {@code tintindex} in the model JSON (not a hardcoded list),
- * so any block whose model faces carry {@code tintindex} automatically surfaces
- * as {@link BlockModel#tinted()} without needing further configuration.
+ * <p>Output model can hold multiple shapes (one per distinct model path the
+ * blockstate references) plus a variant → (shape, rotation) lookup table.
+ * Stairs end up with three shapes (straight, inner, outer corners); slabs
+ * + cubes with one. Each shape is either:
+ * <ul>
+ *   <li>{@link ShapeContent.CubeFaces} — when all elements are full cubes
+ *       ({@code from=[0,0,0] to=[16,16,16]}). The classic Tessera path,
+ *       supporting biome tint + tinted overlays (grass_block, leaves).</li>
+ *   <li>{@link ShapeContent.VoxelizedShape} — when the model has any
+ *       non-cube element. The {@link ShapeVoxelizer} cuts it into chunks
+ *       directly. No tint / overlay support on this path in v1.</li>
+ * </ul>
+ *
+ * <p>Tint detection is driven by {@code tintindex} in the model JSON (not
+ * a hardcoded list), and only cube-faces shapes can be tinted.
  */
 public final class ModelResolver {
 
     /**
-     * Model parents that {@link #resolveModelChain} prefers as the
-     * "terminal" name when walking up the inheritance chain. Used purely
-     * for diagnostic / display purposes ({@link BlockModel#parentChain()})
-     * since the actual cube-ness check now happens in
-     * {@link #pickFaceTextures} via full-cube bounds checking.
+     * Model parents that resolve treats as "the cube terminal" purely for
+     * informational logging ({@link BlockModel#parentChain}). The actual
+     * cube-vs-voxelize decision happens by inspecting whether every element
+     * is a full cube, not by parent name.
      */
     private static final Set<String> CUBE_PARENTS = Set.of(
             "minecraft:block/cube",
@@ -69,12 +76,16 @@ public final class ModelResolver {
     private final McAssetClient client;
     private final Logger logger;
     private final String version;
+    private final int gridN;
+    private final ShapeVoxelizer voxelizer;
     private final Map<BlockKey, Optional<BlockModel>> cache = new HashMap<>();
 
-    public ModelResolver(McAssetClient client, Logger logger, String version) {
+    public ModelResolver(McAssetClient client, Logger logger, String version, int gridN) {
         this.client = client;
         this.logger = logger;
         this.version = version;
+        this.gridN = gridN;
+        this.voxelizer = new ShapeVoxelizer(logger);
     }
 
     public Optional<BlockModel> resolve(BlockKey key) {
@@ -92,35 +103,51 @@ public final class ModelResolver {
                 return Optional.empty();
             }
 
-            ResolvedModel resolved = resolveModelChain(vs.canonicalModelName);
-            // Cube-ness is determined by `pickFaceTextures` finding a
-            // full-cube element with all 6 face textures, not by parent
-            // name. The earlier `CUBE_PARENTS.contains(...)` gate excluded
-            // grass_block and leaves (whose `block/leaves` / `block/grass_block`
-            // parents define elements directly under `block/block` rather
-            // than via a named cube parent), even though they're full
-            // 1×1×1 cubes that bake fine. Slabs / stairs / fences fail
-            // downstream anyway: no full-cube element is found, bases come back
-            // empty, and the 6-face check below kicks them out.
+            // Enumerate distinct model paths referenced by any variant.
+            // Resolve each in turn — they share the model-chain logic and
+            // texture loader.
+            LinkedHashMap<String, ShapeContent> shapes = new LinkedHashMap<>();
+            String terminalParent = null;
+            for (String modelPath : distinctModels(vs)) {
+                ResolvedModel resolved = resolveModelChain(modelPath);
+                if (terminalParent == null) terminalParent = resolved.terminalParent;
 
-            FaceData fd = pickFaceTextures(key, resolved);
-            if (fd.bases.size() != 6) {
-                logger.fine("[" + key + "] failed to resolve all 6 faces, got " + fd.bases.keySet());
+                ShapeContent content = resolveShape(key, resolved);
+                if (content == null) {
+                    logger.fine("[" + key + "] model " + modelPath + " failed to resolve a shape");
+                    continue;
+                }
+                shapes.put(modelPath, content);
+            }
+
+            if (shapes.isEmpty()) {
+                logger.fine("[" + key + "] no resolvable shapes");
                 return Optional.empty();
             }
-            // Player-head skins don't support partial transparency — a
-            // transparent face texture (leaves, glass, ice, stained glass)
-            // would render as a hole in the ItemDisplay entity. Reject any
-            // block whose base textures have at least one non-opaque pixel.
-            // Overlay textures (e.g. grass_block side overlay) are composited
-            // onto their opaque base faces, so the final baked pixel is always
-            // fully opaque; overlays are not checked here.
-            if (hasTransparentPixels(fd.bases)) {
-                logger.fine("[" + key + "] skipping — base textures contain transparent pixels");
+
+            // Drop block if any shape has transparent pixels (player-head skins
+            // don't support partial transparency).
+            if (anyShapeHasTransparency(shapes)) {
+                logger.fine("[" + key + "] skipping — face textures contain transparent pixels");
                 return Optional.empty();
             }
-            return Optional.of(new BlockModel(key, fd.bases, fd.tinted, fd.overlays,
-                    resolved.terminalParent, vs.rotations()));
+
+            String defaultShapeKey = shapes.containsKey(vs.canonicalModelName)
+                    ? vs.canonicalModelName
+                    : shapes.keySet().iterator().next();
+
+            // Variant bindings: (shapeKey, rotation). If a variant pointed
+            // at a model we couldn't resolve, fall back to the default
+            // shape so the variant key still has a usable binding.
+            LinkedHashMap<String, BlockModel.VariantBinding> variants = new LinkedHashMap<>();
+            for (Map.Entry<String, VariantEntry> e : vs.entries.entrySet()) {
+                VariantEntry ve = e.getValue();
+                String shapeKey = shapes.containsKey(ve.modelPath) ? ve.modelPath : defaultShapeKey;
+                variants.put(e.getKey(), new BlockModel.VariantBinding(
+                        shapeKey, new VariantRotation(ve.xDeg, ve.yDeg)));
+            }
+
+            return Optional.of(new BlockModel(key, defaultShapeKey, shapes, variants, terminalParent));
         } catch (McAssetClient.AssetNotFoundException missing) {
             logger.fine("[" + key + "] no blockstate on mcasset.cloud (" + missing.getMessage() + ")");
             return Optional.empty();
@@ -131,6 +158,53 @@ public final class ModelResolver {
             logger.log(Level.WARNING, "[" + key + "] unexpected error resolving model", re);
             return Optional.empty();
         }
+    }
+
+    /**
+     * Decide whether a resolved model is a full-cube (potentially tinted +
+     * overlaid) or needs voxelizing. The discriminator is: every
+     * {@code elements} entry must be {@code from=[0,0,0] to=[16,16,16]} for
+     * the cube path. As soon as any element has different bounds, the
+     * voxelizer takes over.
+     */
+    private ShapeContent resolveShape(BlockKey key, ResolvedModel resolved) throws IOException {
+        if (resolved.elements == null || resolved.elements.isEmpty()) {
+            logger.fine("[" + key + "] model has no elements; skipping");
+            return null;
+        }
+        boolean allFullCube = true;
+        for (JsonElement el : resolved.elements) {
+            if (!isFullCubeBounds(el.getAsJsonObject())) { allFullCube = false; break; }
+        }
+        if (allFullCube) {
+            CubeFaceData fd = pickFaceTextures(key, resolved);
+            if (fd.bases.size() != 6) {
+                logger.fine("[" + key + "] cube path: failed to resolve all 6 faces, got " + fd.bases.keySet());
+                return null;
+            }
+            return new ShapeContent.CubeFaces(fd.bases, fd.tinted, fd.overlays);
+        }
+        // Voxelize. Use the model chain's resolved texture bindings so
+        // {@code "#side"} → texture path lookups work.
+        ShapeVoxelizer.TextureLoader loader = this::loadTexture;
+        ShapeVoxelizer.Result vr = voxelizer.voxelize(resolved.elements, gridN,
+                resolved.textureVars, loader);
+        if (vr.chunks().isEmpty()) {
+            logger.fine("[" + key + "] voxelizer produced no chunks");
+            return null;
+        }
+        return new ShapeContent.VoxelizedShape(vr.chunks());
+    }
+
+    private static boolean anyShapeHasTransparency(Map<String, ShapeContent> shapes) {
+        for (ShapeContent sc : shapes.values()) {
+            if (sc instanceof ShapeContent.CubeFaces cf && hasTransparentPixels(cf.faces())) return true;
+            // VoxelizedShape tiles are sliced from non-transparent vanilla
+            // block textures; the cube-faces transparency rule mostly
+            // exists to skip glass/leaves at the cube path. Re-check would
+            // be expensive (per-tile scan) so we accept the risk.
+        }
+        return false;
     }
 
     /**
@@ -149,17 +223,7 @@ public final class ModelResolver {
      * world {@code +X} — north→east, which matches what
      * {@code facing=east} variants expect). JOML's {@code rotateY} is the
      * standard right-hand rule (counter-clockwise from above), so we negate
-     * the angle here. {@code x} matches in both — vanilla's pitch and JOML's
-     * {@code rotateX} are both right-handed, verified against
-     * {@code oak_log[axis=z]} which uses {@code x=90} alone.
-     *
-     * <p>For axis-only blocks (logs) the sign was invisible because
-     * {@code ±X} is the same axis. The bug surfaced only after
-     * {@link #pickFaceTextures} was switched to read per-face textures from
-     * the model's {@code elements} (commit 432a91f) — previously the
-     * {@code switch (parent)} mismapped {@code orientable}'s front from
-     * north to south, accidentally cancelling the toQuat sign error for
-     * {@code facing=east}/{@code west}.
+     * the angle here.
      */
     public record VariantRotation(int xDeg, int yDeg) {
         public Quaternionf toQuat() {
@@ -170,47 +234,57 @@ public final class ModelResolver {
     }
 
     /**
-     * Carries the per-block result of parsing a blockstate JSON: which model
-     * to bake textures from (canonical = the variant with no x/y rotation
-     * hints, falling back to the first one), plus a map from variant key
-     * (e.g. {@code "axis=x"}, {@code "facing=west,lit=false"}) to the
-     * rotation that variant requires for correct world orientation.
-     *
-     * <p>Used by {@link #doResolve} to feed both the texture pipeline and
-     * the runtime spawn-time rotation lookup. Variant keys mirror vanilla's
-     * format (alphabetically sorted, comma-separated). Multipart blockstates
-     * collapse to empty since per-state rotation isn't meaningful for them
-     * in v1.
+     * Per-blockstate result of {@link #parseVariants}: which model is
+     * "canonical" (the variant with no x/y rotation hints — preferred as
+     * the default shape key) and the full table of variant key → (model
+     * path, rotation). Multipart blockstates collapse to one canonical
+     * entry — variant-driven shape selection isn't meaningful for them in
+     * v1.
      */
-    public record BlockstateVariants(String canonicalModelName, Map<String, VariantRotation> rotations) {}
+    public record BlockstateVariants(String canonicalModelName, Map<String, VariantEntry> entries) {}
+
+    /**
+     * One blockstate variant entry: which model file it uses + the runtime
+     * rotation. Model paths are normalized to include the {@code minecraft:}
+     * namespace.
+     */
+    public record VariantEntry(String modelPath, int xDeg, int yDeg) {}
 
     private static BlockstateVariants parseVariants(JsonObject blockstate) {
         if (blockstate.has("variants")) {
             JsonObject variants = blockstate.getAsJsonObject("variants");
             String canonical = null;
             String firstSeen = null;
-            Map<String, VariantRotation> rotations = new LinkedHashMap<>();
+            Map<String, VariantEntry> entries = new LinkedHashMap<>();
             for (Map.Entry<String, JsonElement> e : variants.entrySet()) {
                 JsonElement v = e.getValue();
                 JsonObject obj = v.isJsonArray() ? v.getAsJsonArray().get(0).getAsJsonObject() : v.getAsJsonObject();
-                String model = obj.get("model").getAsString();
+                String model = withDefaultNamespace(obj.get("model").getAsString());
                 int xDeg = obj.has("x") ? obj.get("x").getAsInt() : 0;
                 int yDeg = obj.has("y") ? obj.get("y").getAsInt() : 0;
-                rotations.put(e.getKey(), new VariantRotation(xDeg, yDeg));
+                entries.put(e.getKey(), new VariantEntry(model, xDeg, yDeg));
                 if (firstSeen == null) firstSeen = model;
                 if (canonical == null && xDeg == 0 && yDeg == 0) canonical = model;
             }
-            return new BlockstateVariants(canonical != null ? canonical : firstSeen, rotations);
+            return new BlockstateVariants(canonical != null ? canonical : firstSeen, entries);
         }
         if (blockstate.has("multipart")) {
             JsonArray arr = blockstate.getAsJsonArray("multipart");
             if (!arr.isEmpty()) {
                 JsonElement applied = arr.get(0).getAsJsonObject().get("apply");
                 JsonObject obj = applied.isJsonArray() ? applied.getAsJsonArray().get(0).getAsJsonObject() : applied.getAsJsonObject();
-                return new BlockstateVariants(obj.get("model").getAsString(), Collections.emptyMap());
+                return new BlockstateVariants(withDefaultNamespace(obj.get("model").getAsString()),
+                        Collections.emptyMap());
             }
         }
         return new BlockstateVariants(null, Collections.emptyMap());
+    }
+
+    private static java.util.Set<String> distinctModels(BlockstateVariants vs) {
+        java.util.LinkedHashSet<String> set = new java.util.LinkedHashSet<>();
+        if (vs.canonicalModelName != null) set.add(vs.canonicalModelName);
+        for (VariantEntry e : vs.entries.values()) set.add(e.modelPath);
+        return set;
     }
 
     private static final class ResolvedModel {
@@ -228,14 +302,9 @@ public final class ModelResolver {
      * Walk the parent chain to the root, accumulating texture-variable bindings
      * (child-first wins) and capturing the first {@code elements} array seen
      * (vanilla overrides elements wholesale, so first-seen wins). The terminal
-     * parent is the first {@link #CUBE_PARENTS} entry encountered, which is
-     * what gates the cube-only filter upstream.
-     *
-     * <p>We always walk to the root rather than breaking at the first cube
-     * parent: vanilla's {@code elements} live in {@code block/cube} (the
-     * deepest parent), but most blocks' immediate parent is something like
-     * {@code cube_column} or {@code orientable} (also in {@link #CUBE_PARENTS}).
-     * Stopping early would never see the elements.
+     * parent is the first {@link #CUBE_PARENTS} entry encountered (used only
+     * for informational {@link BlockModel#parentChain}; the cube-vs-voxel
+     * decision is data-driven, not name-driven).
      */
     private ResolvedModel resolveModelChain(String firstModel) throws IOException {
         Map<String, String> tex = new LinkedHashMap<>();
@@ -292,14 +361,15 @@ public final class ModelResolver {
         return s;
     }
 
-    private record FaceData(
+    private record CubeFaceData(
             EnumMap<FaceDir, BufferedImage> bases,
             EnumSet<FaceDir> tinted,
             EnumMap<FaceDir, BufferedImage> overlays) {}
 
     /**
      * Extract per-face base textures, tintindex flags, and overlay textures
-     * by reading all full-cube {@code elements} entries.
+     * from a model that's been determined to be cube-shaped. Identical to
+     * the pre-multishape logic.
      *
      * <p>Pass 1 — first full-cube element: loads the 6 base textures and
      * records which faces carry {@code "tintindex": 0} (i.e. should be
@@ -311,29 +381,24 @@ public final class ModelResolver {
      * that has a {@code tintindex} is collected; at bake time it is tinted then
      * composited on top of the base face, reproducing vanilla's two-layer render.
      */
-    private FaceData pickFaceTextures(BlockKey key, ResolvedModel m) throws IOException {
+    private CubeFaceData pickFaceTextures(BlockKey key, ResolvedModel m) throws IOException {
         EnumMap<FaceDir, BufferedImage> bases = new EnumMap<>(FaceDir.class);
-        if (m.elements == null) {
-            logger.fine("[" + key + "] no elements in model chain; skipping");
-            return new FaceData(bases, EnumSet.noneOf(FaceDir.class), new EnumMap<>(FaceDir.class));
-        }
-
-        boolean foundBase = false;
         EnumSet<FaceDir> tinted = EnumSet.noneOf(FaceDir.class);
         EnumMap<FaceDir, BufferedImage> overlays = new EnumMap<>(FaceDir.class);
+        if (m.elements == null) return new CubeFaceData(bases, tinted, overlays);
 
+        boolean foundBase = false;
         for (JsonElement el : m.elements) {
             JsonObject elem = el.getAsJsonObject();
             if (!isFullCubeBounds(elem) || !elem.has("faces")) continue;
             JsonObject facesJson = elem.getAsJsonObject("faces");
 
             if (!foundBase) {
-                // First full-cube element — extract the 6 base textures.
                 for (FaceDir d : FaceDir.values()) {
                     String jsonName = d.jsonName();
                     if (!facesJson.has(jsonName)) {
                         logger.fine("[" + key + "] face " + jsonName + " missing from cube element");
-                        return new FaceData(new EnumMap<>(FaceDir.class),
+                        return new CubeFaceData(new EnumMap<>(FaceDir.class),
                                 EnumSet.noneOf(FaceDir.class), new EnumMap<>(FaceDir.class));
                     }
                     JsonObject faceObj = facesJson.getAsJsonObject(jsonName);
@@ -345,7 +410,6 @@ public final class ModelResolver {
                 }
                 foundBase = true;
             } else {
-                // Subsequent full-cube elements — treat as tinted overlays.
                 for (FaceDir d : FaceDir.values()) {
                     String jsonName = d.jsonName();
                     if (!facesJson.has(jsonName)) continue;
@@ -360,10 +424,10 @@ public final class ModelResolver {
         if (!foundBase) {
             logger.fine("[" + key + "] no full-cube element with faces; skipping");
         }
-        return new FaceData(bases, tinted, overlays);
+        return new CubeFaceData(bases, tinted, overlays);
     }
 
-    private static boolean hasTransparentPixels(EnumMap<FaceDir, BufferedImage> faces) {
+    private static boolean hasTransparentPixels(Map<FaceDir, BufferedImage> faces) {
         for (BufferedImage img : faces.values()) {
             int w = img.getWidth();
             int h = img.getHeight();
@@ -387,11 +451,7 @@ public final class ModelResolver {
     private BufferedImage loadTexture(String ref) throws IOException {
         if (ref == null) throw new IOException("missing texture variable");
         String path = stripNamespace(ref);
-        // Block textures live under textures/<path>.png with leading "block/"
-        // already part of the path (e.g. "block/stone").
         byte[] png = client.fetch(version, "textures/" + path + ".png");
-        // ImageIO.read returns null for unrecognised formats; null-check before
-        // normalizeToArgb dereferences it.
         BufferedImage decoded = ImageIO.read(new ByteArrayInputStream(stripColorChunks(png)));
         if (decoded == null) throw new IOException("failed to decode " + ref);
         BufferedImage full = normalizeToArgb(decoded);
@@ -440,19 +500,8 @@ public final class ModelResolver {
 
     /**
      * Ensures the decoded image is {@link BufferedImage#TYPE_INT_ARGB} with raw
-     * pixel values unchanged. This is necessary for grayscale PNGs: Java's
-     * {@code TYPE_BYTE_GRAY} uses {@code CS_GRAY} (linear, gamma=1.0). Any call
-     * to {@link BufferedImage#getRGB} on such an image converts linear-gray →
-     * sRGB by applying the gamma-2.2 encode, brightening mid-range values
-     * (e.g. stone gray 126 → ~182). Vanilla stone.png is a grayscale PNG, which
-     * is why the baked skin appeared ~46% too bright while RGBA textures like
-     * light_gray_concrete were unaffected.
-     *
-     * <p>For grayscale images the raster is read directly — {@code getSample()}
-     * returns the raw stored byte without colour-space conversion — and the grey
-     * value is mapped to R=G=B in the ARGB output. For all other types the image
-     * is already in an sRGB-compatible space and a plain {@link Graphics2D} copy
-     * (no colour conversion) suffices.
+     * pixel values unchanged. Necessary for grayscale PNGs (vanilla stone.png
+     * is one) so {@code getRGB} doesn't apply a gamma encode.
      */
     private static BufferedImage normalizeToArgb(BufferedImage src) {
         if (src.getType() == BufferedImage.TYPE_INT_ARGB) return src;

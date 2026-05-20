@@ -92,7 +92,7 @@ class AddonPackLoaderTest {
         TsraFolderStore folder = new TsraFolderStore(LOG, scratch);
         folder.writeManifest(new TsraFormat.Manifest(gridN, "1.21.4", "test"));
         folder.writeSkin(new TsraFormat.Skin(hash, "value", "sig", null));
-        folder.writeBlock(new TsraFormat.Block(
+        folder.writeBlock(TsraFormat.Block.singleShape(
                 BakeKey.untinted(BlockKey.of(blockId)),
                 Map.of(new ChunkCoord(0, 0, 0), hash),
                 Map.of()));

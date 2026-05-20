@@ -95,10 +95,10 @@ class JsonMigratorTest {
 
         BakeKey logKey = BakeKey.untinted(BlockKey.of("minecraft:oak_log"));
         TsraFormat.Block log = target.readBlock(logKey).orElseThrow();
-        assertEquals(90, log.variants().get("axis=x").xDeg());
-        assertEquals(90, log.variants().get("axis=x").yDeg());
+        assertEquals(90, log.variantRotations().get("axis=x").xDeg());
+        assertEquals(90, log.variantRotations().get("axis=x").yDeg());
         // y omitted in legacy JSON → defaults to 0.
-        assertEquals(0, log.variants().get("axis=z").yDeg());
+        assertEquals(0, log.variantRotations().get("axis=z").yDeg());
 
         BakeKey grassTinted = BakeKey.parse("minecraft:grass_block#7fbf2e");
         assertTrue(target.readBlock(grassTinted).isPresent(),

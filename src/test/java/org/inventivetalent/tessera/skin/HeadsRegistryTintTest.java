@@ -31,8 +31,8 @@ class HeadsRegistryTintTest {
         reg.register(BakeKey.untinted(LEAVES), Map.of(COORD, untinted));
         reg.register(new BakeKey(LEAVES, 0xFF71A74D), Map.of(COORD, plains));
 
-        assertEquals(untinted, reg.chunksFor(BakeKey.untinted(LEAVES)).get(COORD));
-        assertEquals(plains, reg.chunksFor(new BakeKey(LEAVES, 0xFF71A74D)).get(COORD));
+        assertEquals(untinted, reg.chunksFor(BakeKey.untinted(LEAVES)).get(COORD).skin());
+        assertEquals(plains, reg.chunksFor(new BakeKey(LEAVES, 0xFF71A74D)).get(COORD).skin());
     }
 
     @Test
@@ -46,7 +46,7 @@ class HeadsRegistryTintTest {
         // runtime tinted variant, otherwise debug commands like
         // /tessera test would surface a biome-specific bake.
         assertTrue(reg.has(LEAVES));
-        assertEquals("untinted", reg.chunksFor(LEAVES).get(COORD).skinHash());
+        assertEquals("untinted", reg.chunksFor(LEAVES).get(COORD).skin().skinHash());
     }
 
     @Test

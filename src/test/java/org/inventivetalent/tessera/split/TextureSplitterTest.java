@@ -12,6 +12,7 @@ import java.awt.Color;
 import java.awt.image.BufferedImage;
 import java.util.EnumMap;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -85,6 +86,6 @@ class TextureSplitterTest {
             }
             faces.put(d, img);
         }
-        return new BlockModel(BlockKey.of("minecraft:test"), faces, false, "test");
+        return new BlockModel(BlockKey.of("minecraft:test"), faces, false, "test", Map.of());
     }
 }

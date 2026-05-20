@@ -99,14 +99,17 @@ three priorities, falling through on miss and unioning `listBlocks`:
 Files inside any catalog:
 
 - `manifest.tsra` — declares `gridN` and producer.
-- `blocks/<encoded-bake-key>.tsra` — for each block, the
-  `(ChunkCoord → skin-hash)` index plus any blockstate `variants` rotation
-  hints. Tinted bakes use the encoded `BakeKey.toString()` form (e.g.
+- `blocks/<encoded-bake-key>.tsra` — for each block, a multi-shape index
+  (one entry per distinct model the blockstate references) plus a variant
+  → (shape, rotation) lookup table. A plain cube has one shape; stairs
+  have three (straight, inner-corner, outer-corner); etc. Each shape
+  carries its sparse `(ChunkCoord → (hash, outwardMask))` map. Tinted
+  bakes use the encoded `BakeKey.toString()` form (e.g.
   `minecraft__grass_block--7fbf2e.tsra`).
 - `skins/<hash[0..2]>/<hash>.tsra` — content-addressed skin payload
-  (MineSkin `value`/`signature`/`mineskinUuid`). Shared between blocks; a
-  uniform stone block at gridN=4 references the same 3 payload files for
-  all 56 visible chunks.
+  (MineSkin `value`/`signature`/`mineskinUuid`). Shared between blocks and
+  across shapes within a block; a uniform-textured stair reuses the same
+  payloads across its three shape models.
 
 The registry only holds the chunk → skin-hash index eagerly. Skin payloads
 (~2 KB each base64 blobs) load on demand from disk through a Caffeine LRU
@@ -119,9 +122,13 @@ hit.
 
 Schema versioning: each file starts with the `"TSRA"` magic, a 1-byte
 format version, a 1-byte payload type (manifest / block / skin), and two
-reserved bytes. Readers reject unknown magic / version (treated as
-corruption) so a hand-edited file surfaces rather than silently parses as
-empty.
+reserved bytes. Current Block format is `v2` (multi-shape + per-chunk
+outward-face masks); `v1` files (single-shape, no outward masks — every
+pre-multishape bake) read transparently with synthesized shape key
+`"default"` and outward masks recomputed via `FaceDir.isOutwardAt` (cube
+assumption, correct for every v1 bake). Writers always emit `v2`.
+Readers reject unknown magic / version (treated as corruption) so a
+hand-edited file surfaces rather than silently parses as empty.
 
 One-shot JSON migration: if a server upgrades from the v1 plugin and the
 runtime cache is still `cache/heads-<N>.json`, `JsonMigrator` runs on the
@@ -136,8 +143,21 @@ Pipeline stages (`org.inventivetalent.tessera.skin.bake.BlockBaker.doBake` / `Ba
 
 1. `assets.fetch.McAssetClient` downloads vanilla model + texture JSON/PNGs from
    `mcasset.cloud` for the requested MC version, caches under `assets/`.
-2. `assets.model.ModelResolver` resolves a `BlockModel` (texture refs +
-   "tinted" flag). Tinted blocks (grass, leaves) are unsupported in v1.
+2. `assets.model.ModelResolver` resolves a `BlockModel` — a multi-shape
+   container, one shape per distinct model path the blockstate
+   references. For full-cube models (every element is
+   `from=[0,0,0] to=[16,16,16]`) the shape is a `ShapeContent.CubeFaces`
+   carrying 6 face textures + tint + overlay data (the classic cube path,
+   supports biome tint via `model.withTint(argb)`). For anything else —
+   slabs, stairs, daylight detector, … —
+   `assets.model.ShapeVoxelizer` voxelizes the `elements` array into a
+   sparse cell lattice with per-cell-per-face textures sampled at the
+   element's UV window; the result is a `ShapeContent.VoxelizedShape`
+   that downstream consumes directly (no cube assumption, no tint
+   support in v1). Stairs are the canonical multi-shape block: their
+   blockstate references three models (straight / inner-corner /
+   outer-corner) so the resolver runs the voxelizer three times and
+   stores all three under their model paths.
    **Colour-space trap:** some vanilla textures are grayscale PNGs
    (`color_type=0`, e.g. `stone.png`, `smooth_stone.png`). Java's
    `ImageIO.read()` decodes these to `TYPE_BYTE_GRAY` whose `ColorModel`
@@ -147,9 +167,12 @@ Pipeline stages (`org.inventivetalent.tessera.skin.bake.BlockBaker.doBake` / `Ba
    fixes this by reading raw raster samples for grayscale images, bypassing
    colour management. RGBA and indexed textures (`light_gray_concrete`,
    planks, etc.) are unaffected.
-3. `split.TextureSplitter` cuts each block face's texture into
-   `gridN × gridN` 8×8 tiles, applying any per-`FaceDir` `SourceRotations` /
-   `SourceFlips` debug overrides first.
+3. `split.TextureSplitter` is the per-shape dispatcher. For
+   `ShapeContent.CubeFaces` it cuts each face into `gridN × gridN` 8×8
+   tiles, applying per-`FaceDir` `SourceRotations` / `SourceFlips` debug
+   overrides first. For `ShapeContent.VoxelizedShape` it passes the
+   pre-voxelized chunk list through unchanged — the splitting work
+   already happened in `ShapeVoxelizer` at resolve time.
 4. `skin.HeadSkinPacker` builds one 64×64 `HeadSkin` per *unique* chunk by
    hashing its 6-tile bundle. A uniform stone block at gridN=4 collapses to **3**
    skin uploads (face-center / edge / corner) regardless of total chunk count.
@@ -169,14 +192,21 @@ Pipeline stages (`org.inventivetalent.tessera.skin.bake.BlockBaker.doBake` / `Ba
 spawns immediately (registry hit) or kicks off async runtime baking and spawns
 post-bake.
 
-`assemble.FakeBlockFactory.create(loc, key, blockRotation)` is the entry point
-that turns a `BlockKey` + world location + per-state rotation into a
-`FakeBlock` (a list of `ChunkRef` = `ItemDisplay` + local-grid metadata). One
-`ItemDisplay` per visible chunk; all share the block-corner entity location so
-a single `Location.teleport` would move the whole lattice (intended for v2
-physics). The `blockRotation` quaternion is applied as `leftRotation` (block-
-level orientation), independent of the canonical face-rotation `rightRotation`
-(see invariant below).
+`assemble.FakeBlockFactory.create(loc, bakeKey, shapeKey, blockRotation, …)`
+is the entry point that turns a `BakeKey` + shape selector + world location +
+per-state rotation into a `FakeBlock` (a list of `ChunkRef` = `ItemDisplay` +
+local-grid metadata). One `ItemDisplay` per visible chunk; all share the
+block-corner entity location so a single `Location.teleport` would move the
+whole lattice (intended for v2 physics). The `blockRotation` quaternion is
+applied as `leftRotation` (block-level orientation), independent of the
+canonical face-rotation `rightRotation` (see invariant below).
+
+Runtime is **shape-agnostic**: the registry stores the chunk lattice as a
+sparse `Map<ChunkCoord, ChunkEntry>` per (BakeKey, shapeKey), where
+`ChunkEntry` carries both the skin payload and the chunk's outward-face
+mask (baked at resolve time, not recomputed). The spawn path iterates
+whatever coords the registry holds for the picked shape — no cube
+boundary checks, no special-casing for slabs vs stairs vs cubes.
 
 `effect.builtin.DirectionalShrinkEffect` is the only v1 effect: it scales each
 chunk to 0 with a wave delay computed from each chunk's projection on the
@@ -184,36 +214,40 @@ breaker's eye direction. Uses Display interpolation (client-side lerp), not
 per-tick server work — server cost is N scheduler tasks for N chunks plus one
 cleanup.
 
-### Variant rotation pipeline
+### Variant + shape selection pipeline
 
-Anything orientable (logs, furnaces, observers, stairs…) has multiple
-blockstate variants whose rendered model differs by an `x`/`y` rotation. We
-bake the canonical (no-rotation) variant once and then rotate the entire
-FakeBlock at spawn time:
+A blockstate variant key (e.g. `facing=east,half=top,shape=inner_left`)
+binds to (a) the model file to render and (b) a runtime rotation. We bake
+one shape per distinct model the blockstate references and store the
+variant → (shape, rotation) lookup table in the block file.
 
 1. **Bake time** (`assets.model.ModelResolver.parseVariants`): walks the
-   blockstate JSON's `variants` map, picks the variant with `x=0,y=0` (or the
-   first one as fallback) as the canonical model to extract textures from,
-   and records each variant key's `(xDeg, yDeg)` as a
-   `ModelResolver.VariantRotation`. `BakeMain` writes those into the per-
-   grid-size catalog under each block file's variants table (see
-   `TsraFormat.Block`). Both bundled and runtime catalogs share the same
-   binary layout: every `blocks/<key>.tsra` file is a self-describing
-   `(chunk-hashes, variants)` pair.
+   blockstate JSON's `variants` map, capturing each entry's `model` path
+   + `x`/`y` rotation as a `VariantEntry`. Enumerate distinct model
+   paths, resolve each (cube fast path or `ShapeVoxelizer`), and store
+   all shapes under their model paths in the `BlockModel.shapes` map.
+   Build a `variantKey → VariantBinding(shapeKey, VariantRotation)`
+   table. `BakeMain` / `BlockBaker` write all shapes + the variant table
+   into the catalog's per-block `.tsra` file.
 2. **Spawn time** (`plugin.BlockBreakListener.spawn`):
-   `VariantKey.fromBlockData(blockData)` produces a vanilla-format key (e.g.
-   `axis=y`, `facing=west,lit=false`); `VariantKey.pickMatching` narrows it
-   against `registry.variantsFor(key)` by progressively dropping nuisance
-   properties (`waterlogged`, `powered`, …) until a known variant matches;
-   `registry.rotationFor(key, matchedKey)` returns the JOML quaternion
-   (`Ry(−y)·Rx(x)` — note the negated Y because vanilla's `y` rotates
-   clockwise from above whereas JOML's `rotateY` is right-handed) that gets
-   passed as `blockRotation` to `FakeBlockFactory.create`. Identity if
-   nothing matches, which renders as the canonical variant.
+   `VariantKey.fromBlockData(blockData)` produces a vanilla-format key;
+   `VariantKey.pickMatching` narrows it against
+   `registry.variantsFor(key)` by progressively dropping nuisance
+   properties (`waterlogged`, `powered`, …) until a known variant
+   matches; `registry.variantBindingFor(key, matchedKey)` returns a
+   `ShapeVariantBinding(shapeKey, rotation)`. The shape key picks which
+   pre-baked voxelization to spawn; the rotation (`Ry(−y)·Rx(x)` —
+   negated Y because vanilla's `y` rotates clockwise from above whereas
+   JOML's `rotateY` is right-handed) is applied as `blockRotation` on
+   the lattice. Unknown variants fall back to the default shape +
+   identity rotation.
 
-This handles **orientation only** — state-dependent textures (lit furnace
-fronts, redstone-lamp glow) still render the canonical variant's textures,
-correctly oriented (see `TODO.md`).
+This handles **orientation and shape**. Stairs corner variants render as
+actual L-shapes (different model), top-half slabs render upside-down
+(different model in vanilla 1.21, or `x=180` rotation in older versions
+— both work via the same pipeline). State-dependent textures (lit
+furnace fronts, redstone-lamp glow) still render the canonical model's
+textures, correctly oriented (see `TODO.md`).
 
 ### Critical invariant: canonical face rotation
 

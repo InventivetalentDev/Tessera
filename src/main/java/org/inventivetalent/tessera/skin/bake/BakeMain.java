@@ -3,7 +3,7 @@ package org.inventivetalent.tessera.skin.bake;
 import org.inventivetalent.tessera.assets.fetch.McAssetClient;
 import org.inventivetalent.tessera.assets.model.BlockModel;
 import org.inventivetalent.tessera.assets.model.ModelResolver;
-import org.inventivetalent.tessera.assets.model.ModelResolver.VariantRotation;
+import org.inventivetalent.tessera.assets.model.ShapeContent;
 import org.inventivetalent.tessera.core.BakeKey;
 import org.inventivetalent.tessera.core.BlockKey;
 import org.inventivetalent.tessera.core.ChunkCoord;
@@ -41,27 +41,9 @@ import java.util.logging.Logger;
 /**
  * Standalone entry point for the {@code ./gradlew tesseraBake} task. Reads
  * a list of block IDs from {@code bake-blocks.txt}, fetches their assets
- * from mcasset.cloud, splits the textures, packs heads, uploads to
- * MineSkin, and writes a {@code heads-{gridN}.ztsra} resource zip.
- *
- * <p>Workflow: bakes into a scratch {@link TsraFolderStore} under
- * {@code build/} (re-readable across re-runs so an interrupted bake doesn't
- * waste prior uploads) and zips that folder into the requested {@code .ztsra}
- * output. Idempotent — re-running with the same input is a no-op once every
- * unique skin is present in the folder store.
- *
- * <p>Args:
- * <pre>
- *   --input    bake-blocks.txt (one block ID per line, # comments)
- *   --out      heads-{gridN}.ztsra output path (defaults derive from gridN)
- *   --cache    cache root for assets + skin PNGs + scratch folder store
- *   --version  Minecraft version tag (defaults to {@code 1.21.4})
- *   --gridN    chunk grid size (defaults to 4)
- * </pre>
- *
- * <p>Reads {@code MINESKIN_API_KEY} from the environment. Uploads work
- * without it on the free tier but at low throughput; with it, MineSkin
- * lifts the per-IP rate limit.
+ * from mcasset.cloud, splits the textures (per shape, for multi-shape
+ * blocks like stairs), packs heads, uploads to MineSkin, and writes a
+ * {@code heads-{gridN}.ztsra} resource zip.
  */
 public final class BakeMain {
 
@@ -73,8 +55,7 @@ public final class BakeMain {
         int gridN       = Integer.parseInt(args.getOrDefault("gridN", "4"));
         if (gridN < 1 || gridN > 16 || 16 % gridN != 0) {
             throw new IllegalArgumentException(
-                    "gridN must be one of 1, 2, 4, 8, 16; got " + gridN
-                            + " (TesseraConfig only loads heads-<N>.ztsra for these sizes)");
+                    "gridN must be one of 1, 2, 4, 8, 16; got " + gridN);
         }
         Path outPath    = Path.of(args.getOrDefault("out",
                 "src/main/resources/heads-" + gridN + TsraFormat.ZIP_EXTENSION));
@@ -98,17 +79,10 @@ public final class BakeMain {
         Path pngDir = cacheRoot.resolve("head-pngs");
         Files.createDirectories(pngDir);
 
-        // Scratch folder store: persists across re-runs so a re-bake skips
-        // unchanged blocks via store.readSkin / store.readBlock hits.
-        // No extension on the directory itself — only the individual .tsra
-        // payload files inside it carry the format extension.
         Path scratchRoot = cacheRoot.resolve("heads-" + gridN);
         TsraFolderStore scratch = new TsraFolderStore(logger, scratchRoot);
         scratch.writeManifest(new TsraFormat.Manifest(gridN, version, "tessera-bake-cli"));
 
-        // One-time migration from any leftover heads-{gridN}.json sitting
-        // beside the scratch root, so users with an existing pre-tsra
-        // workspace don't lose their cached uploads.
         Path legacy = cacheRoot.resolve("heads-" + gridN + ".json");
         if (Files.isRegularFile(legacy)) {
             int migrated = JsonMigrator.migrate(logger, legacy, scratch, gridN, version);
@@ -116,7 +90,7 @@ public final class BakeMain {
         }
 
         McAssetClient assets = new McAssetClient(cacheRoot.resolve("assets"));
-        ModelResolver resolver = new ModelResolver(assets, logger, version);
+        ModelResolver resolver = new ModelResolver(assets, logger, version, gridN);
         TextureSplitter splitter = new TextureSplitter();
         HeadSkinPacker packer = new HeadSkinPacker();
         SkinAssembler assembler = new SkinAssembler();
@@ -153,30 +127,30 @@ public final class BakeMain {
         BakeKey bakeKey = BakeKey.untinted(key);
 
         // Fast path: a fully-cached block (block file present + every
-        // referenced skin payload on disk + chunk count matches the
-        // grid's expected surface area) needs no work. Skips the
-        // resolver/splitter/packer pipeline entirely. Partial bakes
-        // (missing chunks from a prior aborted upload) fall through and
-        // re-run the full pipeline so the missing chunks get filled in.
-        int expectedVisible = (gridN == 1) ? 1
-                : (gridN * gridN * gridN) - ((gridN - 2) * (gridN - 2) * (gridN - 2));
+        // referenced skin payload on disk) needs no work. Multi-shape
+        // blocks check every shape's hashes.
         Optional<TsraFormat.Block> cached = store.readBlock(bakeKey);
-        if (cached.isPresent() && cached.get().chunkHashes().size() == expectedVisible) {
-            Set<String> uniqueHashes = new HashSet<>(cached.get().chunkHashes().values());
-            boolean allPresent = true;
-            for (String hash : uniqueHashes) {
+        if (cached.isPresent()) {
+            Set<String> referenced = new HashSet<>();
+            for (TsraFormat.Shape s : cached.get().shapes().values()) {
+                for (TsraFormat.ChunkRecord cr : s.chunks().values()) referenced.add(cr.hash());
+            }
+            boolean allPresent = !referenced.isEmpty();
+            for (String hash : referenced) {
                 if (!store.skinExists(hash)) { allPresent = false; break; }
             }
             if (allPresent) {
-                logger.info("[" + key + "] cached (" + expectedVisible + " chunks, "
-                        + uniqueHashes.size() + " unique heads)");
+                int totalChunks = cached.get().shapes().values().stream()
+                        .mapToInt(s -> s.chunks().size()).sum();
+                logger.info("[" + key + "] cached (" + cached.get().shapes().size() + " shape(s), "
+                        + totalChunks + " chunks, " + referenced.size() + " unique heads)");
                 return;
             }
         }
 
         Optional<BlockModel> modelOpt = resolver.resolve(key);
         if (modelOpt.isEmpty()) {
-            logger.info("[" + key + "] skipped (non-cube or asset missing)");
+            logger.info("[" + key + "] skipped (no resolvable shape)");
             return;
         }
         BlockModel model = modelOpt.get();
@@ -185,15 +159,30 @@ public final class BakeMain {
             return;
         }
 
-        List<ChunkSpec> chunks = splitter.split(model, gridN);
-        HeadSkinPacker.Result packed = packer.pack(chunks);
-        logger.info("[" + key + "] " + chunks.size() + " visible chunks → "
-                + packed.uniqueHeads().size() + " unique heads");
+        // Per-shape split + pack. Skin dedup is content-hashed so identical
+        // tiles across shapes share a single MineSkin upload.
+        LinkedHashMap<String, List<ChunkSpec>> chunksPerShape = new LinkedHashMap<>();
+        LinkedHashMap<String, HeadSkinPacker.Result> packedPerShape = new LinkedHashMap<>();
+        LinkedHashMap<String, HeadSkin> uniqueHeads = new LinkedHashMap<>();
+        for (Map.Entry<String, ShapeContent> se : model.shapes().entrySet()) {
+            List<ChunkSpec> chunks = splitter.split(se.getValue(), gridN);
+            if (chunks.isEmpty()) continue;
+            HeadSkinPacker.Result packed = packer.pack(chunks);
+            chunksPerShape.put(se.getKey(), chunks);
+            packedPerShape.put(se.getKey(), packed);
+            for (HeadSkin h : packed.uniqueHeads()) uniqueHeads.putIfAbsent(h.contentHash(), h);
+        }
+        if (chunksPerShape.isEmpty()) {
+            logger.info("[" + key + "] no chunks produced");
+            return;
+        }
+        int totalChunks = chunksPerShape.values().stream().mapToInt(List::size).sum();
+        logger.info("[" + key + "] " + chunksPerShape.size() + " shape(s), "
+                + totalChunks + " visible chunks → " + uniqueHeads.size() + " unique heads");
 
-        // Skip uploads for hashes already in the scratch store — but still
-        // need to map chunk → entry for the block file.
+        // Skip uploads for hashes already in the scratch store.
         List<HeadSkin> needUpload = new ArrayList<>();
-        for (HeadSkin head : packed.uniqueHeads()) {
+        for (HeadSkin head : uniqueHeads.values()) {
             Optional<TsraFormat.Skin> existing = store.readSkin(head.contentHash());
             if (existing.isPresent()) {
                 TsraFormat.Skin s = existing.get();
@@ -226,33 +215,39 @@ public final class BakeMain {
             }
         }
 
-        // Build chunk → hash map. Only chunks whose head got a MineSkin
-        // texture make it into the block file — otherwise the runtime
-        // listener would think the block is supported and spawn FakeBlocks
-        // with zero entities (visually a no-op).
-        TreeMap<ChunkCoord, String> chunkHashes = new TreeMap<>();
-        packed.chunkToHead().forEach((chunk, head) -> {
-            if (head.state() == SkinState.COMPLETED) {
-                chunkHashes.put(chunk.coord(), head.contentHash());
+        // Build per-shape chunk records and the variant binding table.
+        LinkedHashMap<String, TsraFormat.Shape> shapeRecords = new LinkedHashMap<>();
+        for (Map.Entry<String, HeadSkinPacker.Result> se : packedPerShape.entrySet()) {
+            TreeMap<ChunkCoord, TsraFormat.ChunkRecord> chunkRecords = new TreeMap<>();
+            se.getValue().chunkToHead().forEach((chunk, head) -> {
+                if (head.state() == SkinState.COMPLETED) {
+                    chunkRecords.put(chunk.coord(), new TsraFormat.ChunkRecord(
+                            head.contentHash(), TsraFormat.ChunkRecord.mask(chunk.outwardFaces())));
+                }
+            });
+            if (!chunkRecords.isEmpty()) {
+                shapeRecords.put(se.getKey(), new TsraFormat.Shape(chunkRecords));
             }
-        });
-        if (chunkHashes.isEmpty()) {
-            logger.info("[" + key + "] no completed skins; not writing a block entry");
+        }
+        if (shapeRecords.isEmpty()) {
+            logger.info("[" + key + "] no completed shapes; not writing a block entry");
             return;
         }
 
-        // Capture per-variant rotation hints alongside the chunk map so the
-        // runtime can orient oak_log[axis=x] etc. correctly without re-
-        // parsing the blockstate JSON. Identity-rotation variants
-        // (canonical orientation) are dropped — the runtime falls back to
-        // identity for unknown variant keys.
-        TreeMap<String, VariantRotation> variantMap = new TreeMap<>();
-        for (Map.Entry<String, VariantRotation> e : model.variantRotations().entrySet()) {
-            if (e.getValue().xDeg() != 0 || e.getValue().yDeg() != 0) {
-                variantMap.put(e.getKey(), e.getValue());
-            }
+        TreeMap<String, TsraFormat.ShapeVariantBinding> variantMap = new TreeMap<>();
+        for (Map.Entry<String, BlockModel.VariantBinding> ve : model.variants().entrySet()) {
+            BlockModel.VariantBinding vb = ve.getValue();
+            // Drop identity-rotation variants pointing at the default shape — the runtime
+            // already falls back to (defaultShape, identity) for unmatched variant keys,
+            // so storing them is dead weight. Non-default-shape variants are always kept
+            // so corner-stairs variants can find their model.
+            boolean identityRotation = vb.rotation().xDeg() == 0 && vb.rotation().yDeg() == 0;
+            boolean pointsAtDefault = vb.shapeKey().equals(model.defaultShapeKey());
+            if (identityRotation && pointsAtDefault) continue;
+            String shapeKey = shapeRecords.containsKey(vb.shapeKey()) ? vb.shapeKey() : model.defaultShapeKey();
+            variantMap.put(ve.getKey(), new TsraFormat.ShapeVariantBinding(shapeKey, vb.rotation()));
         }
-        store.writeBlock(new TsraFormat.Block(bakeKey, chunkHashes, variantMap));
+        store.writeBlock(new TsraFormat.Block(bakeKey, shapeRecords, variantMap));
     }
 
     private static List<BlockKey> readBlockList(Path file) throws IOException {
@@ -273,5 +268,4 @@ public final class BakeMain {
         }
         return m;
     }
-
 }
