@@ -8,21 +8,23 @@ import java.util.logging.Logger;
 
 /**
  * Writes a {@link HeadSkin}'s MineSkin texture profile onto a
- * {@link SkullMeta}. Two backing implementations:
+ * {@link SkullMeta}. Two backing implementations, both signature-preserving:
  *
  * <ul>
  *   <li>{@link PaperProfileApplier} — uses Paper's {@code PlayerProfile} +
- *       {@code ProfileProperty} API, preserving both the texture value and
- *       its MineSkin signature byte-for-byte.</li>
- *   <li>{@link BukkitProfileApplier} — uses the standard Bukkit
- *       {@code PlayerProfile} / {@code PlayerTextures.setSkin(URL)} path.
- *       Works on Spigot but discards the MineSkin signature (clients still
- *       render the skin fine since the texture-URL property doesn't require
- *       a signature for player-head items).</li>
+ *       {@code ProfileProperty} API. Clean, no reflection.</li>
+ *   <li>{@link NmsProfileApplier} — reflects on Mojang's authlib
+ *       ({@code com.mojang.authlib.GameProfile}, bundled by every
+ *       vanilla-derived server) and writes the profile onto
+ *       {@code CraftMetaSkull.profile} directly. Works on Spigot.</li>
  * </ul>
  *
- * <p>{@link #create(Logger)} picks the right backend at startup. The Paper
- * impl is loaded by reflection so the JVM never tries to link its
+ * <p>Both paths preserve the MineSkin {@code value} + {@code signature}
+ * byte-for-byte — anything less and player-head items render blank or with
+ * the wrong texture in some clients.
+ *
+ * <p>{@link #create(Logger)} picks at startup. The Paper impl is loaded by
+ * reflection so the JVM never tries to link its
  * {@code com.destroystokyo.paper.profile.*} imports on Spigot.
  */
 public interface ProfileApplier {
@@ -39,9 +41,9 @@ public interface ProfileApplier {
             } catch (Throwable t) {
                 logger.warning("[profile] Paper detected but PaperProfileApplier failed to load ("
                         + t.getClass().getSimpleName() + ": " + t.getMessage()
-                        + "). Falling back to Bukkit profile API; MineSkin signatures will be dropped.");
+                        + "). Falling back to NMS reflection.");
             }
         }
-        return new BukkitProfileApplier(logger);
+        return new NmsProfileApplier(logger);
     }
 }
