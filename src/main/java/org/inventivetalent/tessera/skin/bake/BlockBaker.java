@@ -218,6 +218,11 @@ public final class BlockBaker {
         }
 
         // Stitch shapes back together: per-shape map<ChunkCoord, ChunkEntry>.
+        // Per-shape HeadSkinPacker results carry their own HeadSkin instances;
+        // upload only touched the canonical instances in `uniqueHeads` (one
+        // per content hash across all shapes), so non-canonical instances
+        // never got their texture/state set. Resolve every chunk's head back
+        // to the canonical instance by content hash before reading state.
         LinkedHashMap<String, Map<ChunkCoord, HeadsRegistry.ChunkEntry>> shapeChunks = new LinkedHashMap<>();
         int completedHeads = 0, erroredHeads = 0;
         for (HeadSkin h : uniqueHeads.values()) {
@@ -228,10 +233,11 @@ public final class BlockBaker {
         for (Map.Entry<String, HeadSkinPacker.Result> entry : packedPerShape.entrySet()) {
             LinkedHashMap<ChunkCoord, HeadsRegistry.ChunkEntry> chunkMap = new LinkedHashMap<>();
             entry.getValue().chunkToHead().forEach((chunk, head) -> {
-                if (head.state() == SkinState.COMPLETED) {
+                HeadSkin canonical = uniqueHeads.get(head.contentHash());
+                if (canonical != null && canonical.state() == SkinState.COMPLETED) {
                     chunkMap.put(chunk.coord(), new HeadsRegistry.ChunkEntry(
-                            new HeadsRegistry.Entry(head.contentHash(), head.textureValue(),
-                                    head.textureSignature(), head.mineskinUuid()),
+                            new HeadsRegistry.Entry(canonical.contentHash(), canonical.textureValue(),
+                                    canonical.textureSignature(), canonical.mineskinUuid()),
                             chunk.outwardFaces()));
                 }
             });

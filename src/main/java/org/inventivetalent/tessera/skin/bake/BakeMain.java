@@ -216,13 +216,18 @@ public final class BakeMain {
         }
 
         // Build per-shape chunk records and the variant binding table.
+        // Resolve each per-shape head back to the canonical instance in
+        // `uniqueHeads`: only the canonical (one per content hash across all
+        // shapes) had its state/texture set by the upload path, so a stale
+        // CREATED state on the per-shape instance would silently drop chunks.
         LinkedHashMap<String, TsraFormat.Shape> shapeRecords = new LinkedHashMap<>();
         for (Map.Entry<String, HeadSkinPacker.Result> se : packedPerShape.entrySet()) {
             TreeMap<ChunkCoord, TsraFormat.ChunkRecord> chunkRecords = new TreeMap<>();
             se.getValue().chunkToHead().forEach((chunk, head) -> {
-                if (head.state() == SkinState.COMPLETED) {
+                HeadSkin canonical = uniqueHeads.get(head.contentHash());
+                if (canonical != null && canonical.state() == SkinState.COMPLETED) {
                     chunkRecords.put(chunk.coord(), new TsraFormat.ChunkRecord(
-                            head.contentHash(), TsraFormat.ChunkRecord.mask(chunk.outwardFaces())));
+                            canonical.contentHash(), TsraFormat.ChunkRecord.mask(chunk.outwardFaces())));
                 }
             });
             if (!chunkRecords.isEmpty()) {
