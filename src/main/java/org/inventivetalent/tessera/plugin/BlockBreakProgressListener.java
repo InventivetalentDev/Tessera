@@ -1,6 +1,5 @@
 package org.inventivetalent.tessera.plugin;
 
-import io.papermc.paper.event.block.BlockBreakProgressUpdateEvent;
 import org.inventivetalent.tessera.assemble.BlockGeometry;
 import org.inventivetalent.tessera.assemble.FakeBlockFactory;
 import org.inventivetalent.tessera.core.*;
@@ -16,7 +15,6 @@ import org.inventivetalent.tessera.transport.TransportSession;
 import org.bukkit.*;
 import org.bukkit.block.Block;
 import org.bukkit.block.data.BlockData;
-import org.bukkit.entity.Entity;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
@@ -38,10 +36,22 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * Drives the chunked-shrink animation off live mining progress
- * ({@link BlockBreakProgressUpdateEvent}) so chunks shrink in lockstep with
- * the player's mining and the FakeBlock is gone exactly as the real block
- * breaks. Registers reverse-on-cancel and player-quit cleanup.
+ * Drives the chunked-shrink animation off live mining progress so chunks
+ * shrink in lockstep with the player's mining and the FakeBlock is gone
+ * exactly as the real block breaks. Registers reverse-on-cancel and
+ * player-quit cleanup.
+ *
+ * <p>Progress events arrive via a platform-specific bridge:
+ * <ul>
+ *   <li>On Paper, {@code PaperProgressEventBridge} listens to
+ *       {@code BlockBreakProgressUpdateEvent} and delegates to
+ *       {@link #handleProgress(Player, Block, double)}.</li>
+ *   <li>On Spigot, {@code PacketEventsProgressSource} observes digging
+ *       packets and ticks a per-player progress timer that calls the same
+ *       method.</li>
+ * </ul>
+ * The {@code @EventHandler}s declared here are for standard Bukkit events
+ * (interact / quit / world-change) which exist on both platforms.
  *
  * <p>This listener does nothing when {@link AnimationMode#POST_BREAK} is
  * configured; in that mode the legacy post-break path in
@@ -129,18 +139,19 @@ public final class BlockBreakProgressListener implements Listener {
         }
     }
 
-    @EventHandler(priority = EventPriority.MONITOR)
-    public void onProgress(BlockBreakProgressUpdateEvent event) {
+    /**
+     * Entry point for the platform-specific progress source. Paper's
+     * event bridge passes through {@code (event.getEntity(), event.getBlock(),
+     * event.getProgress())}; the PacketEvents source synthesizes
+     * {@code (player, target, computed-progress)} from digging packets +
+     * per-tick break-speed math.
+     */
+    public void handleProgress(Player player, Block block, double progress) {
         TesseraConfig cfg = plugin.tesseraConfig();
         if (cfg.animationMode() != AnimationMode.PROGRESS) return;
 
-        Entity src = event.getEntity();
-        if (!(src instanceof Player player)) return;
-
-        Block block = event.getBlock();
         Location breakLoc = block.getLocation();
         BlockPosKey posKey = BlockPosKey.of(breakLoc);
-        double progress = event.getProgress();
 
         if (cfg.debug()) plugin.getLogger().info(
                 "[" + ts() + "] [debug-progress] progress " + posKey + " player=" + player.getName()
