@@ -1,5 +1,7 @@
 package org.inventivetalent.tessera.assemble;
 
+import com.google.common.collect.LinkedListMultimap;
+import com.google.common.collect.Multimap;
 import org.inventivetalent.tessera.skin.HeadSkin;
 import org.bukkit.Bukkit;
 import org.bukkit.inventory.meta.SkullMeta;
@@ -14,103 +16,104 @@ import java.util.logging.Logger;
 
 /**
  * Spigot profile applier. Routes the MineSkin texture property through
- * Mojang's authlib (bundled with every vanilla-derived server) and into
- * a CraftPlayerProfile, then sets it via Bukkit's standard
- * {@code SkullMeta.setOwnerProfile}.
+ * Mojang's authlib into a {@code CraftPlayerProfile} and sets it via
+ * Bukkit's standard {@link SkullMeta#setOwnerProfile}. Preserves both
+ * the texture value and the MineSkin signature byte-for-byte.
  *
- * <p>Pipeline:
- * <ol>
- *   <li>Build {@code com.mojang.authlib.GameProfile} with a
- *       {@code Property("textures", value, signature)} in its property map.
- *       Both value AND signature preserved byte-for-byte.</li>
- *   <li>Invoke {@code CraftPlayerProfile(GameProfile)} (public constructor),
- *       which copies the property multimap into a Bukkit-API
- *       {@link PlayerProfile}.</li>
- *   <li>Call {@code meta.setOwnerProfile(profile)} — CraftMetaSkull then
- *       converts to a {@code ResolvableProfile.Static} wrapping our
- *       GameProfile. Same shape vanilla skull NBT uses, so renders on any
- *       client.</li>
- * </ol>
+ * <p>Two authlib generations are supported because the Paper dev bundle
+ * we compile against ships an older authlib than what some runtime
+ * servers carry:
+ * <ul>
+ *   <li><b>Modern</b> (record-based GameProfile, e.g. user-reported
+ *       Spigot 1.21): {@code PropertyMap(Multimap)} +
+ *       {@code GameProfile(UUID, String, PropertyMap)} +
+ *       {@code properties()} accessor.</li>
+ *   <li><b>Legacy</b> (bean-style GameProfile, Paper dev bundle 1.21.4):
+ *       {@code PropertyMap()} no-arg + {@code GameProfile(UUID, String)}
+ *       + {@code getProperties()} accessor.</li>
+ * </ul>
+ * Both API generations are probed at class load; whichever combination
+ * works is used.
  *
- * <p>GameProfile construction tries the 3-arg
- * {@code (UUID, String, PropertyMap)} record-canonical constructor first
- * (modern authlib) and falls back to {@code (UUID, String)} +
- * {@code properties().put(...)} for older authlib variants.
+ * <p>Authlib classes are accessed via reflection (not direct import) so
+ * the bytecode of this applier doesn't link to a specific authlib
+ * generation at compile time. Guava's {@code Multimap} is stable enough
+ * to use as a direct import.
  */
 final class NmsProfileApplier implements ProfileApplier {
 
     private static final Class<?> GAME_PROFILE_CLASS;
-    private static final Class<?> PROPERTY_CLASS;
     private static final Class<?> PROPERTY_MAP_CLASS;
     private static final Constructor<?> PROPERTY_CTOR;
-    private static final Constructor<?> PROPERTY_MAP_CTOR;
-    private static final Method PROPERTY_MAP_PUT;
-    /** Modern authlib only: {@code GameProfile(UUID, String, PropertyMap)}. May be null. */
-    private static final Constructor<?> GAME_PROFILE_3ARG_CTOR;
-    /** Legacy fallback: {@code GameProfile(UUID, String)}. */
-    private static final Constructor<?> GAME_PROFILE_2ARG_CTOR;
-    /** Modern record accessor {@code properties()} or legacy {@code getProperties()}. */
+    /** Modern: {@code PropertyMap(Multimap)}. */
+    private static final Constructor<?> PROPERTY_MAP_CTOR_MULTIMAP;
+    /** Modern: {@code GameProfile(UUID, String, PropertyMap)}. */
+    private static final Constructor<?> GAME_PROFILE_CTOR_3ARG;
+    /** Legacy: {@code GameProfile(UUID, String)}. */
+    private static final Constructor<?> GAME_PROFILE_CTOR_2ARG;
+    /** {@code properties()} (record) or {@code getProperties()} (bean). */
     private static final Method GET_PROPERTIES_METHOD;
+    /** {@code PropertyMap.put(K, V)} via Multimap. */
+    private static final Method PROPERTY_MAP_PUT;
     private static final Throwable INIT_ERROR;
 
     static {
         Class<?> gpClass = null;
-        Class<?> propClass = null;
         Class<?> propMapClass = null;
         Constructor<?> propCtor = null;
-        Constructor<?> propMapCtor = null;
-        Method propMapPut = null;
+        Constructor<?> pmMultimapCtor = null;
         Constructor<?> gp3 = null;
         Constructor<?> gp2 = null;
         Method getProps = null;
+        Method propMapPut = null;
         Throwable err = null;
         try {
             gpClass = Class.forName("com.mojang.authlib.GameProfile");
-            propClass = Class.forName("com.mojang.authlib.properties.Property");
+            Class<?> propClass = Class.forName("com.mojang.authlib.properties.Property");
             propMapClass = Class.forName("com.mojang.authlib.properties.PropertyMap");
+
             propCtor = propClass.getConstructor(String.class, String.class, String.class);
-            propMapCtor = propMapClass.getConstructor();
             propMapPut = propMapClass.getMethod("put", Object.class, Object.class);
-            try {
-                gp3 = gpClass.getConstructor(UUID.class, String.class, propMapClass);
-            } catch (NoSuchMethodException ignored) {
-                gp3 = null;
+
+            try { pmMultimapCtor = propMapClass.getConstructor(Multimap.class); }
+            catch (NoSuchMethodException ignored) {}
+
+            try { gp3 = gpClass.getConstructor(UUID.class, String.class, propMapClass); }
+            catch (NoSuchMethodException ignored) {}
+            try { gp2 = gpClass.getConstructor(UUID.class, String.class); }
+            catch (NoSuchMethodException ignored) {}
+
+            try { getProps = gpClass.getMethod("properties"); }
+            catch (NoSuchMethodException ignored) {
+                try { getProps = gpClass.getMethod("getProperties"); }
+                catch (NoSuchMethodException ignored2) {}
             }
-            try {
-                gp2 = gpClass.getConstructor(UUID.class, String.class);
-            } catch (NoSuchMethodException ignored) {
-                gp2 = null;
-            }
-            try {
-                getProps = gpClass.getMethod("properties");
-            } catch (NoSuchMethodException ignored) {
-                try {
-                    getProps = gpClass.getMethod("getProperties");
-                } catch (NoSuchMethodException ignored2) {
-                    getProps = null;
-                }
-            }
-            if (gp3 == null && (gp2 == null || getProps == null)) {
+
+            boolean modernViable = pmMultimapCtor != null && gp3 != null;
+            boolean legacyViable = gp2 != null && getProps != null;
+            if (!modernViable && !legacyViable) {
                 throw new NoSuchMethodException(
-                        "GameProfile has neither (UUID, String, PropertyMap) nor (UUID, String) + properties()");
+                        "No viable GameProfile construction path: this authlib version has"
+                                + " neither (UUID, String, PropertyMap) + PropertyMap(Multimap)"
+                                + " nor (UUID, String) + properties()/getProperties().");
             }
         } catch (Throwable t) {
             err = t;
         }
         GAME_PROFILE_CLASS = gpClass;
-        PROPERTY_CLASS = propClass;
         PROPERTY_MAP_CLASS = propMapClass;
         PROPERTY_CTOR = propCtor;
-        PROPERTY_MAP_CTOR = propMapCtor;
-        PROPERTY_MAP_PUT = propMapPut;
-        GAME_PROFILE_3ARG_CTOR = gp3;
-        GAME_PROFILE_2ARG_CTOR = gp2;
+        PROPERTY_MAP_CTOR_MULTIMAP = pmMultimapCtor;
+        GAME_PROFILE_CTOR_3ARG = gp3;
+        GAME_PROFILE_CTOR_2ARG = gp2;
         GET_PROPERTIES_METHOD = getProps;
+        PROPERTY_MAP_PUT = propMapPut;
         INIT_ERROR = err;
     }
 
     private final Logger logger;
     private volatile Constructor<?> craftPlayerProfileCtor;
+    private volatile boolean ctorResolved;
     private volatile boolean warnedOnce;
 
     NmsProfileApplier(Logger logger) {
@@ -125,8 +128,9 @@ final class NmsProfileApplier implements ProfileApplier {
     @Override
     public boolean apply(SkullMeta meta, HeadSkin head) {
         if (INIT_ERROR != null) return false;
-        String step = "build-property";
+        String step = "init";
         try {
+            step = "build-property";
             Object property = PROPERTY_CTOR.newInstance(
                     "textures", head.textureValue(), head.textureSignature());
 
@@ -147,7 +151,7 @@ final class NmsProfileApplier implements ProfileApplier {
             if (!warnedOnce) {
                 warnedOnce = true;
                 Throwable cause = unwrap(e);
-                logger.log(Level.WARNING, "[profile] Reflective profile-apply failed at step '"
+                logger.log(Level.WARNING, "[profile] Profile-apply failed at step '"
                         + step + "': " + cause.getClass().getName()
                         + (cause.getMessage() == null ? "" : ": " + cause.getMessage())
                         + ". Suppressing further warnings — heads may render blank.", cause);
@@ -157,48 +161,53 @@ final class NmsProfileApplier implements ProfileApplier {
     }
 
     private Object buildGameProfile(Object property) throws ReflectiveOperationException {
-        // 3-arg path: build the PropertyMap, populate it, then construct the GameProfile.
-        // Preferred because it doesn't depend on what the 2-arg constructor initializes
-        // properties() to (might be a shared/empty/immutable instance in newer authlib).
-        if (GAME_PROFILE_3ARG_CTOR != null) {
-            Object propMap = PROPERTY_MAP_CTOR.newInstance();
-            PROPERTY_MAP_PUT.invoke(propMap, "textures", property);
-            return GAME_PROFILE_3ARG_CTOR.newInstance(UUID.randomUUID(), "tessera", propMap);
+        // Modern path: build PropertyMap from a Multimap, then 3-arg GameProfile.
+        // The 2-arg legacy GameProfile's properties() may be a shared/immutable
+        // instance on modern authlib (Spigot 1.21+), so prefer the explicit
+        // PropertyMap construction.
+        if (PROPERTY_MAP_CTOR_MULTIMAP != null && GAME_PROFILE_CTOR_3ARG != null) {
+            Multimap<String, Object> backing = LinkedListMultimap.create();
+            backing.put("textures", property);
+            Object propMap = PROPERTY_MAP_CTOR_MULTIMAP.newInstance(backing);
+            return GAME_PROFILE_CTOR_3ARG.newInstance(UUID.randomUUID(), "tessera", propMap);
         }
-        // 2-arg fallback: construct empty, then add to its property map.
-        Object profile = GAME_PROFILE_2ARG_CTOR.newInstance(UUID.randomUUID(), "tessera");
-        Object propMap = GET_PROPERTIES_METHOD.invoke(profile);
-        if (propMap == null) {
+        // Legacy path: 2-arg GameProfile + mutate its property map. Used on the
+        // Paper dev bundle's older authlib.
+        Object profile = GAME_PROFILE_CTOR_2ARG.newInstance(UUID.randomUUID(), "tessera");
+        Object pm = GET_PROPERTIES_METHOD.invoke(profile);
+        if (pm == null) {
             throw new IllegalStateException(
                     "GameProfile(UUID, String).properties() returned null — can't add textures");
         }
-        PROPERTY_MAP_PUT.invoke(propMap, "textures", property);
+        PROPERTY_MAP_PUT.invoke(pm, "textures", property);
         return profile;
     }
 
     private Constructor<?> resolveCraftProfileCtor() {
-        Constructor<?> cached = craftPlayerProfileCtor;
-        if (cached != null) return cached;
-        Class<?> cls = findCraftPlayerProfileClass();
-        if (cls == null) {
-            if (!warnedOnce) {
-                warnedOnce = true;
-                logger.log(Level.WARNING, "[profile] CraftPlayerProfile class not found."
-                        + " Heads will render blank.");
+        if (ctorResolved) return craftPlayerProfileCtor;
+        synchronized (this) {
+            if (ctorResolved) return craftPlayerProfileCtor;
+            Class<?> cls = findCraftPlayerProfileClass();
+            if (cls == null) {
+                if (!warnedOnce) {
+                    warnedOnce = true;
+                    logger.warning("[profile] CraftPlayerProfile class not found"
+                            + " on this server. Heads will render blank.");
+                }
+            } else {
+                try {
+                    craftPlayerProfileCtor = cls.getConstructor(GAME_PROFILE_CLASS);
+                } catch (NoSuchMethodException e) {
+                    if (!warnedOnce) {
+                        warnedOnce = true;
+                        logger.warning("[profile] " + cls.getName()
+                                + " has no public (GameProfile) constructor;"
+                                + " heads will render blank.");
+                    }
+                }
             }
-            return null;
-        }
-        try {
-            Constructor<?> ctor = cls.getConstructor(GAME_PROFILE_CLASS);
-            craftPlayerProfileCtor = ctor;
-            return ctor;
-        } catch (NoSuchMethodException e) {
-            if (!warnedOnce) {
-                warnedOnce = true;
-                logger.log(Level.WARNING, "[profile] " + cls.getName()
-                        + " has no public (GameProfile) constructor — heads will render blank.");
-            }
-            return null;
+            ctorResolved = true;
+            return craftPlayerProfileCtor;
         }
     }
 
@@ -206,7 +215,6 @@ final class NmsProfileApplier implements ProfileApplier {
         try {
             return Class.forName("org.bukkit.craftbukkit.profile.CraftPlayerProfile");
         } catch (ClassNotFoundException e) {
-            // Older Spigot used per-MC-version packages.
             String pkg = Bukkit.getServer().getClass().getPackage().getName();
             try {
                 return Class.forName(pkg + ".profile.CraftPlayerProfile");
