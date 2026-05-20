@@ -76,6 +76,11 @@ public final class BlockBreakListener implements Listener {
             return;
         }
 
+        if (!cfg.enablesWorld(breakLoc.getWorld().getName())) {
+            if (cfg.debug()) plugin.getLogger().info(
+                    "[debug] skip " + key + " (world " + breakLoc.getWorld().getName() + " disabled)");
+            return;
+        }
         if (!cfg.enables(key.asString())) {
             if (cfg.debug()) plugin.getLogger().info("[debug] skip " + key + " (not enabled)");
             return;
