@@ -51,7 +51,15 @@ final class NmsProfileApplier implements ProfileApplier {
         try {
             gpClass = Class.forName("com.mojang.authlib.GameProfile");
             gpCtor = gpClass.getConstructor(UUID.class, String.class);
-            getProps = gpClass.getMethod("getProperties");
+            // Modern Mojang authlib (~MC 1.20+) turned GameProfile into a
+            // record whose accessor is properties(); older builds had the
+            // legacy getProperties() bean accessor. Try the record form
+            // first since it's what every supported (1.21+) server has.
+            try {
+                getProps = gpClass.getMethod("properties");
+            } catch (NoSuchMethodException ignored) {
+                getProps = gpClass.getMethod("getProperties");
+            }
             Class<?> propClass = Class.forName("com.mojang.authlib.properties.Property");
             propCtor = propClass.getConstructor(String.class, String.class, String.class);
             Class<?> propMapClass = Class.forName("com.mojang.authlib.properties.PropertyMap");

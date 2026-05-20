@@ -64,7 +64,7 @@ public final class TesseraPlugin extends JavaPlugin {
         saveDefaultConfig();
         this.config = TesseraConfig.from(getConfig());
 
-        String mcVersion = Bukkit.getMinecraftVersion();
+        String mcVersion = PlatformDetector.minecraftVersion();
         int gridN = config.chunkGridSize();
 
         // Heads catalogs stack from most- to least-specific:
