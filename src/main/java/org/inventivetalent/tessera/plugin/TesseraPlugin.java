@@ -48,14 +48,14 @@ public final class TesseraPlugin extends JavaPlugin {
     private BlockBreakProgressListener progressListener;
     /**
      * Platform-specific bridge that delivers progress events to
-     * {@link #progressListener}. Stored as {@link Object} so the field's
-     * type doesn't reference any platform-specific class — the actual
-     * instance is either {@code PaperProgressEventBridge} or
-     * {@code PacketEventsProgressSource}, loaded reflectively. Null on
-     * Spigot installs without PacketEvents (progress mode silently
-     * degrades to the post-break path).
+     * {@link #progressListener}. Concrete impl is loaded reflectively in
+     * {@link #installProgressBridge} so platform-specific symbols (Paper
+     * event types, PacketEvents API) don't link unless that platform is
+     * actually present; the interface itself is Tessera-local and
+     * platform-neutral. Null on Spigot installs without PacketEvents
+     * (progress mode silently degrades to the post-break path).
      */
-    private Object progressBridge;
+    private ProgressSource progressBridge;
     private BackendClient backendClient;
     private Path addonsDir;
 
@@ -202,7 +202,7 @@ public final class TesseraPlugin extends JavaPlugin {
 
     @Override
     public void onDisable() {
-        shutdownProgressBridge(progressBridge);
+        if (progressBridge != null) progressBridge.shutdown();
         progressBridge = null;
         if (progressListener != null) progressListener.shutdown();
         if (itemFactory != null) itemFactory.clear();
@@ -220,41 +220,26 @@ public final class TesseraPlugin extends JavaPlugin {
      *   <li>Non-Paper + PacketEvents installed:
      *       {@code PacketEventsProgressSource} ticks per-player progress
      *       from digging packets.</li>
-     *   <li>Non-Paper + no PacketEvents: returns null, logs a warning.
-     *       Progress mode silently degrades — {@code BlockBreakListener}'s
-     *       post-break path still handles real-break cleanup.</li>
+     *   <li>Otherwise: null, with a warning. Progress mode silently
+     *       degrades — {@code BlockBreakListener}'s post-break path still
+     *       handles real-break cleanup.</li>
      * </ul>
-     * Bridges are instantiated by reflection so this class never links
-     * Paper-only or PacketEvents-only symbols on installs missing them.
+     * Concrete classes are loaded via {@link Class#forName} so this class
+     * never links Paper-only or PacketEvents-only symbols on installs
+     * missing them, but once loaded we hold the bridge through the
+     * platform-neutral {@link ProgressSource} interface and call its
+     * methods directly.
      */
-    private Object installProgressBridge(BlockBreakProgressListener listener) {
+    private ProgressSource installProgressBridge(BlockBreakProgressListener listener) {
         if (PlatformDetector.PAPER) {
-            try {
-                Class<?> cls = Class.forName(
-                        "org.inventivetalent.tessera.plugin.PaperProgressEventBridge");
-                Object bridge = cls.getConstructor(BlockBreakProgressListener.class)
-                        .newInstance(listener);
-                getServer().getPluginManager().registerEvents(
-                        (org.bukkit.event.Listener) bridge, this);
-                getLogger().info("Progress source: Paper BlockBreakProgressUpdateEvent");
-                return bridge;
-            } catch (Throwable t) {
-                getLogger().warning("[progress] Paper detected but bridge failed to load: "
-                        + t.getClass().getSimpleName() + " — " + t.getMessage());
-            }
+            ProgressSource s = tryLoadProgressSource(
+                    "org.inventivetalent.tessera.plugin.PaperProgressEventBridge", listener);
+            if (s != null) { s.register(); return s; }
         }
         if (PlatformDetector.PACKET_EVENTS) {
-            try {
-                Class<?> cls = Class.forName(
-                        "org.inventivetalent.tessera.plugin.PacketEventsProgressSource");
-                Object bridge = cls.getConstructor(TesseraPlugin.class, BlockBreakProgressListener.class)
-                        .newInstance(this, listener);
-                cls.getMethod("register").invoke(bridge);
-                return bridge;
-            } catch (Throwable t) {
-                getLogger().warning("[progress] PacketEvents detected but bridge failed to load: "
-                        + t.getClass().getSimpleName() + " — " + t.getMessage());
-            }
+            ProgressSource s = tryLoadProgressSource(
+                    "org.inventivetalent.tessera.plugin.PacketEventsProgressSource", listener);
+            if (s != null) { s.register(); return s; }
         }
         getLogger().warning("Progress mode unavailable: no Paper BlockBreakProgressUpdateEvent"
                 + " and PacketEvents plugin is not installed. Install PacketEvents on Spigot"
@@ -263,15 +248,16 @@ public final class TesseraPlugin extends JavaPlugin {
         return null;
     }
 
-    private void shutdownProgressBridge(Object bridge) {
-        if (bridge == null) return;
+    private ProgressSource tryLoadProgressSource(String className, BlockBreakProgressListener listener) {
         try {
-            bridge.getClass().getMethod("shutdown").invoke(bridge);
-        } catch (NoSuchMethodException ignored) {
-            // Paper bridge doesn't need explicit shutdown — its Listener
-            // is unregistered when the plugin disables.
+            Class<?> cls = Class.forName(className);
+            return (ProgressSource) cls
+                    .getConstructor(TesseraPlugin.class, BlockBreakProgressListener.class)
+                    .newInstance(this, listener);
         } catch (Throwable t) {
-            getLogger().warning("[progress] bridge shutdown failed: " + t.getMessage());
+            getLogger().warning("[progress] " + className + " failed to load: "
+                    + t.getClass().getSimpleName() + " — " + t.getMessage());
+            return null;
         }
     }
 

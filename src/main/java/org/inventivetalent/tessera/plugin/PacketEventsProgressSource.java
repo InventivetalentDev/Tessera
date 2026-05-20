@@ -38,7 +38,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * downstream listener's {@code smoothInterpolation} fills in the
  * between-event animation, so emitting sparsely is intentional.
  */
-public final class PacketEventsProgressSource implements Listener {
+public final class PacketEventsProgressSource implements Listener, ProgressSource {
 
     private final TesseraPlugin plugin;
     private final BlockBreakProgressListener delegate;
@@ -58,6 +58,7 @@ public final class PacketEventsProgressSource implements Listener {
         this.delegate = delegate;
     }
 
+    @Override
     public void register() {
         if (registered) return;
         if (PacketEvents.getAPI() == null) {
@@ -87,6 +88,7 @@ public final class PacketEventsProgressSource implements Listener {
         plugin.getLogger().info("Progress source: PacketEvents (Spigot fallback)");
     }
 
+    @Override
     public void shutdown() {
         for (MiningState s : active.values()) {
             if (s.task != null) s.task.cancel();
