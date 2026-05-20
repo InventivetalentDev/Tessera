@@ -108,7 +108,7 @@ public final class TesseraPlugin extends JavaPlugin {
         this.registry = HeadsRegistry.loadFrom(
                 getLogger(), headsStore, gridN, mcVersion, config.skinCacheCapacity());
 
-        this.itemFactory = new HeadItemFactory();
+        this.itemFactory = new HeadItemFactory(getLogger());
         DisplayTransport transport = pickTransport(config);
         this.blockFactory = new FakeBlockFactory(itemFactory, registry, transport);
 

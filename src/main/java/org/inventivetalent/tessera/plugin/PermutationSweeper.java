@@ -14,7 +14,6 @@ import org.inventivetalent.tessera.skin.TileRotations;
 import org.inventivetalent.tessera.skin.bake.BlockBaker;
 import org.inventivetalent.tessera.split.SourceFlips;
 import org.inventivetalent.tessera.split.SourceRotations;
-import net.kyori.adventure.text.Component;
 import org.bukkit.Bukkit;
 import org.bukkit.Color;
 import org.bukkit.Location;
@@ -32,6 +31,7 @@ import org.joml.Vector3f;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.lang.reflect.Method;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -210,9 +210,14 @@ public final class PermutationSweeper {
 
         // Floating label 2 blocks above. Smaller scale so it doesn't dwarf
         // the cubes; setSeeThrough makes it readable through walls.
+        //
+        // Setting the text content is Paper-only API
+        // ({@code TextDisplay.text(Component)}). On Spigot the text() method
+        // doesn't exist and Adventure isn't bundled — we still spawn the
+        // TextDisplay so the layout matches Paper, just unlabelled.
         Location labelPos = pos.clone().add(0.5, 2, 0.5);
         TextDisplay label = world.spawn(labelPos, TextDisplay.class, d -> {
-            d.text(Component.text(c.label()));
+            setTextDisplayText(d, c.label());
             d.setBillboard(Display.Billboard.CENTER);
             d.setBackgroundColor(Color.fromARGB(0xC0, 0x00, 0x00, 0x00));
             d.setSeeThrough(true);
@@ -226,6 +231,40 @@ public final class PermutationSweeper {
         Bukkit.getScheduler().runTaskLater(plugin, () -> {
             if (!label.isDead()) label.remove();
         }, LIFETIME_TICKS);
+    }
+
+    /**
+     * Reflective {@code TextDisplay.text(Component)}. Resolved on first use,
+     * then cached. Null on Spigot; the label spawns blank.
+     */
+    private static volatile Method TEXT_DISPLAY_SET_TEXT;
+    private static volatile Method COMPONENT_TEXT_OF;
+    private static volatile boolean textApiResolved;
+
+    private static void setTextDisplayText(TextDisplay display, String text) {
+        if (!textApiResolved) resolveTextApi();
+        Method setter = TEXT_DISPLAY_SET_TEXT;
+        Method ctor = COMPONENT_TEXT_OF;
+        if (setter == null || ctor == null) return; // Spigot — no Adventure
+        try {
+            Object component = ctor.invoke(null, text);
+            setter.invoke(display, component);
+        } catch (ReflectiveOperationException ignored) {
+            // Treat any reflection failure as "no labels on this platform".
+        }
+    }
+
+    private static synchronized void resolveTextApi() {
+        if (textApiResolved) return;
+        try {
+            Class<?> compCls = Class.forName("net.kyori.adventure.text.Component");
+            COMPONENT_TEXT_OF = compCls.getMethod("text", String.class);
+            TEXT_DISPLAY_SET_TEXT = TextDisplay.class.getMethod("text", compCls);
+        } catch (ClassNotFoundException | NoSuchMethodException e) {
+            COMPONENT_TEXT_OF = null;
+            TEXT_DISPLAY_SET_TEXT = null;
+        }
+        textApiResolved = true;
     }
 
     /**

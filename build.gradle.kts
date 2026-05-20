@@ -25,6 +25,11 @@ repositories {
     maven("https://repo.papermc.io/repository/maven-public/")
     maven("https://repo.inventivetalent.org/repository/public/")
     maven("https://repo.inventivetalent.org/repository/snapshots/")
+    // PacketEvents — cross-platform packet API. Used at runtime on Spigot
+    // (where the Paper BlockBreakProgressUpdateEvent doesn't exist) to
+    // observe digging packets, and as the source-of-truth for the packet
+    // display transport when running on non-Paper servers.
+    maven("https://repo.codemc.io/repository/maven-releases/")
 }
 
 // paperweight by default puts the mojang-mapped paper-server jar onto both
@@ -54,6 +59,12 @@ dependencies {
     // registry only holds chunk→hash maps eagerly; the heavy base64
     // value/signature blobs ride this cache and load on demand from disk.
     implementation("com.github.ben-manes.caffeine:caffeine:3.1.8")
+
+    // PacketEvents — cross-platform packet API. compileOnly because it's a
+    // softdepend: server admin installs it as a separate plugin. On Paper
+    // the plugin still works without it; on Spigot it's required for the
+    // mining-progress source and packet-display transport.
+    compileOnly("com.github.retrooper:packetevents-spigot:2.7.0")
 
     // MockBukkit boots a fake Bukkit runtime in-JVM so we can integration-test
     // listeners/commands without spinning up a real Paper server. We use the

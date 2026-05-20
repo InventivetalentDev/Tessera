@@ -5,6 +5,11 @@ api-version: '1.21'
 authors: [inventivetalent]
 description: Splits Minecraft blocks into chunk-sized player-head display entities for break animations and effects.
 folia-supported: false
+# On Paper, Tessera uses Paper's BlockBreakProgressUpdateEvent and works
+# with no extra plugins. On Spigot that event doesn't exist; PacketEvents
+# is required to observe digging packets directly. Declared as softdepend
+# so Paper installs aren't forced to install it.
+softdepend: [packetevents]
 commands:
   tessera:
     description: Tessera management and debug commands.
