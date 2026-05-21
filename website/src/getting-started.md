@@ -38,7 +38,7 @@ Premium version available on [LemonSqueezy](https://inventivetalent.lemonsqueezy
    `plugins/` directory.
 2. Start the server once. Tessera will create
    `plugins/Tessera/config.yml` with sensible defaults.
-3. (Optional but recommended) Open `plugins/Tessera/config.yml`,
+3. Open `plugins/Tessera/config.yml`,
    set `mineskin.apiKey` to a key from
    [account.mineskin.org](https://account.mineskin.org/), and run
    `/tessera reload` (or restart the server). Without a key, Tessera
