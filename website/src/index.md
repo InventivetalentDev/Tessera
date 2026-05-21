@@ -38,4 +38,4 @@ features:
 
 ---
 
-Mosaikin and [MineSkin](https://mineskin.org) are both developed by [inventivetalent](https://inventivetalent.org).
+Tessera and [MineSkin](https://mineskin.org) are both developed by [inventivetalent](https://inventivetalent.org).
