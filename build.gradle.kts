@@ -10,7 +10,7 @@ plugins {
 }
 
 group = "org.inventivetalent.tessera"
-version = "26.5.4-SNAPSHOT"
+version = "26.5.4"
 
 java {
     toolchain.languageVersion.set(JavaLanguageVersion.of(25))
