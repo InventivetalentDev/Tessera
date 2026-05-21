@@ -60,10 +60,10 @@ settings and new breaks pick up the new values.
 ## `/tessera archives list | download <id>` *(paid version only)*
 
 Browse and install pre-baked block archives served by the Tessera
-backend. Available only when running the paid version distributed through
-BuiltByBit — see [Paid version](/paid-mode) for the why.
+backend. Requires a valid LemonSqueezy license key in `license.key` —
+see [Paid version](/paid-mode) for the why.
 
-On a free version the command does nothing.
+Without a license key configured the command does nothing.
 
 - `list` — fetch the current archive index. Each entry shows the id, name,
   `gridN`, target MC version, and size. Use the id with `download` to

@@ -1,6 +1,6 @@
 package org.inventivetalent.tessera.skin;
 
-import org.inventivetalent.tessera.plugin.Bbb;
+import org.inventivetalent.tessera.plugin.License;
 import org.mineskin.ClientBuilder;
 import org.mineskin.JsoupRequestHandler;
 import org.mineskin.MineSkinClient;
@@ -52,18 +52,22 @@ public final class SkinUploader {
     private static final int BATCH_SIZE = 16;
 
     /**
-     * Paid-mode (BBB) configuration. When non-null,
+     * Paid-mode (licensed) configuration. When non-null,
      * {@link #rebuildClient} points the client at our backend and attaches
      * a jsoup interceptor that adds the license/identity headers our
      * backend expects on every request. The api-key argument is ignored
      * in paid mode — the backend uses its own server-side MineSkin key
      * and treats the {@code X-Tessera-License} header as auth.
+     *
+     * <p>{@code distributorUserId} / {@code distributorResourceId} are
+     * opportunistic — they're only non-null when the jar was shipped through
+     * a channel that substituted the BBB placeholder anchors. The interceptor
+     * skips the matching headers when they're null.
      */
     public record PaidContext(
             String licenseKey,
-            String nonce,
-            String bbbUserId,
-            String bbbResourceId,
+            String distributorUserId,
+            String distributorResourceId,
             String pluginVersion,
             String serverId
     ) {}
@@ -103,12 +107,15 @@ public final class SkinUploader {
             if (paidContext != null) {
                 final PaidContext ctx = paidContext;
                 builder
-                        .baseUrl(Bbb.BACKEND_BASE_URL)
+                        .baseUrl(License.BACKEND_BASE_URL)
                         .requestHandler(JsoupRequestHandler.withRequestInterceptor(conn -> {
                             conn.header("X-Tessera-License", ctx.licenseKey());
-                            conn.header("X-Tessera-Nonce", ctx.nonce());
-                            conn.header("X-Tessera-BBB-User", ctx.bbbUserId());
-                            conn.header("X-Tessera-BBB-Resource", ctx.bbbResourceId());
+                            if (ctx.distributorUserId() != null) {
+                                conn.header("X-Tessera-Distributor-User", ctx.distributorUserId());
+                            }
+                            if (ctx.distributorResourceId() != null) {
+                                conn.header("X-Tessera-Distributor-Resource", ctx.distributorResourceId());
+                            }
                             conn.header("X-Tessera-Plugin-Version", ctx.pluginVersion());
                             conn.header("X-Tessera-Server-Id", ctx.serverId());
                         }));

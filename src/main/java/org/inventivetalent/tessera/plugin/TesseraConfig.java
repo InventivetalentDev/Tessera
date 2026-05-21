@@ -17,6 +17,7 @@ import java.util.stream.Collectors;
  * fallback so existing configs keep working until users migrate.
  */
 public record TesseraConfig(
+        String licenseKey,
         String mineskinApiKey,
         int chunkGridSize,
         Set<String> enabledMaterials,
@@ -89,6 +90,7 @@ public record TesseraConfig(
                 readString(cfg, "transport", "transport", "packet"));
 
         return new TesseraConfig(
+                readString(cfg, "license.key", "licenseKey", "").trim().toLowerCase(Locale.ROOT),
                 readString(cfg, "mineskin.apiKey", "mineskinApiKey", ""),
                 grid,
                 normalize(readStringList(cfg, "materials.enabled", "enabledMaterials", List.of("*"))),
@@ -114,6 +116,16 @@ public record TesseraConfig(
                 readBool(cfg, "debug", "debug", false),
                 transport
         );
+    }
+
+    /**
+     * True iff {@link #licenseKey()} is a well-formed LemonSqueezy UUID.
+     * Free-mode (empty key) and misconfigured keys (anything that doesn't match
+     * the format) both return false — the latter logs at startup, then the
+     * plugin behaves like free mode.
+     */
+    public boolean hasLicense() {
+        return License.looksLikeKey(licenseKey);
     }
 
     public boolean enables(String materialKey) {
