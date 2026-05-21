@@ -75,10 +75,15 @@ goes live without a restart.
 ## License keys, sharing, and revocation
 
 Your license key gates MineSkin uploads through our backend and access
-to `/tessera archives`. Don't share it — the backend logs every server
-install ID that calls in with a given key, and a single key showing up
-across many distinct servers will get revoked from the LemonSqueezy
-dashboard. The next request after revocation fails with a `403`.
+to `/tessera archives`. The first time a server calls the backend with
+your key it gets activated against your server's stable install ID —
+nothing for you to do, it happens transparently on the first block
+break.
+
+Don't share the key — the backend logs every install ID that calls in
+with it, and a single key showing up across many distinct servers will
+get disabled from the LemonSqueezy dashboard. The next request after
+revocation fails with a `403`.
 
 If you run several of your own servers, that's fine; the backend treats
 multiple legitimate installs as a normal pattern. The flag is the
