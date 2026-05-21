@@ -19,6 +19,7 @@ import org.inventivetalent.tessera.util.Hashing;
 import org.inventivetalent.tessera.transport.DisplayTransport;
 import org.inventivetalent.tessera.transport.bukkit.BukkitDisplayTransport;
 import org.inventivetalent.tessera.transport.packet.PacketDisplayTransport;
+import org.inventivetalent.tessera.util.PlatformDetector;
 import org.bstats.bukkit.Metrics;
 import org.bukkit.Bukkit;
 import org.bukkit.command.PluginCommand;
@@ -45,6 +46,16 @@ public final class TesseraPlugin extends JavaPlugin {
     private BlockBaker baker;
     private java.util.concurrent.ExecutorService bakerExecutor;
     private BlockBreakProgressListener progressListener;
+    /**
+     * Platform-specific bridge that delivers progress events to
+     * {@link #progressListener}. Concrete impl is loaded reflectively in
+     * {@link #installProgressBridge} so platform-specific symbols (Paper
+     * event types, PacketEvents API) don't link unless that platform is
+     * actually present; the interface itself is Tessera-local and
+     * platform-neutral. Null on Spigot installs without PacketEvents
+     * (progress mode silently degrades to the post-break path).
+     */
+    private ProgressSource progressBridge;
     private BackendClient backendClient;
     private Path addonsDir;
 
@@ -53,7 +64,7 @@ public final class TesseraPlugin extends JavaPlugin {
         saveDefaultConfig();
         this.config = TesseraConfig.from(getConfig());
 
-        String mcVersion = Bukkit.getMinecraftVersion();
+        String mcVersion = PlatformDetector.minecraftVersion();
         int gridN = config.chunkGridSize();
 
         // Heads catalogs stack from most- to least-specific:
@@ -108,7 +119,7 @@ public final class TesseraPlugin extends JavaPlugin {
         this.registry = HeadsRegistry.loadFrom(
                 getLogger(), headsStore, gridN, mcVersion, config.skinCacheCapacity());
 
-        this.itemFactory = new HeadItemFactory();
+        this.itemFactory = new HeadItemFactory(getLogger());
         DisplayTransport transport = pickTransport(config);
         this.blockFactory = new FakeBlockFactory(itemFactory, registry, transport);
 
@@ -174,6 +185,7 @@ public final class TesseraPlugin extends JavaPlugin {
         getServer().getPluginManager().registerEvents(
                 new BlockBreakListener(this, blockFactory, registry, baker, active, progressListener), this);
         progressListener.start();
+        this.progressBridge = installProgressBridge(progressListener);
 
         PluginCommand cmd = getCommand("tessera");
         if (cmd != null) {
@@ -196,12 +208,63 @@ public final class TesseraPlugin extends JavaPlugin {
 
     @Override
     public void onDisable() {
+        if (progressBridge != null) progressBridge.shutdown();
+        progressBridge = null;
         if (progressListener != null) progressListener.shutdown();
         if (itemFactory != null) itemFactory.clear();
         if (uploader != null) uploader.cancelAll();
         if (bakerExecutor != null) bakerExecutor.shutdownNow();
         if (headsStore != null) headsStore.close();
         getLogger().info("Tessera disabled");
+    }
+
+    /**
+     * Picks and registers the progress-event bridge for this platform:
+     * <ul>
+     *   <li>Paper: {@code PaperProgressEventBridge} subscribes to
+     *       {@code BlockBreakProgressUpdateEvent}.</li>
+     *   <li>Non-Paper + PacketEvents installed:
+     *       {@code PacketEventsProgressSource} ticks per-player progress
+     *       from digging packets.</li>
+     *   <li>Otherwise: null, with a warning. Progress mode silently
+     *       degrades — {@code BlockBreakListener}'s post-break path still
+     *       handles real-break cleanup.</li>
+     * </ul>
+     * Concrete classes are loaded via {@link Class#forName} so this class
+     * never links Paper-only or PacketEvents-only symbols on installs
+     * missing them, but once loaded we hold the bridge through the
+     * platform-neutral {@link ProgressSource} interface and call its
+     * methods directly.
+     */
+    private ProgressSource installProgressBridge(BlockBreakProgressListener listener) {
+        if (PlatformDetector.PAPER) {
+            ProgressSource s = tryLoadProgressSource(
+                    "org.inventivetalent.tessera.plugin.PaperProgressEventBridge", listener);
+            if (s != null) { s.register(); return s; }
+        }
+        if (PlatformDetector.PACKET_EVENTS) {
+            ProgressSource s = tryLoadProgressSource(
+                    "org.inventivetalent.tessera.plugin.PacketEventsProgressSource", listener);
+            if (s != null) { s.register(); return s; }
+        }
+        getLogger().warning("Progress mode unavailable: no Paper BlockBreakProgressUpdateEvent"
+                + " and PacketEvents plugin is not installed. Install PacketEvents on Spigot"
+                + " to get the chunked-shrink-during-mining animation; without it, only the"
+                + " post-break shatter effect runs.");
+        return null;
+    }
+
+    private ProgressSource tryLoadProgressSource(String className, BlockBreakProgressListener listener) {
+        try {
+            Class<?> cls = Class.forName(className);
+            return (ProgressSource) cls
+                    .getConstructor(TesseraPlugin.class, BlockBreakProgressListener.class)
+                    .newInstance(this, listener);
+        } catch (Throwable t) {
+            getLogger().warning("[progress] " + className + " failed to load: "
+                    + t.getClass().getSimpleName() + " — " + t.getMessage());
+            return null;
+        }
     }
 
     private static ThreadFactory named(String name) {
