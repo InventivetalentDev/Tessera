@@ -25,6 +25,13 @@ command for downloading larger pre-baked packs on demand.
 
 Folia is **not** supported.
 
+## Get the plugin
+
+[![modrinth](https://cdn.jsdelivr.net/npm/@intergrav/devins-badges@3/assets/compact/available/modrinth_vector.svg)](https://modrinth.com/plugin/tessera)   
+[![spigot](https://cdn.jsdelivr.net/npm/@intergrav/devins-badges@3/assets/compact/supported/spigot_vector.svg)](https://www.spigotmc.org/resources/tessera.135452/)
+
+Premium version available on [LemonSqueezy](https://inventivetalent.lemonsqueezy.com/checkout/buy/83b19253-6672-4dab-bb6f-67873446d26c) - [Learn more.](/paid-mode)
+
 ## Install
 
 1. Place the plugin jar (`tessera-<version>.jar`) into your server's
