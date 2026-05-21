@@ -9,6 +9,8 @@
 ---
 
 [![modrinth](https://cdn.jsdelivr.net/npm/@intergrav/devins-badges@3/assets/compact/available/modrinth_vector.svg)](https://modrinth.com/plugin/tessera)
+[![spigot](https://cdn.jsdelivr.net/npm/@intergrav/devins-badges@3/assets/compact/supported/spigot_vector.svg)](https://www.spigotmc.org/resources/tessera.135452/)
+
 [![mineskin](https://imagedelivery.net/3uwxrP7hx2SHdBFF5lTuXg/1c2fff3d-819a-41c2-5c56-c6bf09670000/w=800)](https://mineskin.org)
 
 
