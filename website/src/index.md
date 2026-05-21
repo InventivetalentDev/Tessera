@@ -5,6 +5,8 @@ hero:
   name: Tessera
   text: Block-break animations, reimagined.
   tagline: A PaperMC plugin that splits broken blocks into a lattice of player-head displays for cinematic break effects.
+  image:
+    src: https://imagedelivery.net/3uwxrP7hx2SHdBFF5lTuXg/d191cbd1-138f-4a8f-7a64-7e20f9134800/w=800
   actions:
     - theme: brand
       text: Get Started
