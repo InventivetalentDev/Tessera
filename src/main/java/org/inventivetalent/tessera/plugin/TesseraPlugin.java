@@ -127,33 +127,39 @@ public final class TesseraPlugin extends JavaPlugin {
         // have in the bundled heads file yet. Uses a small thread pool so
         // multiple concurrent first-time breaks don't block each other.
         //
-        // Paid mode (BBB-purchased build): the BackendClient is wired up
-        // unconditionally so archive endpoints work. MineSkin traffic
-        // routes through our backend by default, but if the operator sets
+        // Licensed mode (license.key set in config.yml): the BackendClient
+        // is wired up so archive endpoints work. MineSkin traffic routes
+        // through our backend by default, but if the operator sets
         // mineskin.apiKey in config.yml we honor that and upload directly
-        // to MineSkin with their key instead — useful for buyers who
-        // already have a MineSkin account they'd rather use.
-        // See org.inventivetalent.tessera.plugin.Bbb for placeholder details.
+        // to MineSkin with their key instead — useful for buyers who already
+        // have a MineSkin account they'd rather use.
+        // See org.inventivetalent.tessera.plugin.License for key format details.
         String pluginVersion = getDescription().getVersion();
         String userAgent = "Tessera/" + pluginVersion;
         String configuredApiKey = config.mineskinApiKey();
         boolean hasCustomApiKey = configuredApiKey != null && !configuredApiKey.isBlank();
-        if (Bbb.PAID) {
+        String rawLicense = config.licenseKey();
+        if (rawLicense != null && !rawLicense.isBlank() && !config.hasLicense()) {
+            getLogger().warning(
+                    "license.key is set but doesn't match the LemonSqueezy UUID format"
+                    + " (expected 8-4-4-4-12 hex). Running in free mode — fix the key and"
+                    + " restart to enable licensed features.");
+        }
+        if (config.hasLicense()) {
             String serverId = computeServerId();
             SkinUploader.PaidContext paid = new SkinUploader.PaidContext(
-                    Bbb.BBB_LICENSE,
-                    Bbb.BBB_NONCE,
-                    Bbb.BBB_USER,
-                    Bbb.BBB_RESOURCE,
+                    rawLicense,
+                    License.distributorUserIdOrNull(),
+                    License.distributorResourceIdOrNull(),
                     pluginVersion,
                     serverId);
             this.backendClient = new BackendClient(getLogger(), userAgent, paid);
             if (hasCustomApiKey) {
                 this.uploader = new SkinUploader(getLogger(), userAgent, configuredApiKey);
-                getLogger().info("Tessera in PAID mode (uploads via custom MineSkin API key)");
+                getLogger().info("Tessera in licensed mode (uploads via custom MineSkin API key)");
             } else {
                 this.uploader = new SkinUploader(getLogger(), userAgent, null, paid);
-                getLogger().info("Tessera in PAID mode");
+                getLogger().info("Tessera in licensed mode");
             }
         } else {
             this.uploader = new SkinUploader(getLogger(), userAgent, configuredApiKey);

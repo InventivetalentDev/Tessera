@@ -17,10 +17,13 @@ import java.util.stream.Collectors;
  * fallback so existing configs keep working until users migrate.
  */
 public record TesseraConfig(
+        String licenseKey,
         String mineskinApiKey,
         int chunkGridSize,
         Set<String> enabledMaterials,
         Set<String> disabledMaterials,
+        Set<String> enabledWorlds,
+        Set<String> disabledWorlds,
         int maxConcurrentFakeBlocks,
         AnimationMode animationMode,
         CollapseStyle collapseStyle,
@@ -89,11 +92,14 @@ public record TesseraConfig(
                 readString(cfg, "transport", "transport", "packet"));
 
         return new TesseraConfig(
+                readString(cfg, "license.key", "licenseKey", "").trim().toLowerCase(Locale.ROOT),
                 readString(cfg, "mineskin.apiKey", "mineskinApiKey", ""),
                 grid,
                 normalize(readStringList(cfg, "materials.enabled", "enabledMaterials", List.of("*"))),
                 normalize(readStringList(cfg, "materials.disabled", "disabledMaterials", List.of(
                         "minecraft:water", "minecraft:lava", "minecraft:fire", "minecraft:soul_fire"))),
+                normalizeWorlds(readStringList(cfg, "worlds.enabled", "enabledWorlds", List.of("*"))),
+                normalizeWorlds(readStringList(cfg, "worlds.disabled", "disabledWorlds", List.of())),
                 readInt(cfg, "limits.maxConcurrentFakeBlocks", "maxConcurrentFakeBlocks", 8),
                 mode,
                 style,
@@ -116,10 +122,26 @@ public record TesseraConfig(
         );
     }
 
+    /**
+     * True iff {@link #licenseKey()} is a well-formed LemonSqueezy UUID.
+     * Free-mode (empty key) and misconfigured keys (anything that doesn't match
+     * the format) both return false — the latter logs at startup, then the
+     * plugin behaves like free mode.
+     */
+    public boolean hasLicense() {
+        return License.looksLikeKey(licenseKey);
+    }
+
     public boolean enables(String materialKey) {
         String key = materialKey.toLowerCase(Locale.ROOT);
         if (disabledMaterials.contains(key)) return false;
         return enabledMaterials.contains("*") || enabledMaterials.contains(key);
+    }
+
+    public boolean enablesWorld(String worldName) {
+        String key = worldName.toLowerCase(Locale.ROOT);
+        if (disabledWorlds.contains(key)) return false;
+        return enabledWorlds.contains("*") || enabledWorlds.contains(key);
     }
 
     private static AnimationMode parseAnimationMode(String raw) {
@@ -193,6 +215,12 @@ public record TesseraConfig(
                 // enables() can match it. Anything else without a colon
                 // gets the vanilla namespace.
                 .map(s -> s.equals("*") || s.contains(":") ? s : "minecraft:" + s)
+                .collect(Collectors.toUnmodifiableSet());
+    }
+
+    private static Set<String> normalizeWorlds(List<String> raw) {
+        return raw.stream()
+                .map(s -> s.toLowerCase(Locale.ROOT))
                 .collect(Collectors.toUnmodifiableSet());
     }
 }

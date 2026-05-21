@@ -36,16 +36,25 @@ metrics: true
 # state transitions (spawn / transfer / reverse / break / watchdog).
 debug: false
 
+license:
+  # LemonSqueezy license key. Format: lowercase 8-4-4-4-12 hex UUID, e.g.
+  #   38b1460a-5104-4067-a91d-77b872934d51
+  # Leave blank to run in free mode (only blocks bundled with the plugin
+  # are animated; archives and backend-routed MineSkin uploads are off).
+  # Pasting from a confirmation email with uppercase letters is fine — the
+  # plugin lowercases the value before validating and sending it.
+  key: ""
+
 mineskin:
   # API key — required for runtime uploads of blocks not already bundled
   # with the plugin. Get one at https://account.mineskin.org/. Without a
   # key the plugin only renders bundled blocks and falls back to vanilla
   # particles for anything else.
   #
-  # On paid (BuiltByBit) builds, leaving this blank routes uploads through
-  # the Tessera backend using your license — no MineSkin account needed.
-  # Setting a key here overrides that and uploads directly to MineSkin
-  # with your key instead.
+  # With a valid license.key above, leaving this blank routes uploads
+  # through the Tessera backend using your license — no MineSkin account
+  # needed. Setting a key here overrides that and uploads directly to
+  # MineSkin with your key instead.
   apiKey: ""
 
 skins:
@@ -64,6 +73,17 @@ materials:
     - "minecraft:lava"
     - "minecraft:fire"
     - "minecraft:soul_fire"
+
+worlds:
+  # Worlds in which the break animation should play. Use ["*"] for all
+  # worlds (default). Otherwise list world names exactly as they appear
+  # in World#getName() (e.g. "world", "world_nether", "world_the_end").
+  # Matching is case-insensitive.
+  enabled: ["*"]
+
+  # Worlds in which the break animation should never play, even if "*"
+  # is enabled above. Takes precedence over the enabled list.
+  disabled: []
 
 limits:
   # Hard cap on concurrent FakeBlocks (sub-block effect entities).

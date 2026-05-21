@@ -243,6 +243,7 @@ public final class BlockBreakProgressListener implements Listener {
         if (block == null) return;
         Player player = event.getPlayer();
 
+        if (!cfg.enablesWorld(block.getWorld().getName())) return;
         if (tooFast(block, player, cfg)) return;
 
         Location breakLoc = block.getLocation();
@@ -381,6 +382,7 @@ public final class BlockBreakProgressListener implements Listener {
 
     private void spawnAndRegister(Player player, Block block, Location breakLoc,
                                   BlockPosKey posKey, double progress, TesseraConfig cfg) {
+        if (!cfg.enablesWorld(block.getWorld().getName())) return;
         Material mat = block.getType();
         BlockKey key = BlockKey.of(mat.getKey().getNamespace() + ":" + mat.getKey().getKey());
         if (!cfg.enables(key.asString())) return;
@@ -803,6 +805,10 @@ public final class BlockBreakProgressListener implements Listener {
         }
         for (Player player : Bukkit.getOnlinePlayers()) {
             if (player.getGameMode() != GameMode.SURVIVAL) {
+                clearPreload(player.getUniqueId());
+                continue;
+            }
+            if (!cfg.enablesWorld(player.getWorld().getName())) {
                 clearPreload(player.getUniqueId());
                 continue;
             }

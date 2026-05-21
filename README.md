@@ -8,7 +8,6 @@
 
 ---
 
-[![builtbybit](https://cdn.jsdelivr.net/npm/@intergrav/devins-badges@3/assets/compact/available/builtbybit_vector.svg)](https://builtbybit.com/resources/tessera.107243/)
 [![modrinth](https://cdn.jsdelivr.net/npm/@intergrav/devins-badges@3/assets/compact/available/modrinth_vector.svg)](https://modrinth.com/plugin/tessera)
 [![mineskin](https://imagedelivery.net/3uwxrP7hx2SHdBFF5lTuXg/1c2fff3d-819a-41c2-5c56-c6bf09670000/w=800)](https://mineskin.org)
 

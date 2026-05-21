@@ -33,7 +33,7 @@ features:
   - title: Debug command surface
     details: Built-in /tessera debug commands let server operators tune rotations, flips, and texture overrides live in-game.
   - title: Paid version available
-    details: A BuiltByBit-distributed paid version skips the MineSkin API-key requirement and adds on-demand pre-baked archive downloads.
+    details: A LemonSqueezy-licensed paid version skips the MineSkin API-key requirement and adds on-demand pre-baked archive downloads.
 ---
 
 ---

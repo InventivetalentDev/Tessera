@@ -564,13 +564,13 @@ public final class TesseraCommand implements CommandExecutor, TabCompleter {
     }
 
     private boolean handleArchives(CommandSender sender, String[] args) {
-        if (!Bbb.PAID) {
-            sender.sendMessage("§7/tessera archives is a paid feature — get the plugin on BuiltByBit.");
+        if (!plugin.tesseraConfig().hasLicense()) {
+            sender.sendMessage("§7/tessera archives is a paid feature — set license.key in config.yml to enable.");
             return true;
         }
         BackendClient backend = plugin.backendClient();
         if (backend == null) {
-            sender.sendMessage("§cBackend client not initialized (this should not happen in paid mode).");
+            sender.sendMessage("§cBackend client not initialized (this should not happen with a valid license).");
             return true;
         }
         String sub = args.length >= 2 ? args[1].toLowerCase(Locale.ROOT) : "list";
@@ -1277,7 +1277,7 @@ public final class TesseraCommand implements CommandExecutor, TabCompleter {
     }
 
     private List<String> archivesComplete(String[] args) {
-        if (!Bbb.PAID) return Collections.emptyList();
+        if (!plugin.tesseraConfig().hasLicense()) return Collections.emptyList();
         if (args.length == 2) return match(args[1], ARCHIVES_SUBS);
         if (args.length == 3 && "download".equalsIgnoreCase(args[1])) {
             // Suggest known archive IDs. Cached client-side would be nicer,

@@ -22,7 +22,7 @@ import java.util.List;
 import java.util.logging.Logger;
 
 /**
- * HTTP client for the Tessera backend (paid-mode only). Hits the archive
+ * HTTP client for the Tessera backend (licensed-mode only). Hits the archive
  * endpoints with the same {@code X-Tessera-*} headers our MineSkin
  * interceptor attaches so the backend can gate and audit by license.
  *
@@ -67,7 +67,7 @@ public final class BackendClient {
     private record ArchivesResponse(List<ArchiveSummary> archives) {}
 
     public List<ArchiveSummary> listArchives(Integer gridN) throws IOException {
-        String url = Bbb.BACKEND_BASE_URL + "/archives"
+        String url = License.BACKEND_BASE_URL + "/archives"
                 + (gridN != null ? "?gridN=" + URLEncoder.encode(gridN.toString(), StandardCharsets.UTF_8) : "");
         HttpRequest req = baseRequest(url).GET().build();
         HttpResponse<String> resp = send(req, HttpResponse.BodyHandlers.ofString());
@@ -89,7 +89,7 @@ public final class BackendClient {
      * cleaned up.
      */
     public Path downloadArchive(int id, String displayName, Path destDir) throws IOException {
-        String stage1 = Bbb.BACKEND_BASE_URL + "/archives/" + id + "/download";
+        String stage1 = License.BACKEND_BASE_URL + "/archives/" + id + "/download";
         HttpRequest stage1Req = baseRequest(stage1).GET().build();
         HttpResponse<Void> stage1Resp = send(stage1Req, HttpResponse.BodyHandlers.discarding());
         int code = stage1Resp.statusCode();
@@ -131,16 +131,20 @@ public final class BackendClient {
     }
 
     private HttpRequest.Builder baseRequest(String url) {
-        return HttpRequest.newBuilder(URI.create(url))
+        HttpRequest.Builder b = HttpRequest.newBuilder(URI.create(url))
                 .timeout(Duration.ofSeconds(30))
                 .header("User-Agent", userAgent)
                 .header("Accept", "application/json")
                 .header("X-Tessera-License", ctx.licenseKey())
-                .header("X-Tessera-Nonce", ctx.nonce())
-                .header("X-Tessera-BBB-User", ctx.bbbUserId())
-                .header("X-Tessera-BBB-Resource", ctx.bbbResourceId())
                 .header("X-Tessera-Plugin-Version", ctx.pluginVersion())
                 .header("X-Tessera-Server-Id", ctx.serverId());
+        if (ctx.distributorUserId() != null) {
+            b.header("X-Tessera-Distributor-User", ctx.distributorUserId());
+        }
+        if (ctx.distributorResourceId() != null) {
+            b.header("X-Tessera-Distributor-Resource", ctx.distributorResourceId());
+        }
+        return b;
     }
 
     private <T> HttpResponse<T> send(HttpRequest req, HttpResponse.BodyHandler<T> handler) throws IOException {
