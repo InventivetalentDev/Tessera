@@ -74,6 +74,17 @@ materials:
     - "minecraft:fire"
     - "minecraft:soul_fire"
 
+worlds:
+  # Worlds in which the break animation should play. Use ["*"] for all
+  # worlds (default). Otherwise list world names exactly as they appear
+  # in World#getName() (e.g. "world", "world_nether", "world_the_end").
+  # Matching is case-insensitive.
+  enabled: ["*"]
+
+  # Worlds in which the break animation should never play, even if "*"
+  # is enabled above. Takes precedence over the enabled list.
+  disabled: []
+
 limits:
   # Hard cap on concurrent FakeBlocks (sub-block effect entities).
   # Excess block-break events fall back to the vanilla animation.
