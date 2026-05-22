@@ -42,7 +42,8 @@ public record TesseraConfig(
         boolean enableTintedBlocks,
         boolean metrics,
         boolean debug,
-        Transport transport
+        Transport transport,
+        int bundleBatchSize
 ) {
 
     public enum AnimationMode { PROGRESS, POST_BREAK }
@@ -89,7 +90,15 @@ public record TesseraConfig(
                 readString(cfg, "animation.style", "collapseStyle", "pop"));
 
         Transport transport = parseTransport(
-                readString(cfg, "transport", "transport", "packet"));
+                readString(cfg, "transport.mode", "transport", "packet"));
+
+        int bundleBatchSize = readInt(cfg, "transport.bundleBatchSize",
+                "bundleBatchSize", 128);
+        if (bundleBatchSize < 0 || bundleBatchSize > 4096) {
+            throw new IllegalArgumentException(
+                    "transport.bundleBatchSize must be 0 (disabled) or in [1, 4096]; got "
+                            + bundleBatchSize);
+        }
 
         return new TesseraConfig(
                 readString(cfg, "license.key", "licenseKey", "").trim().toLowerCase(Locale.ROOT),
@@ -118,7 +127,8 @@ public record TesseraConfig(
                 cfg.getBoolean("enableTintedBlocks", true),
                 cfg.getBoolean("metrics", true),
                 readBool(cfg, "debug", "debug", false),
-                transport
+                transport,
+                bundleBatchSize
         );
     }
 

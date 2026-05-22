@@ -330,7 +330,8 @@ public final class TesseraPlugin extends JavaPlugin {
             getLogger().info("Transport: bukkit (Paper API)");
             return new BukkitDisplayTransport(this);
         }
-        PacketDisplayTransport packet = new PacketDisplayTransport();
+        PacketDisplayTransport packet = new PacketDisplayTransport(
+                () -> tesseraConfig().bundleBatchSize());
         if (packet.isAvailable()) {
             getLogger().info("Transport: packet (NMS direct)");
             return packet;
