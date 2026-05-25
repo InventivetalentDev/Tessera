@@ -4,7 +4,7 @@ Tessera is available in two flavours:
 
 - **Free.** Animates blocks
   in the bundled `heads-<gridN>.ztsra` resource out of the box. Anything
-  else requires a [MineSkin](https://account.mineskin.org/) API key (subscription recommended)
+  else requires a [MineSkin](https://account.mineskin.org/keys/new/?name=Tessera&intendedUse=plugin_or_mod&projectLink=https%3A%2F%2Ftessera.inventivetalent.org) API key (subscription recommended)
   in `config.yml` so the plugin can bake new blocks on demand.
 - **Paid.** Sold on
   [LemonSqueezy](https://inventivetalent.lemonsqueezy.com/checkout/buy/83b19253-6672-4dab-bb6f-67873446d26c).

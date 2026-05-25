@@ -35,7 +35,7 @@ accordingly.
 
 | Option   | Type   | Default | Description |
 | -------- | ------ | ------- | ----------- |
-| `apiKey` | string | `""`    | API key for runtime uploads of blocks not in the bundled `heads.json`. Get one at [account.mineskin.org](https://account.mineskin.org/). Without a key, the plugin only renders blocks present in `heads.json` and falls back to vanilla particles for everything else. |
+| `apiKey` | string | `""`    | API key for runtime uploads of blocks not in the bundled `heads.json`. Get one at [account.mineskin.org](https://account.mineskin.org/keys/new/?name=Tessera&intendedUse=plugin_or_mod&projectLink=https%3A%2F%2Ftessera.inventivetalent.org). Without a key, the plugin only renders blocks present in `heads.json` and falls back to vanilla particles for everything else. |
 
 ## `materials`
 

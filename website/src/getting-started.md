@@ -9,7 +9,7 @@ breaker's view direction, in sync with live mining progress.
 A curated set of common blocks ships pre-baked into `heads.json`, so a
 freshly installed plugin handles those blocks with zero network calls.
 Anything outside that list is baked on demand at runtime, which requires a
-free [MineSkin](https://account.mineskin.org/) API key.
+free [MineSkin](https://account.mineskin.org/keys/new/?name=Tessera&intendedUse=plugin_or_mod&projectLink=https%3A%2F%2Ftessera.inventivetalent.org) API key.
 
 If you'd rather skip the MineSkin signup entirely, the [paid
 version](/paid-mode) routes MineSkin requests through our backend server
@@ -40,7 +40,7 @@ Premium version available on [LemonSqueezy](https://inventivetalent.lemonsqueezy
    `plugins/Tessera/config.yml` with sensible defaults.
 3. Open `plugins/Tessera/config.yml`,
    set `mineskin.apiKey` to a key from
-   [account.mineskin.org](https://account.mineskin.org/), and run
+   [account.mineskin.org](https://account.mineskin.org/keys/new/?name=Tessera&intendedUse=plugin_or_mod&projectLink=https%3A%2F%2Ftessera.inventivetalent.org), and run
    `/tessera reload` (or restart the server). Without a key, Tessera
    only animates the blocks present in `heads.json` and falls back to
    the vanilla particle animation for everything else.
