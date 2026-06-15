@@ -13,6 +13,7 @@ export default defineConfig({
       { text: 'Configuration', link: '/configuration' },
       { text: 'Commands', link: '/commands' },
       { text: 'Paid Build', link: '/paid-mode' },
+      { text: 'Extension API', link: '/extension-api' },
     ],
     sidebar: [
       {
@@ -31,7 +32,10 @@ export default defineConfig({
       },
       {
         text: 'Development',
-        items: [{ text: 'Debug Commands', link: '/debug-commands' }],
+        items: [
+          { text: 'Extension API', link: '/extension-api' },
+          { text: 'Debug Commands', link: '/debug-commands' },
+        ],
       },
     ],
     search: {
