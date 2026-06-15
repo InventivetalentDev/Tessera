@@ -70,6 +70,19 @@ public final class BlockBaker {
     private final Map<BakeKey, CompletableFuture<Boolean>> inflight = new ConcurrentHashMap<>();
 
     /**
+     * Optional hook fired after a successful runtime registration, on the bake
+     * executor thread (dispatch to the main thread inside it for Bukkit work).
+     * Set by {@code TesseraPlugin} to emit {@code TesseraBlockBakedEvent}; null
+     * in the {@link BakeMain} CLI which has no server.
+     */
+    private volatile Consumer<BakeKey> onBaked;
+
+    /** Register the post-bake hook. See {@link #onBaked}. */
+    public void onBaked(Consumer<BakeKey> hook) {
+        this.onBaked = hook;
+    }
+
+    /**
      * Bake-plan summary fired through the optional callback passed to
      * {@link #bake(BakeKey, Consumer)} once the splitter and packer have
      * decided what's actually going to happen. {@code needUpload} is the
@@ -268,6 +281,13 @@ public final class BlockBaker {
         }
 
         registry.register(key, chunkMap, model.variantRotations());
+        if (onBaked != null) {
+            try {
+                onBaked.accept(key);
+            } catch (RuntimeException re) {
+                logger.warning("[runtime-bake] " + key + " onBaked callback threw: " + re.getMessage());
+            }
+        }
 
         Files.createDirectories(pngDir);
         return true;

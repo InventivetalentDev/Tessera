@@ -184,6 +184,30 @@ breaker's eye direction. Uses Display interpolation (client-side lerp), not
 per-tick server work — server cost is N scheduler tasks for N chunks plus one
 cleanup.
 
+### 3. Extension API (third-party plugins)
+
+The `tessera-api` Gradle subproject is a separate, interface-only artifact that
+third-party plugins compile against (`compileOnly`) to reuse the pre-baked block
+data without bundling any of it — e.g. block-placing/decoration plugins. It holds
+the public surface (`org.inventivetalent.tessera.api.{TesseraApi, SkinPayload,
+ChunkLayout, BakeOutcome, Tessera}` + `api.event.TesseraBlockBakedEvent`) plus
+the shared value types (`core.{BlockKey, BakeKey, ChunkCoord}` physically live in
+the api module; same package, so plugin code is unaffected). The root plugin
+`implementation(project(":tessera-api"))`s it; shadow does **not** relocate
+`org.inventivetalent.*`, so the api classes ship unrelocated in the plugin jar
+and resolve through Tessera's classloader at runtime (Vault/WorldEdit pattern).
+
+`plugin.TesseraApiImpl` is the read-only facade over `HeadsRegistry` (queries),
+`FakeBlockFactory.layout(BakeKey, Quaternionf)` (pure-data per-chunk
+`ChunkLayout` reusing the same `BlockGeometry` math + `canonicalRotation()` as
+the spawn path — single source of truth for the face invariant), and
+`BlockBaker` (on-demand `requestBake`). It's registered with Bukkit's
+`ServicesManager` in `onEnable`; consumers load it via `Tessera.api()`. On-demand
+baking is the baseline (not a premium gate): `requestBake` routes to MineSkin via
+the server's key or license, returning `BakeOutcome.NOT_CONFIGURED` only when the
+server has neither. `BlockBaker.onBaked` fires `TesseraBlockBakedEvent` on the
+main thread after a successful runtime bake. Consumer docs: `docs/api.md`.
+
 ### Variant rotation pipeline
 
 Anything orientable (logs, furnaces, observers, stairs…) has multiple

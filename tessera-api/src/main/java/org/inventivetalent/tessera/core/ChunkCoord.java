@@ -2,7 +2,7 @@ package org.inventivetalent.tessera.core;
 
 /**
  * Position of a sub-block chunk in the N×N×N split grid. Coordinates are
- * 0-indexed; {@code (0,0,0)} is the corner where every {@link FaceDir} that
+ * 0-indexed; {@code (0,0,0)} is the corner where every {@code FaceDir} that
  * has a -1 component is outward (i.e. the (DOWN, NORTH, WEST) corner).
  *
  * <p>Encoded as a stable string {@code "x,y,z"} in heads.json so per-chunk

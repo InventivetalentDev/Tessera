@@ -1,5 +1,7 @@
 rootProject.name = "tessera"
 
+include("tessera-api")
+
 pluginManagement {
     repositories {
         mavenCentral()
