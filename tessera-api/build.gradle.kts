@@ -48,14 +48,14 @@ publishing {
     }
     repositories {
         maven {
-            name = "inventive"
-            val releases = "https://repo.inventivetalent.org/repository/releases/"
-            val snapshots = "https://repo.inventivetalent.org/repository/snapshots/"
+            name = "inventive-repo"
+            val releases = "https://repo.inventivetalent.org/repository/maven-releases/"
+            val snapshots = "https://repo.inventivetalent.org/repository/maven-snapshots/"
             url = uri(if (version.toString().endsWith("SNAPSHOT")) snapshots else releases)
             credentials {
-                username = (project.findProperty("inventiveUser") as String?)
+                username = (project.findProperty("inventiveRepoUser") as String?)
                     ?: System.getenv("INVENTIVE_REPO_USER")
-                password = (project.findProperty("inventivePassword") as String?)
+                password = (project.findProperty("inventiveRepoPassword") as String?)
                     ?: System.getenv("INVENTIVE_REPO_PASSWORD")
             }
         }
