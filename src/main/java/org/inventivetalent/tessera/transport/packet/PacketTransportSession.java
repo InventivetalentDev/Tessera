@@ -2,7 +2,10 @@ package org.inventivetalent.tessera.transport.packet;
 
 import org.inventivetalent.tessera.transport.DisplayHandle;
 import org.inventivetalent.tessera.transport.TransportSession;
+import net.minecraft.network.protocol.Packet;
+import net.minecraft.network.protocol.game.ClientGamePacketListener;
 import net.minecraft.network.protocol.game.ClientboundAddEntityPacket;
+import net.minecraft.network.protocol.game.ClientboundBundlePacket;
 import net.minecraft.network.protocol.game.ClientboundRemoveEntitiesPacket;
 import net.minecraft.network.protocol.game.ClientboundSetEntityDataPacket;
 import net.minecraft.network.syncher.SynchedEntityData;
@@ -18,14 +21,23 @@ import org.bukkit.util.Transformation;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import java.util.function.IntSupplier;
 
 final class PacketTransportSession implements TransportSession {
 
+    /** Vanilla client cap on sub-packets per ClientboundBundlePacket. */
+    private static final int VANILLA_BUNDLE_CAP = 4096;
+
     private final Player viewer;
+    private final IntSupplier batchSizeSupplier;
     private final List<PacketDisplayHandle> handles = new ArrayList<>();
 
-    PacketTransportSession(Player viewer) {
+    /** Non-null while a {@link #runBundled} body is executing — sends append here instead of flushing. */
+    private List<Packet<? super ClientGamePacketListener>> bundleBuffer;
+
+    PacketTransportSession(Player viewer, IntSupplier batchSizeSupplier) {
         this.viewer = viewer;
+        this.batchSizeSupplier = batchSizeSupplier;
     }
 
     @Override
@@ -71,7 +83,44 @@ final class PacketTransportSession implements TransportSession {
         handles.clear();
     }
 
-    private void send(net.minecraft.network.protocol.Packet<?> packet) {
+    @Override
+    public void runBundled(Runnable body) {
+        int batchSize = batchSizeSupplier.getAsInt();
+        if (batchSize <= 0 || bundleBuffer != null) {
+            // Bundling disabled, or already inside a bundle scope (no nesting) — just run.
+            body.run();
+            return;
+        }
+        bundleBuffer = new ArrayList<>();
+        try {
+            body.run();
+            flushBundles(batchSize);
+        } finally {
+            bundleBuffer = null;
+        }
+    }
+
+    private void flushBundles(int batchSize) {
+        if (bundleBuffer.isEmpty()) return;
+        int cap = Math.min(batchSize, VANILLA_BUNDLE_CAP);
+        int n = bundleBuffer.size();
+        for (int i = 0; i < n; i += cap) {
+            List<Packet<? super ClientGamePacketListener>> slice =
+                    bundleBuffer.subList(i, Math.min(n, i + cap));
+            // ClientboundBundlePacket copies the iterable into its own list, so the
+            // subList view is safe to pass even though we'll keep mutating bundleBuffer
+            // until the outer try/finally clears it.
+            ((CraftPlayer) viewer).getHandle().connection.send(new ClientboundBundlePacket(slice));
+        }
+        bundleBuffer.clear();
+    }
+
+    @SuppressWarnings("unchecked")
+    private void send(Packet<? extends ClientGamePacketListener> packet) {
+        if (bundleBuffer != null) {
+            bundleBuffer.add((Packet<? super ClientGamePacketListener>) packet);
+            return;
+        }
         ((CraftPlayer) viewer).getHandle().connection.send(packet);
     }
 }
