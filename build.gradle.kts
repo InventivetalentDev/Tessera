@@ -47,6 +47,12 @@ paperweight {
 dependencies {
     paperweight.paperDevBundle("1.21.4-R0.1-SNAPSHOT")
 
+    // Public extension API (interfaces + shared value types). implementation
+    // (not compileOnly) so shadowJar bundles the api classes into the plugin
+    // jar unrelocated — they're the shared contract third-party plugins link
+    // against at runtime through Tessera's classloader.
+    implementation(project(":tessera-api"))
+
     implementation("org.mineskin:java-client:3.2.6-SNAPSHOT")
     implementation("org.mineskin:java-client-jsoup:3.2.6-SNAPSHOT")
     implementation("com.google.code.gson:gson:2.11.0")

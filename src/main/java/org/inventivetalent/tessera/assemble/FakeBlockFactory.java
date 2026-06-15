@@ -1,5 +1,7 @@
 package org.inventivetalent.tessera.assemble;
 
+import org.inventivetalent.tessera.api.ChunkLayout;
+import org.inventivetalent.tessera.api.SkinPayload;
 import org.inventivetalent.tessera.core.*;
 import org.inventivetalent.tessera.skin.HeadSkin;
 import org.inventivetalent.tessera.skin.HeadsRegistry;
@@ -183,6 +185,51 @@ public final class FakeBlockFactory {
                 fillInterior, compressShell, existingRefs);
     }
 
+    // ── Data-only layout (no entity spawning) ─────────────────────────────────
+
+    /**
+     * The single canonical face rotation every chunk shares: {@code Ry(180°)}
+     * cancelling the player-head ItemStack's intrinsic {@code Ry(180°)} so each
+     * UV slot's normal lands on its like-named world axis (the invariant
+     * documented on this class). Sourced here only — both the spawn path and the
+     * public {@link #layout} API read it from here.
+     */
+    static Quaternionf canonicalRotation() {
+        return HeadRotations.compose(HeadFace.FRONT, FaceDir.SOUTH, FaceRotations.of(HeadFace.FRONT));
+    }
+
+    /**
+     * Compute per-chunk {@link ChunkLayout} for {@code bakeKey} without spawning
+     * any entities — the data path behind {@code TesseraApi.layout}. Reuses the
+     * exact {@link BlockGeometry} math and {@link #canonicalRotation()} the spawn
+     * path uses, so a consumer building its own {@code ItemDisplay}s gets
+     * pixel-identical placement to a real Tessera break. Returns an empty list
+     * if the block isn't baked. Safe to call off the main thread.
+     */
+    public List<ChunkLayout> layout(BakeKey bakeKey, Quaternionf blockRotation) {
+        int gridN = registry.gridN();
+        BlockGeometry geom = new BlockGeometry(gridN, blockRotation);
+        Quaternionf canon = canonicalRotation();
+        float scale = geom.chunkScale();
+
+        Map<ChunkCoord, HeadsRegistry.Entry> chunks = registry.chunksFor(bakeKey);
+        List<ChunkLayout> out = new ArrayList<>(chunks.size());
+        for (Map.Entry<ChunkCoord, HeadsRegistry.Entry> e : chunks.entrySet()) {
+            ChunkCoord coord = e.getKey();
+            HeadsRegistry.Entry entry = e.getValue();
+            out.add(new ChunkLayout(
+                    coord,
+                    geom.chunkLocalCenter(coord),
+                    geom.translationFor(coord, canon, scale),
+                    new Quaternionf(blockRotation),
+                    new Quaternionf(canon),
+                    scale,
+                    new SkinPayload(entry.skinHash(), entry.textureValue(),
+                            entry.textureSignature(), entry.mineskinUuid())));
+        }
+        return out;
+    }
+
     // ── Preload ───────────────────────────────────────────────────────────────
 
     /**
@@ -207,8 +254,7 @@ public final class FakeBlockFactory {
         Map<ChunkCoord, HeadsRegistry.Entry> chunks = registry.chunksFor(bakeKey);
         if (chunks.isEmpty()) return new PreloadResult(Collections.emptyMap(), noopSession());
 
-        Quaternionf canonicalRotation = HeadRotations.compose(
-                HeadFace.FRONT, FaceDir.SOUTH, FaceRotations.of(HeadFace.FRONT));
+        Quaternionf canonicalRotation = canonicalRotation();
 
         Vector3f dir = new Vector3f((float) eyeDir.getX(), (float) eyeDir.getY(),
                 (float) eyeDir.getZ()).normalize();
@@ -269,8 +315,7 @@ public final class FakeBlockFactory {
     public PendingSpawnContext beginPendingBatch(FakeBlock fakeBlock, PendingChunkSpec donorSpec) {
         int gridN = fakeBlock.gridN();
         BlockGeometry geom = new BlockGeometry(gridN, fakeBlock.blockRotation());
-        Quaternionf canonRot = HeadRotations.compose(
-                HeadFace.FRONT, FaceDir.SOUTH, FaceRotations.of(HeadFace.FRONT));
+        Quaternionf canonRot = canonicalRotation();
         ItemStack interiorStack = donorSpec != null
                 ? itemFactory.build(HeadsRegistry.toHeadSkin(donorSpec.registryEntry()))
                 : null;
@@ -323,8 +368,7 @@ public final class FakeBlockFactory {
         Map<ChunkCoord, HeadsRegistry.Entry> chunks = registry.chunksFor(bakeKey);
         List<ChunkRef> refs = new ArrayList<>(chunks.size());
 
-        Quaternionf canonicalRotation = HeadRotations.compose(
-                HeadFace.FRONT, FaceDir.SOUTH, FaceRotations.of(HeadFace.FRONT));
+        Quaternionf canonicalRotation = canonicalRotation();
 
         float shellFactor = compressShell ? INITIAL_SHELL_COMPRESSION : 1f;
         populateOuterChunks(session, origin, geom, chunks, blockRotation, canonicalRotation,
@@ -361,8 +405,7 @@ public final class FakeBlockFactory {
                     Collections.emptyMap(), session);
         }
 
-        Quaternionf canonicalRotation = HeadRotations.compose(
-                HeadFace.FRONT, FaceDir.SOUTH, FaceRotations.of(HeadFace.FRONT));
+        Quaternionf canonicalRotation = canonicalRotation();
 
         // 1. Project all outer coords; capture global min/max for t normalisation.
         Vector3f dir = new Vector3f((float) eyeDir.getX(), (float) eyeDir.getY(),

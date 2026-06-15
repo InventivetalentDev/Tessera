@@ -1,5 +1,7 @@
 package org.inventivetalent.tessera.plugin;
 
+import org.inventivetalent.tessera.api.TesseraApi;
+import org.inventivetalent.tessera.api.event.TesseraBlockBakedEvent;
 import org.inventivetalent.tessera.assemble.FakeBlockFactory;
 import org.inventivetalent.tessera.assemble.HeadItemFactory;
 import org.inventivetalent.tessera.assets.fetch.McAssetClient;
@@ -23,6 +25,7 @@ import org.inventivetalent.tessera.util.PlatformDetector;
 import org.bstats.bukkit.Metrics;
 import org.bukkit.Bukkit;
 import org.bukkit.command.PluginCommand;
+import org.bukkit.plugin.ServicePriority;
 import org.bukkit.plugin.java.JavaPlugin;
 
 import java.nio.file.Files;
@@ -169,6 +172,17 @@ public final class TesseraPlugin extends JavaPlugin {
         this.diskCache = new SkinDiskCache(getLogger(), skinCacheFile);
         this.bakerExecutor = Executors.newFixedThreadPool(2, named("Tessera-Baker"));
         this.baker = new BlockBaker(getLogger(), () -> this.config.debug(), assets, mcVersion, registry, uploader, diskCache, pngDir, bakerExecutor);
+
+        // Public extension API: let third-party plugins read pre-baked block
+        // data and request bakes (see org.inventivetalent.tessera.api). Exposed
+        // via Bukkit's ServicesManager — consumers load TesseraApi.class. The
+        // bake hook fires TesseraBlockBakedEvent on the main thread so dependent
+        // plugins can react to newly-available blocks without polling.
+        TesseraApiImpl api = new TesseraApiImpl(this, registry, baker, blockFactory);
+        getServer().getServicesManager().register(TesseraApi.class, api, this, ServicePriority.Normal);
+        baker.onBaked(key -> getServer().getScheduler().runTask(this,
+                () -> getServer().getPluginManager().callEvent(
+                        new TesseraBlockBakedEvent(key.block(), config.chunkGridSize()))));
 
         // Inject the vanilla grass/foliage colormaps into NMS so server-side
         // Biome.getGrassColor() / getFoliageColor() return real per-biome
